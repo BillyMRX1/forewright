@@ -4,6 +4,7 @@ import { SafeText, ScrollLines, TextInput } from "../components.js";
 import { useCtx, useDraft, useKeys, useLoad } from "../context.js";
 import { clip, fit, oneLine, windowed } from "../format.js";
 import { messageLines } from "./cto.js";
+import { palette } from "../theme.js";
 
 export function ChatView() {
   const ctx = useCtx();
@@ -71,7 +72,7 @@ export function ChatView() {
     <Box flexDirection="column" height={ctx.bodyHeight}>
       {!wide ? (
         <Box height={1}>
-          <SafeText color="cyan" bold>{cur ? `# ${clip(oneLine(cur.label), ctx.cols - 12)} (${sel + 1}/${channels.length})` : "no channels"}</SafeText>
+          <SafeText color={palette.accent} bold>{cur ? `# ${clip(oneLine(cur.label), ctx.cols - 12)} (${sel + 1}/${channels.length})` : "no channels"}</SafeText>
         </Box>
       ) : null}
       <Box height={convH}>

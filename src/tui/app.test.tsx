@@ -49,11 +49,12 @@ describe("App layout", () => {
     assert.doesNotMatch(narrow.h.frame(), /Overview/);
   });
 
-  it("shows header status: project, paused badge, runs and inbox count", async () => {
+  it("shows header status: project, paused badge, runs, status summary and the Inbox count on its tab", async () => {
     const { h, api } = await mount(120, 40);
     assert.match(h.frame(), /tips/);
     assert.match(h.frame(), /runs 1\/2/);
-    assert.match(h.frame(), /inbox 1/);
+    assert.match(h.frame(), /5 Inbox \(1\)/);
+    assert.match(h.frame(), /1 need you.*1 working/);
     assert.match(h.frame(), /claude ok/);
     api.paused = true;
     api.emitConnection("restored");

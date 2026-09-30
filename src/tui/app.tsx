@@ -3,10 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import type { ClientApi } from "./client.js";
-import { Ctx, type AppCtx, type Selection } from "./context.js";
-import { SafeText, ScrollLines, type DLine } from "./components.js";
+import { Ctx, type AppCtx, type JumpTarget, type Selection } from "./context.js";
+import { SafeText, ScrollLines } from "./components.js";
 import { VIEW_NAMES, VIEW_SHORT, abbreviatePath, clip, wrapText } from "./format.js";
-import type { ProviderStatus, RuntimeStatus } from "../runtime/protocol.js";
+import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
+import type { Decision, DeptEvent, Task } from "../core/store-types.js";
+import { TASK_STATES } from "../core/types.js";
+import { countStatuses, deriveAttention, needsYouItems, nextNeedItem, summarize, SUMMARY_SEPARATOR, type UnseenDone } from "./attention.js";
+import { AgentStrip, stripHeight } from "./agent-strip.js";
+import { Palette } from "./palette.js";
+import { footerHints, helpLines } from "./keys.js";
+import { DEFAULT_TOAST_MS, currentToast, enqueueToast, removeToast, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
+import { palette as colors, statusColor, statusGlyph } from "./theme.js";
 import { OverviewView } from "./views/overview.js";
 import { CtoView } from "./views/cto.js";
 import { TasksView } from "./views/tasks.js";
@@ -25,6 +33,8 @@ export interface AppProps {
   isGit: boolean;
   size?: { columns: number; rows: number };
   initialView?: number;
+  /** Overrides how long each kind of notice stays, in milliseconds (tests use short values). */
+  toastMs?: Partial<Record<ToastKind, number>>;
   /** Called when the user quits, after the UI has been asked to exit. */
   onQuit?: () => void;
 }
@@ -34,47 +44,23 @@ interface ErrorInfo {
   detail: string | null;
 }
 
-const VIEW_HINTS = [
-  "PgUp/PgDn scroll",
-  "Enter send  Ctrl+J newline  Esc leave input  A approve PRD  D full PRD",
-  "arrows/hjkl select  Enter details  v board/list  c cancel  r resume  a reassign",
-  "Enter send  @name directs a message  up/down channel (Esc first)",
-  "up/down select  Enter open  h history  n note  Enter resolve",
-  "up/down select  Enter edit  left/right change  Enter save",
-  "up/down pick task  Enter show  Esc back  PgUp/PgDn scroll diff",
-  "up/down select  Enter/space change  PgUp/PgDn scroll",
-];
+interface Snapshot {
+  agents: TeamMember[];
+  tasks: Task[];
+  decisions: Decision[];
+  proposedPrd: boolean;
+}
 
-export const HELP_LINES: DLine[] = [
-  { text: "Global keys (when no text box is active)", bold: true },
-  { text: "  1-8            switch view (Overview, CTO, Tasks, Chat, Inbox, Team, Evidence, Settings)" },
-  { text: "  Tab / Shift+Tab  next / previous view" },
-  { text: "  P              pause all work, or resume when paused (asks first)" },
-  { text: "  T              terminate the team: pause, stop every run, retire all workers except the CTO (asks first)" },
-  { text: "  X              stop the selected run, or the only active run (asks first)" },
-  { text: "  L              raw log of the selected run (scroll with arrows, PgUp, PgDn)" },
-  { text: "  e              show or hide technical details of the last error" },
-  { text: "  Esc            leave a text box, close an overlay, dismiss the error" },
-  { text: "  ?              this help" },
-  { text: "  q              quit the screen (the dept service keeps running)" },
-  { text: "" },
-  { text: "CTO", bold: true },
-  { text: "  Enter send, Ctrl+J newline, A approve proposed PRD, D full PRD and changes, PgUp/PgDn scroll" },
-  { text: "Tasks", bold: true },
-  { text: "  arrows or h j k l select, Enter details, v board/list, c cancel, r resume, a reassign" },
-  { text: "Chat", bold: true },
-  { text: "  Enter send, @agentName at the start directs a message, up/down or j/k change channel" },
-  { text: "Inbox", bold: true },
-  { text: "  Enter open, up/down choose option, n add a note, Enter resolve, h resolved history" },
-  { text: "Team", bold: true },
-  { text: "  Enter edit engine, model, permission; left/right change; Enter save; Esc cancel" },
-  { text: "Evidence", bold: true },
-  { text: "  Enter show evidence for the selected task, PgUp/PgDn scroll the diff, Esc back" },
-  { text: "Settings", bold: true },
-  { text: "  up/down select, Enter or space change a value" },
-  { text: "" },
-  { text: "Press Esc, ? or q to close this help." },
-];
+const EMPTY_SNAPSHOT: Snapshot = { agents: [], tasks: [], decisions: [], proposedPrd: false };
+
+function tabLabel(i: number, short: boolean, inbox: number): string {
+  const badge = i === 4 && inbox > 0 ? (short ? `(${inbox})` : ` (${inbox})`) : "";
+  return ` ${i + 1} ${short ? VIEW_SHORT[i] : VIEW_NAMES[i]}${badge} `;
+}
+
+function str(v: unknown, fallback: string): string {
+  return typeof v === "string" && v.length > 0 ? v : fallback;
+}
 
 function toErrorInfo(err: unknown): ErrorInfo {
   if (typeof err === "object" && err !== null && "plain" in err && typeof (err as { plain: unknown }).plain === "string") {
@@ -109,34 +95,102 @@ export function App(props: AppProps) {
   const [tick, setTick] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [inboxCount, setInboxCount] = useState(0);
+  const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
+  const [unseen, setUnseen] = useState<UnseenDone[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [conn, setConn] = useState<"ok" | "lost">("ok");
   const [error, setError] = useState<ErrorInfo | null>(null);
   const [errorOpen, setErrorOpen] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [help, setHelp] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [logRun, setLogRun] = useState<string | null>(null);
+  const [jump, setJump] = useState<JumpTarget | null>(null);
   const [confirm, setConfirm] = useState<{ text: string; onYes: () => Promise<void> | void } | null>(null);
   const inputCount = useRef(0);
   const selection = useRef<Selection>({ taskId: null, runId: null });
   const runtimeRef = useRef<RuntimeStatus | null>(null);
   runtimeRef.current = runtime;
+  const snapRef = useRef<Snapshot>(snap);
+  snapRef.current = snap;
+  const doneSeen = useRef<Set<string> | null>(null);
+  const runTasks = useRef(new Map<string, string>());
+  const toastId = useRef(0);
+  const jumpNonce = useRef(0);
+  const lastNeed = useRef<string | null>(null);
+  const toastMs = { ...DEFAULT_TOAST_MS, ...props.toastMs };
 
   const fail = useCallback((err: unknown) => {
     setError(toErrorInfo(err));
     setErrorOpen(false);
   }, []);
-  const notify = useCallback((text: string) => setNotice(text), []);
+  const raise = useCallback((kind: ToastKind, text: string, target: ToastTarget | null = null) => {
+    toastId.current += 1;
+    const id = toastId.current;
+    setToasts((q) => enqueueToast(q, { id, kind, text, target }));
+  }, []);
+  const notify = useCallback((text: string) => raise("info", text), [raise]);
+
+  const shown = currentToast(toasts);
+  const shownId = shown?.id ?? null;
+  const shownKind = shown?.kind ?? null;
   useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), 4000);
+    if (shownId === null || shownKind === null) return;
+    if (shownKind === "needs_you" && process.env["DEPT_BELL"] === "1") process.stdout.write("\x07");
+    const t = setTimeout(() => setToasts((q) => removeToast(q, shownId)), toastMs[shownKind]);
     return () => clearTimeout(t);
-  }, [notice]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownId, shownKind]);
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(null), 20000);
     return () => clearTimeout(t);
   }, [error]);
+
+  // Events from the service raise notices. Kept in a ref so the subscription is made once.
+  const withTask = (taskId: string, then: (t: { id: string; shortId: string; title: string }) => void) => {
+    const known = snapRef.current.tasks.find((t) => t.id === taskId);
+    if (known) return then(known);
+    api.call("state.task", { projectId, taskId }).then((d) => then(d.task), fail);
+  };
+  const onEvent = (ev: DeptEvent) => {
+    const p = ev.payload;
+    switch (ev.type) {
+      case "decision.requested":
+        raise("needs_you", `Needs you: ${str(p["title"], "a decision")}`, { kind: "decision", decisionId: ev.entityId });
+        break;
+      case "requirement_doc.proposed":
+        raise("needs_you", "A PRD is waiting for your approval", { kind: "cto" });
+        break;
+      case "task.completed":
+        withTask(ev.entityId, (t) => raise("finished", `${t.shortId} finished: ${t.title}`, { kind: "task", taskId: t.id }));
+        break;
+      case "run.finished": {
+        const state = p["state"];
+        if (state !== "failed" && state !== "uncertain") break;
+        const taskId = runTasks.current.get(ev.entityId);
+        const what = state === "failed" ? "failed" : "ended with an unclear result";
+        if (taskId) withTask(taskId, (t) => raise("error", `Run for ${t.shortId} ${what}`, { kind: "task", taskId: t.id }));
+        else raise("error", `A run ${what}`);
+        break;
+      }
+      case "task.blocked": {
+        const reason = p["reason"];
+        if (reason === "dependency" || reason === "human_input") break;
+        const kind: ToastKind = reason === "exhausted_recovery" ? "needs_you" : reason === "quota" ? "info" : "error";
+        const why = reason === "quota" ? "is waiting for the provider limit" : reason === "exhausted_recovery" ? "ran out of retries and needs you" : "is blocked";
+        withTask(ev.entityId, (t) => raise(kind, `${t.shortId} ${why}`, { kind: "task", taskId: t.id }));
+        break;
+      }
+      case "message.posted":
+        if (p["channel"] === "cto" && ev.actor.startsWith("agent:")) raise("info", "CTO replied", { kind: "cto" });
+        break;
+      default:
+        break;
+    }
+  };
+  const eventRef = useRef(onEvent);
+  eventRef.current = onEvent;
 
   // Changes from the service: throttle into a single tick counter.
   useEffect(() => {
@@ -150,13 +204,18 @@ export function App(props: AppProps) {
     };
     let sub: { stop(): void } | null = null;
     let stopped = false;
-    api.subscribe(projectId, 0, bump).then(
-      (s) => {
-        if (stopped) s.stop();
-        else sub = s;
-      },
-      fail,
-    );
+    api
+      .subscribe(projectId, 0, (ev) => {
+        bump();
+        eventRef.current(ev);
+      })
+      .then(
+        (s) => {
+          if (stopped) s.stop();
+          else sub = s;
+        },
+        fail,
+      );
     const offRuntime = api.onRuntime((pid, status) => {
       if (pid === projectId) setRuntime(status);
     });
@@ -175,11 +234,27 @@ export function App(props: AppProps) {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.call("state.runtime", { projectId }), api.call("state.inbox", { projectId })]).then(
-      ([rt, inbox]) => {
+    Promise.all([
+      api.call("state.runtime", { projectId }),
+      api.call("state.inbox", { projectId }),
+      api.call("state.team", { projectId }),
+      api.call("state.tasks", { projectId }),
+      api.call("state.prd", { projectId }),
+    ]).then(
+      ([rt, inbox, team, board, prd]) => {
         if (cancelled) return;
         setRuntime(rt);
         setInboxCount(inbox.open.length);
+        const tasks = TASK_STATES.flatMap((st) => board.board[st]);
+        setSnap({ agents: team.agents, tasks, decisions: inbox.open, proposedPrd: prd.doc?.status === "proposed" });
+        // Finished work is "unseen" only if it finished after this client started.
+        const done = tasks.filter((t) => t.state === "done");
+        if (doneSeen.current === null) doneSeen.current = new Set(done.map((t) => t.id));
+        else {
+          const fresh = done.filter((t) => !doneSeen.current!.has(t.id));
+          for (const t of fresh) doneSeen.current.add(t.id);
+          if (fresh.length > 0) setUnseen((u) => [...u, ...fresh.map((t) => ({ taskId: t.id, agentId: t.assigneeAgentId, at: t.updatedAt }))]);
+        }
       },
       (err: unknown) => {
         if (!cancelled) fail(err);
@@ -189,6 +264,10 @@ export function App(props: AppProps) {
       cancelled = true;
     };
   }, [api, projectId, tick, fail]);
+
+  useEffect(() => {
+    for (const r of runtime?.activeRuns ?? []) if (r.taskId) runTasks.current.set(r.runId, r.taskId);
+  }, [runtime]);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,14 +298,42 @@ export function App(props: AppProps) {
   const setSelection = useCallback((sel: Partial<Selection>) => {
     selection.current = { ...selection.current, ...sel };
   }, []);
-  const goto = useCallback((i: number) => setView(((i % VIEW_NAMES.length) + VIEW_NAMES.length) % VIEW_NAMES.length), []);
+  const goto = useCallback((i: number) => {
+    setJump(null);
+    setView(((i % VIEW_NAMES.length) + VIEW_NAMES.length) % VIEW_NAMES.length);
+  }, []);
+  const jumpTo = useCallback((target: Omit<JumpTarget, "nonce">) => {
+    jumpNonce.current += 1;
+    setJump({ ...target, nonce: jumpNonce.current });
+    setView(target.view);
+  }, []);
+  const markSeen = useCallback((sel: { taskId?: string; agentId?: string }) => {
+    setUnseen((u) => {
+      const next = u.filter((x) => x.taskId !== sel.taskId && (sel.agentId === undefined || x.agentId !== sel.agentId));
+      return next.length === u.length ? u : next;
+    });
+  }, []);
+
+  const attention = useMemo(
+    () => deriveAttention({ agents: snap.agents, tasks: snap.tasks, decisions: snap.decisions, runtime, proposedPrd: snap.proposedPrd, unseenDone: unseen }),
+    [snap, runtime, unseen],
+  );
+  const needs = useMemo(() => needsYouItems({ tasks: snap.tasks, decisions: snap.decisions, proposedPrd: snap.proposedPrd }), [snap]);
+
+  const jumpToTarget = (target: ToastTarget) => {
+    if (target.kind === "decision") jumpTo({ view: 4, decisionId: target.decisionId });
+    else if (target.kind === "task") jumpTo({ view: 2, taskId: target.taskId });
+    else jumpTo({ view: 1 });
+  };
 
   // ---- layout budget
   const headerRows = rows < 24 ? 1 : 2;
+  // Overview already lists every agent in its "Now" section, so the strip is not repeated there.
+  const stripRows = view === 0 ? 0 : stripHeight(rows, attention.length);
   const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 2).slice(0, 3) : [];
   const errorRows = error ? 1 + detailLines.length : 0;
-  const bodyHeight = Math.max(1, rows - headerRows - 1 - 1 - errorRows - (confirm ? 1 : 0));
-  const modal = help || confirm !== null || logRun !== null;
+  const bodyHeight = Math.max(1, rows - headerRows - 1 - stripRows - 1 - errorRows - (confirm ? 1 : 0));
+  const modal = help || confirm !== null || logRun !== null || paletteOpen;
 
   const resolveRun = async (): Promise<string | null> => {
     const rt = runtimeRef.current;
@@ -258,6 +365,15 @@ export function App(props: AppProps) {
     });
   };
 
+  const goNextNeed = () => {
+    const item = nextNeedItem(needs, lastNeed.current);
+    if (!item) return notify("Nothing needs you right now.");
+    lastNeed.current = item.key;
+    if (item.kind === "decision") jumpTo({ view: 4, decisionId: item.decisionId });
+    else if (item.kind === "prd") jumpTo({ view: 1, blurInput: true });
+    else jumpTo({ view: 2, taskId: item.taskId });
+  };
+
   useInput((input, key) => {
     if (confirm) {
       if (input === "y" || input === "Y") {
@@ -273,12 +389,27 @@ export function App(props: AppProps) {
       if (key.escape || input === "?" || input === "q") setHelp(false);
       return;
     }
+    if (paletteOpen) return; // the palette owns its keys
     if (logRun !== null) return; // the log viewer owns its keys
+    if (key.ctrl && input === "k") return setPaletteOpen(true);
     if (inputCount.current > 0) return;
-    if (key.escape) return void setError(null);
-    if (/^[1-8]$/.test(input)) return setView(Number(input) - 1);
+    if (key.escape) {
+      setError(null);
+      if (shownId !== null) setToasts((q) => removeToast(q, shownId));
+      return;
+    }
+    if (/^[1-8]$/.test(input)) return goto(Number(input) - 1);
     if (key.tab) return goto(view + (key.shift ? -1 : 1));
     if (input === "?") return setHelp(true);
+    if (input === ":") return setPaletteOpen(true);
+    if (input === "n") return goNextNeed();
+    if (input === "g") {
+      if (shown?.target) {
+        jumpToTarget(shown.target);
+        setToasts((q) => removeToast(q, shown.id));
+      }
+      return;
+    }
     if (input === "q") {
       exit();
       props.onQuit?.();
@@ -332,8 +463,16 @@ export function App(props: AppProps) {
       claimInput,
       setSelection,
       goto,
+      attention,
+      needs,
+      openDecisions: snap.decisions,
+      teamAgents: snap.agents,
+      tasks: snap.tasks,
+      jump,
+      jumpTo,
+      markSeen,
     }),
-    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto],
+    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, attention, needs, snap, jump, jumpTo, markSeen],
   );
   const overlayCtx = useMemo(() => ({ ...ctx, modal: false }), [ctx]);
 
@@ -351,7 +490,30 @@ export function App(props: AppProps) {
   const paused = runtime?.paused === true;
   const runsText = runtime ? `runs ${runtime.activeRuns.length}/${runtime.maxConcurrentWorkers}` : "runs -";
   const connText = conn === "lost" ? "RECONNECTING" : "connected";
-  const tabText = cols < 48 ? `1 2 3 4 5 6 7 8  ${VIEW_NAMES[view]}` : null;
+
+  // Tab bar: full names if they fit, then short names, then a numbers-only fallback.
+  const tabsWidth = (short: boolean) => VIEW_NAMES.reduce((n, _name, i) => n + [...tabLabel(i, short, inboxCount)].length + 1, 0);
+  const tabMode: "full" | "short" | "plain" = tabsWidth(false) <= cols ? "full" : tabsWidth(true) <= cols ? "short" : "plain";
+  const tabText = tabMode === "plain" ? `1 2 3 4 5 6 7 8  ${VIEW_NAMES[view]}${inboxCount > 0 ? `  inbox ${inboxCount}` : ""}` : null;
+
+  // Header summary: counts by status, dropping lower-priority segments as the width shrinks.
+  const pausedWidth = paused ? 8 : 0;
+  const summaryBudget = Math.max(8, cols - pausedWidth - (headerRows === 2 ? 2 : clip(props.projectName, 12).length + 3) - 4);
+  const segments = summarize(countStatuses(attention), summaryBudget);
+  const summaryUsed = segments.reduce((n, s, i) => n + [...s.text].length + 2 + (i > 0 ? SUMMARY_SEPARATOR.length : 0), 0);
+  const afterSummary = Math.max(0, cols - pausedWidth - (headerRows === 2 ? 1 : clip(props.projectName, 12).length + 2) - summaryUsed - 2);
+  const summaryEl = (
+    <>
+      {segments.length === 0 ? <SafeText dimColor>{attention.length > 0 ? "all idle" : ""}</SafeText> : null}
+      {segments.map((s, i) => (
+        <Box key={s.status}>
+          {i > 0 ? <SafeText dimColor>{SUMMARY_SEPARATOR}</SafeText> : null}
+          <Text color={statusColor(s.status)} bold={s.status === "needs_you"}>{`${statusGlyph(s.status)} ${s.text}`}</Text>
+        </Box>
+      ))}
+    </>
+  );
+  const flags = { needs: needs.length, toast: shown?.target != null };
 
   return (
     <Ctx.Provider value={ctx}>
@@ -362,44 +524,49 @@ export function App(props: AppProps) {
               <Text bold>dept </Text>
               <SafeText bold>{props.projectName}</SafeText>
               <SafeText dimColor>{`  ${abbreviatePath(props.root, Math.max(10, cols - props.projectName.length - 28))}  ${props.isGit ? "git" : "no git"}  `}</SafeText>
-              <Text color={conn === "lost" ? "red" : "green"}>{connText}</Text>
+              <Text color={conn === "lost" ? colors.error : colors.done}>{connText}</Text>
             </Box>
             <Box height={1}>
               {paused ? (
-                <Text inverse color="yellow">
+                <Text inverse color={colors.attention}>
                   {" PAUSED "}
                 </Text>
               ) : null}
-              <SafeText>{` ${runsText}  inbox ${inboxCount}  ${providerSummary(providers)}`}</SafeText>
+              <SafeText>{" "}</SafeText>
+              {summaryEl}
+              {afterSummary >= 10 ? <SafeText dimColor>{clip(`  ${runsText}  ${providerSummary(providers)}`, afterSummary)}</SafeText> : null}
             </Box>
           </>
         ) : (
           <Box height={1}>
             <SafeText bold>{clip(props.projectName, 12)}</SafeText>
-            {paused ? <Text color="yellow"> PAUSED</Text> : null}
-            <Text color={conn === "lost" ? "red" : undefined}>{` ${runsText} inbox ${inboxCount}${conn === "lost" ? " RECONNECTING" : ""}`}</Text>
+            {paused ? <Text color={colors.attention}> PAUSED</Text> : null}
+            <SafeText>{" "}</SafeText>
+            {summaryEl}
+            {afterSummary >= 10 ? <Text color={conn === "lost" ? colors.error : undefined} dimColor={conn !== "lost"}>{clip(`  ${runsText}${conn === "lost" ? " RECONNECTING" : ""}`, afterSummary)}</Text> : conn === "lost" ? <Text color={colors.error}> RECONNECTING</Text> : null}
           </Box>
         )}
         <Box height={1}>
           {tabText !== null ? (
-            <Text>{tabText}</Text>
+            <SafeText>{tabText}</SafeText>
           ) : (
             VIEW_NAMES.map((name, i) => (
               <Box key={name} marginRight={1}>
-                <Text inverse={i === view} bold={i === view}>
-                  {` ${i + 1} ${cols < 80 ? VIEW_SHORT[i] : name} `}
+                <Text inverse={i === view} bold={i === view} color={i === 4 && inboxCount > 0 && i !== view ? colors.attention : undefined}>
+                  {tabLabel(i, tabMode === "short", inboxCount)}
                 </Text>
               </Box>
             ))
           )}
         </Box>
+        <AgentStrip height={stripRows} />
         <Box height={bodyHeight} flexDirection="column" overflow="hidden">
-          <Box flexDirection="column" height={bodyHeight} display={help || logRun !== null ? "none" : "flex"} overflow="hidden">
+          <Box flexDirection="column" height={bodyHeight} display={help || logRun !== null || paletteOpen ? "none" : "flex"} overflow="hidden">
             {viewEl}
           </Box>
           {help ? (
             <Ctx.Provider value={overlayCtx}>
-              <ScrollLines lines={HELP_LINES} height={bodyHeight} arrows />
+              <ScrollLines lines={helpLines()} height={bodyHeight} arrows />
             </Ctx.Provider>
           ) : null}
           {logRun !== null ? (
@@ -407,28 +574,48 @@ export function App(props: AppProps) {
               <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
             </Ctx.Provider>
           ) : null}
+          {paletteOpen ? (
+            <Ctx.Provider value={overlayCtx}>
+              <Palette
+                onClose={() => setPaletteOpen(false)}
+                onPick={(target) => {
+                  setPaletteOpen(false);
+                  jumpTo(target);
+                }}
+              />
+            </Ctx.Provider>
+          ) : null}
         </Box>
         {error ? (
           <Box flexDirection="column">
             <Box height={1}>
-              <SafeText color="red">{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (e: details)" : ""}`}</SafeText>
+              <SafeText color={colors.error}>{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (e: details)" : ""}`}</SafeText>
             </Box>
             {detailLines.map((l, i) => (
               <Box key={i} height={1}>
-                <SafeText color="red" dimColor>{`  ${l}`}</SafeText>
+                <SafeText color={colors.error} dimColor>{`  ${l}`}</SafeText>
               </Box>
             ))}
           </Box>
         ) : null}
         {confirm ? (
           <Box height={1}>
-            <SafeText color="yellow" bold>
+            <SafeText color={colors.attention} bold>
               {confirm.text}
             </SafeText>
           </Box>
         ) : null}
         <Box height={1}>
-          {notice ? <SafeText color="green">{notice}</SafeText> : <SafeText dimColor>{cols < 80 ? "? help  P pause  X stop  L log  q quit" : `${VIEW_HINTS[view]}   |   ? help  P pause  X stop  L log  q quit`}</SafeText>}
+          {shown ? (
+            <>
+              <SafeText color={shown.kind === "needs_you" ? colors.attention : shown.kind === "error" ? colors.error : shown.kind === "finished" ? colors.done : colors.accent} bold={shown.kind === "needs_you"}>
+                {clip(shown.text, Math.max(10, cols - (shown.target ? 14 : 2)))}
+              </SafeText>
+              {shown.target ? <SafeText dimColor>{"  g: go there"}</SafeText> : null}
+            </>
+          ) : (
+            <SafeText dimColor>{footerHints(view, cols - 1, flags)}</SafeText>
+          )}
         </Box>
       </Box>
     </Ctx.Provider>

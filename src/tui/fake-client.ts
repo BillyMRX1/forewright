@@ -189,12 +189,19 @@ export class FakeClient implements ClientApi {
   readonly drafts = new Map<string, string>();
   readonly data = baseData();
   paused = false;
+  /** When true, the runtime reports no active runs. */
+  noRuns = false;
+  /** Decisions returned by state.inbox as open. Tests may push more. */
+  openDecisions: Decision[] = [this.data.decision];
+  /** Lines returned by runs.log. */
+  logLines = ["line one \x1b[31mred\x1b[0m", "line two"];
+  private eventListeners = new Set<(e: DeptEvent) => void>();
   failWith: Error | null = null;
   private connListeners = new Set<(s: ConnectionState) => void>();
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
 
   runtime(): RuntimeStatus {
-    return { paused: this.paused, activeRuns: [{ runId: this.data.run.id, kind: "work", agentId: "a2", taskId: "t2", startedAt: NOW }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
+    return { paused: this.paused, activeRuns: this.noRuns ? [] : [{ runId: this.data.run.id, kind: "work", agentId: "a2", taskId: "t2", startedAt: NOW }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
   }
 
   callsTo(method: string): FakeCall[] {
@@ -220,7 +227,7 @@ export class FakeClient implements ClientApi {
           if (method === "control.resume") this.paused = false;
           return this.runtime();
         case "state.inbox":
-          return { open: [d.decision], recent: [d.staleDecision] };
+          return { open: this.openDecisions, recent: [d.staleDecision] };
         case "providers.health":
           return { providers: d.providers };
         case "state.overview": {
@@ -277,7 +284,7 @@ export class FakeClient implements ClientApi {
         case "state.settings":
           return { settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY } }, providers: d.providers, ctoEngine: "claude", ctoModel: null };
         case "runs.log":
-          return { lines: ["line one \x1b[31mred\x1b[0m", "line two"], path: "/tmp/run.log" };
+          return { lines: this.logLines, path: "/tmp/run.log" };
         case "drafts.get":
           return { body: this.drafts.get(`${String(p["view"])}/${String(p["key"])}`) ?? null };
         case "drafts.save":
@@ -307,8 +314,16 @@ export class FakeClient implements ClientApi {
     return out as Result<M>;
   }
 
-  async subscribe(_projectId: string, sinceSeq: number, _onEvent: (event: DeptEvent) => void): Promise<Subscription> {
-    return { lastSeq: sinceSeq, stop: () => undefined };
+  /** Delivers a service event to every subscriber, like the daemon's event stream. */
+  emitEvent(type: string, entityKind: string, entityId: string, payload: Record<string, unknown> = {}, actor = "system"): void {
+    const event: DeptEvent = { seq: ++this.seq, at: NOW, type, entityKind, entityId, actor, payload };
+    for (const cb of this.eventListeners) cb(event);
+  }
+  private seq = 0;
+
+  async subscribe(_projectId: string, sinceSeq: number, onEvent: (event: DeptEvent) => void): Promise<Subscription> {
+    this.eventListeners.add(onEvent);
+    return { lastSeq: sinceSeq, stop: () => void this.eventListeners.delete(onEvent) };
   }
   onRuntime(cb: (p: string, s: RuntimeStatus) => void): () => void {
     this.runtimeListeners.add(cb);

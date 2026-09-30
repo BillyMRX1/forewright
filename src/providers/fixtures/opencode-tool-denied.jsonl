@@ -1,0 +1,6 @@
+{"type":"step_start","timestamp":1,"sessionID":"ses_denied","part":{"type":"step-start"}}
+{"type":"tool_use","timestamp":2,"sessionID":"ses_denied","part":{"type":"tool","tool":"bash","callID":"c1","state":{"status":"error","input":{"command":"touch x"},"error":"The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"deny\",\"pattern\":\"*\"}]"}}}
+{"type":"step_finish","timestamp":3,"sessionID":"ses_denied","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":100,"output":10},"cost":0}}
+{"type":"step_start","timestamp":4,"sessionID":"ses_denied","part":{"type":"step-start"}}
+{"type":"text","timestamp":5,"sessionID":"ses_denied","part":{"type":"text","text":"I could not run that command."}}
+{"type":"step_finish","timestamp":6,"sessionID":"ses_denied","part":{"type":"step-finish","reason":"stop","tokens":{"input":120,"output":8},"cost":0}}

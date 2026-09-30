@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Box } from "ink";
 import { SafeText, ScrollLines, type DLine } from "../components.js";
-import { useCtx, useKeys, useLoad } from "../context.js";
+import { useCtx, useJump, useKeys, useLoad } from "../context.js";
+import { LogPeek, peekHeight, runIdFor } from "../peek.js";
 import { ago, clip, fit, oneLine, windowed } from "../format.js";
 import type { PermissionProfile } from "../../core/types.js";
 import type { EngineId } from "../../core/types.js";
+import { palette } from "../theme.js";
 
 const PERMISSIONS: PermissionProfile[] = ["read_only", "workspace_write", "coordinator"];
 const FIELDS = ["engine", "model", "permission"] as const;
@@ -25,6 +27,22 @@ export function TeamView() {
   const [draft, setDraft] = useState<{ engine: EngineId; model: string | null; permission: PermissionProfile } | null>(null);
 
   const cur = agents[Math.min(idx, Math.max(0, agents.length - 1))] ?? null;
+  const [pendingAgent, setPendingAgent] = useState<string | null>(null);
+  useJump(5, (j) => {
+    if (j.agentId) setPendingAgent(j.agentId);
+  });
+  useEffect(() => {
+    if (pendingAgent === null || agents.length === 0) return;
+    const i = agents.findIndex((a) => a.id === pendingAgent);
+    if (i >= 0) {
+      setIdx(i);
+      setPendingAgent(null);
+    }
+  }, [pendingAgent, team.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (cur) ctx.markSeen({ agentId: cur.id });
+  }, [cur?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const curTask = useLoad(() => (cur?.currentTaskId ? api.call("state.task", { projectId, taskId: cur.currentTaskId }) : Promise.resolve(null)), [cur?.currentTaskId]);
   const engines = Array.from(new Set<EngineId>([...ctx.providers.map((p) => p.health.engine), ...(cur ? [cur.engine] : [])]));
   const modelsFor = (e: EngineId): Array<string | null> => [null, ...(ctx.providers.find((p) => p.health.engine === e)?.health.models ?? [])];
 
@@ -68,7 +86,7 @@ export function TeamView() {
 
   if (editing && draft && cur) {
     const prov = ctx.providers.find((p) => p.health.engine === draft.engine);
-    const lines: DLine[] = [{ text: `Edit ${oneLine(cur.name)} (${cur.role}). Role stays the same; only you can change these.`, bold: true, color: "cyan" }];
+    const lines: DLine[] = [{ text: `Edit ${oneLine(cur.name)} (${cur.role}). Role stays the same; only you can change these.`, bold: true, color: palette.accent }];
     const vals = [draft.engine, draft.model ?? "(engine default)", draft.permission];
     FIELDS.forEach((f, i) => lines.push({ text: `${i === field ? ">" : " "} ${f.padEnd(11)} < ${vals[i]} >`, bold: i === field }));
     lines.push({ text: "" });
@@ -102,7 +120,9 @@ export function TeamView() {
       default: return a.lifecycle;
     }
   };
-  const h = Math.max(1, ctx.bodyHeight - 1);
+  const peekRun = cur && cur.lifecycle !== "retired" ? runIdFor(ctx.runtime, cur.currentTaskId, cur.id, curTask.data?.runs ?? []) : null;
+  const peekH = peekRun ? peekHeight(ctx.bodyHeight, Math.min(agents.length, 6) + 2) : 0;
+  const h = Math.max(1, ctx.bodyHeight - 1 - peekH);
   const { start, end } = windowed(agents.length, idx, h);
   return (
     <Box flexDirection="column" height={ctx.bodyHeight}>
@@ -116,6 +136,8 @@ export function TeamView() {
           </SafeText>
         </Box>
       ))}
+      <Box flexGrow={1} />
+      {peekRun && peekH > 0 ? <LogPeek runId={peekRun} height={peekH} /> : null}
     </Box>
   );
 }

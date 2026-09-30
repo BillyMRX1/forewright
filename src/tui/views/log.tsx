@@ -3,6 +3,7 @@ import { ScrollLines, SafeText, type DLine } from "../components.js";
 import { useCtx, useLoad } from "../context.js";
 import { sanitizeTerminal } from "../../core/safety.js";
 import { useInput } from "ink";
+import { palette } from "../theme.js";
 
 export function LogViewer({ runId, onClose }: { runId: string; onClose: () => void }) {
   const ctx = useCtx();
@@ -14,7 +15,7 @@ export function LogViewer({ runId, onClose }: { runId: string; onClose: () => vo
   return (
     <Box flexDirection="column" height={ctx.bodyHeight}>
       <Box height={1}>
-        <SafeText bold color="cyan">{`Raw log for run ${runId.slice(0, 8)}${data ? `  ${data.path}` : ""}   (Esc closes, arrows/PgUp/PgDn scroll)`}</SafeText>
+        <SafeText bold color={palette.accent}>{`Raw log for run ${runId.slice(0, 8)}${data ? `  ${data.path}` : ""}   (Esc closes, arrows/PgUp/PgDn scroll)`}</SafeText>
       </Box>
       <ScrollLines lines={data ? (lines.length > 0 ? lines : [{ text: "The log is empty.", dim: true }]) : [{ text: "Loading...", dim: true }]} height={Math.max(1, ctx.bodyHeight - 1)} anchor="bottom" arrows />
     </Box>

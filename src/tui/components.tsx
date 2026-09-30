@@ -66,8 +66,8 @@ export function ScrollLines({
     else if (key.pageDown) toward(1, page);
     else if (arrows && key.upArrow) toward(-1, 1);
     else if (arrows && key.downArrow) toward(1, 1);
-    else if (arrows && input === "g") setOffset(anchor === "bottom" ? maxOffset : 0);
-    else if (arrows && input === "G") setOffset(anchor === "bottom" ? 0 : maxOffset);
+    else if (arrows && key.home) setOffset(anchor === "bottom" ? maxOffset : 0);
+    else if (arrows && key.end) setOffset(anchor === "bottom" ? 0 : maxOffset);
   }, active);
   const start = anchor === "bottom" ? Math.max(0, lines.length - h - clamped) : clamped;
   const shown = lines.slice(start, start + h);

@@ -1,0 +1,1 @@
+{"type":"error","timestamp":1,"sessionID":"ses_q","error":{"name":"APIError","data":{"message":"Rate limit exceeded. Try again in 2 hours.","statusCode":429,"isRetryable":true,"responseHeaders":{"retry-after":"7200"}}}}

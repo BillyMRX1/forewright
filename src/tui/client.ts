@@ -57,6 +57,8 @@ interface Pending {
 interface Sub {
   lastSeq: number;
   onEvent: (event: DeptEvent) => void;
+  /** True while a fresh subscription (sinceSeq 0) waits for its reply: the service replays history first. */
+  skipReplay: boolean;
 }
 
 export class DeptClient implements ClientApi {
@@ -157,7 +159,7 @@ export class DeptClient implements ClientApi {
     if (msg.method === "event") {
       const { projectId, event } = msg.params as Notifications["event"];
       const sub = this.subs.get(projectId);
-      if (!sub || event.seq <= sub.lastSeq) return;
+      if (!sub || sub.skipReplay || event.seq <= sub.lastSeq) return;
       sub.lastSeq = event.seq;
       sub.onEvent(event);
     } else if (msg.method === "runtime") {
@@ -228,10 +230,14 @@ export class DeptClient implements ClientApi {
   }
 
   async subscribe(projectId: string, sinceSeq: number, onEvent: (event: DeptEvent) => void): Promise<Subscription> {
-    const sub: Sub = { lastSeq: sinceSeq, onEvent };
+    // sinceSeq 0 means "from now". The service replays history before its reply (that is how a
+    // reconnect catches up), so a fresh subscription ignores the replay instead of treating old events
+    // as new ones (which raised toasts for long-resolved decisions, seen live).
+    const sub: Sub = { lastSeq: sinceSeq, onEvent, skipReplay: sinceSeq === 0 };
     this.subs.set(projectId, sub);
     const res = await this.request("subscribe", { projectId, sinceSeq });
-    if (res.lastSeq > sub.lastSeq && sinceSeq === 0) sub.lastSeq = res.lastSeq;
+    if (sinceSeq === 0) sub.lastSeq = Math.max(sub.lastSeq, res.lastSeq);
+    sub.skipReplay = false;
     return {
       get lastSeq() {
         return sub.lastSeq;

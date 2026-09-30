@@ -2,13 +2,13 @@
 
 `dept` gives each project its own small engineering department. A CTO agent talks through the problem with you, writes a versioned PRD, plans tasks, hires specialist agents, and drives the work to completion. You watch and steer from a keyboard-driven terminal UI. Everything that runs, runs on your Mac: a background service owns execution and state, and the terminal UI is just a client, so closing it never stops your agents.
 
-Agents are the Claude Code and Codex command line tools you already use, run through their supported non-interactive interfaces. Role, engine, model and permissions are separate settings, so a Claude CTO can direct Codex workers.
+Agents are the coding command line tools you already use (Claude Code, Codex, Antigravity `agy`, OpenCode and GitHub Copilot CLI), run through their supported non-interactive interfaces. Role, engine, model and permissions are separate settings, so a Claude CTO can direct Codex, OpenCode or Copilot workers.
 
 ## Requirements
 
 - macOS on Apple silicon (Linux is untested).
 - Node.js 24 or newer.
-- Claude Code and/or the Codex CLI installed and logged in with your own account.
+- At least one of Claude Code, the Codex CLI, Antigravity (`agy`), OpenCode or the GitHub Copilot CLI installed and logged in with your own account. `dept doctor` shows which ones are ready.
 - `git` (code tasks need a git repository; plain folders support planning only).
 
 ## Install
@@ -38,6 +38,9 @@ Starting `dept` from a subfolder or a linked git worktree opens the same project
 | Key | Action |
 |---|---|
 | `1` to `8`, `Tab`, `Shift+Tab` | Switch view: Overview, CTO, Tasks, Chat, Inbox, Team, Evidence, Settings |
+| `n` | Jump to the next thing that needs you: open decisions, then a proposed PRD, then blocked tasks. Press again to cycle |
+| `g` | Jump to the item the notice at the bottom is about |
+| `Ctrl+K` or `:` | Command palette: type to filter views, tasks, agents and open decisions, `Enter` jumps, `Esc` closes |
 | `?` | Help listing every key |
 | `P` | Pause all work, or resume when paused (asks first) |
 | `X` | Stop the selected run, or the only active run (asks first) |
@@ -45,6 +48,8 @@ Starting `dept` from a subfolder or a linked git worktree opens the same project
 | `e` | Show or hide technical details of the last error |
 | `Esc` | Leave a text box, close an overlay, dismiss the error |
 | `q` | Quit the screen. The service keeps running |
+
+The agent strip under the tab bar shows each agent with a status symbol (needs you, blocked, done, working, idle), most urgent first; it shrinks on short terminals and hides under 14 rows. The header counts agents by status and the Inbox tab shows the number of open decisions. Notices stay 8 seconds when they need you, 5 when something finished and 4 otherwise. Set `DEPT_ASCII=1` for plain symbols and `DEPT_BELL=1` for a terminal bell on needs-you notices. Team and task details show the last lines of the run's live output. In the Inbox, `a` adds a note to a decision.
 
 Global keys are ignored while a text box has focus. Press `Esc` first. View keys (approve a PRD, cancel a task, reassign, resolve a decision, edit an agent) are listed in the footer and in `?`. Text you type in compose boxes is saved as a draft and comes back after you switch views or restart.
 
@@ -80,17 +85,17 @@ Inside your project only the `.dept/project.json` marker is written. Task work h
 
 ## Local execution, cloud inference
 
-Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex) by their CLIs. `dept` sends your project data nowhere else.
+Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex, Google for Antigravity, GitHub for Copilot, and whichever provider an OpenCode model belongs to) by their CLIs. `dept` sends your project data nowhere else.
 
 ## Subscription and API billing
 
-Agents run under your signed-in Claude Code or Codex subscription. Environment variables such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `CODEX_API_KEY` are stripped from agent environments, so there is never a silent switch to pay-per-token billing. API billing only happens if you turn on "Allow API billing for agents" in Settings. When a provider reports a usage limit, the affected work waits visibly until the reset instead of falling back.
+Agents run under your signed-in subscriptions (or, for OpenCode, free models and OAuth logins only). Environment variables such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `CODEX_API_KEY` are stripped from agent environments, so there is never a silent switch to pay-per-token billing. OpenCode models that would bill an API key are refused. Copilot runs are capped with `--max-ai-credits` and use your plan's premium requests. When a provider reports a usage limit, the affected work waits visibly until the reset instead of falling back.
 
 ## Known limitations
 
 - Work pauses when the Mac sleeps. Local processes do not continue during ordinary sleep, and `dept` does not claim otherwise. The service reconciles when the Mac wakes.
 - Git worktrees separate agents' files and branches. They are not security sandboxes: an agent with the `workspace_write` permission can run commands as you.
-- Agents launched by `dept` run with isolated config homes, so they do not read your personal hooks, memory files or plugins. Project instruction files at the repository root (`CLAUDE.md` and `AGENTS.md`) are still given to agents: Codex reads `AGENTS.md` itself, and `dept` includes them in Claude prompts.
+- Agents launched by `dept` run with isolated config homes, so they do not read your personal hooks, memory files or plugins. Project instruction files at the repository root (`CLAUDE.md` and `AGENTS.md`) are still given to agents: Codex and Antigravity read `AGENTS.md` themselves, and `dept` includes these files in the prompts of the other engines.
 - Provider model lists come from what each CLI exposes. Where a CLI cannot list models, Settings shows documented aliases and says so.
 - Non-git folders: the CTO can plan, but code tasks wait until you approve a `git init` in the Inbox.
 - Three authority settings are stored but not enforced yet: `autoLocalEdits` and `autoChecks` (agents always edit and run checks inside their own worktree), and `allowApiBilling` (API keys are always stripped from agent environments, so billing stays on your subscriptions). `autoIntegrateToDeptBranch` set to false stops integration and tells the CTO, but does not yet create an approval request.
@@ -100,7 +105,7 @@ Agents run under your signed-in Claude Code or Codex subscription. Environment v
 
 - `docs/PRD.md`: product requirements
 - `docs/architecture.md`: modules, data flow, task lifecycle, leases and fencing
-- `docs/providers.md`: how Claude Code and Codex are driven
+- `docs/providers.md`: how Claude Code and Codex are driven; `docs/providers-antigravity.md`, `docs/providers-opencode.md`, `docs/providers-copilot.md` for the other engines
 - `docs/troubleshooting.md`: when something goes wrong
 - `docs/demo.md`: a reproducible demonstration
 - `docs/adr/`: decisions and their reasons

@@ -3,6 +3,7 @@
 import os from "node:os";
 import type { BlockReason, RunState, TaskState } from "../core/types.js";
 import { sanitizeTerminal } from "../core/safety.js";
+import { TASK_STATE_COLOR } from "./theme.js";
 
 export const VIEW_NAMES = ["Overview", "CTO", "Tasks", "Chat", "Inbox", "Team", "Evidence", "Settings"] as const;
 export const VIEW_SHORT = ["Ovw", "CTO", "Tsk", "Cht", "Inb", "Tea", "Evd", "Set"] as const;
@@ -70,6 +71,18 @@ export function ago(iso: string | null, now = Date.now()): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** Compact age for tight rows: 17s, 4m, 3h, 2d. */
+export function shortAge(iso: string | null, now = Date.now()): string {
+  if (!iso) return "-";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "-";
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
 export function duration(startIso: string | null, endIso: string | null, now = Date.now()): string {
   if (!startIso) return "not started";
   const start = Date.parse(startIso);
@@ -129,14 +142,7 @@ export const TASK_STATE_LABEL: Record<TaskState, string> = {
   cancelled: "Cancelled",
 };
 
-export const STATE_COLOR: Record<TaskState, string> = {
-  planned: "gray",
-  ready: "cyan",
-  working: "yellow",
-  review: "magenta",
-  done: "green",
-  cancelled: "gray",
-};
+export const STATE_COLOR = TASK_STATE_COLOR;
 
 /** Window of `height` items that keeps `selected` visible. */
 export function windowed(length: number, selected: number, height: number): { start: number; end: number } {

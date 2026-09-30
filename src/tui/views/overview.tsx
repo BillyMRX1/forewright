@@ -1,7 +1,9 @@
 import { ScrollLines, type DLine } from "../components.js";
 import { useCtx, useLoad } from "../context.js";
-import { TASK_STATE_LABEL, STATE_COLOR, ago, oneLine, plainBlockReason, progressBar, wrapText } from "../format.js";
+import { TASK_STATE_LABEL, STATE_COLOR, ago, clip, fit, oneLine, plainBlockReason, progressBar, shortAge, wrapText } from "../format.js";
+import { STATUS_LABEL, statusColor, statusGlyph } from "../theme.js";
 import { TASK_STATES } from "../../core/types.js";
+import { palette } from "../theme.js";
 
 export function OverviewView() {
   const ctx = useCtx();
@@ -9,8 +11,22 @@ export function OverviewView() {
   if (!data) return <ScrollLines lines={[{ text: "Loading...", dim: true }]} height={ctx.bodyHeight} />;
   const w = Math.max(20, ctx.cols - 2);
   const lines: DLine[] = [];
-  const section = (t: string) => lines.push({ text: t, bold: true, color: "cyan" });
+  const section = (t: string) => lines.push({ text: t, bold: true, color: palette.accent });
 
+  section("Now");
+  if (ctx.attention.length === 0) lines.push({ text: "No agents yet. Press 2 to brief the CTO.", dim: true });
+  else if (!ctx.attention.some((a) => a.status === "working" || a.status === "needs_you")) lines.push({ text: "No agents working. Press 2 to brief the CTO.", dim: true });
+  for (const a of ctx.attention) {
+    const said = a.reason.length > 0 ? a.reason : (a.lastEventSummary ?? "no activity yet");
+    const head = `${statusGlyph(a.status)} ${fit(clip(oneLine(a.agent.name), 10), 10)} ${fit(STATUS_LABEL[a.status], 9)} ${fit(a.taskShortId ?? "-", 5)}`;
+    lines.push({ text: clip(`${head} ${oneLine(said)}  ${shortAge(a.lastEventAt)}`, w), color: statusColor(a.status), bold: a.status === "needs_you", dim: a.status === "idle" });
+  }
+  for (const d of ctx.openDecisions) {
+    lines.push({ text: `${statusGlyph("needs_you")} Waiting for you: ${oneLine(d.title)}`, color: statusColor("needs_you"), bold: true });
+    for (const l of wrapText(d.question, w - 4).slice(0, 2)) lines.push({ text: `    ${l}`, dim: true });
+  }
+
+  lines.push({ text: "" });
   section("Goals");
   if (data.goals) {
     lines.push({ text: `${oneLine(data.goals.title)} (approved revision ${data.goals.revision})`, bold: true });
@@ -23,7 +39,7 @@ export function OverviewView() {
   if (data.milestones.length === 0) lines.push({ text: "None yet.", dim: true });
   for (const m of data.milestones) {
     const bar = progressBar(m.done, m.total, 10);
-    lines.push({ text: `${m.key.padEnd(6)} [${bar}] ${m.done}/${m.total}  ${oneLine(m.text)}`, color: m.total > 0 && m.done === m.total ? "green" : undefined });
+    lines.push({ text: `${m.key.padEnd(6)} [${bar}] ${m.done}/${m.total}  ${oneLine(m.text)}`, color: m.total > 0 && m.done === m.total ? palette.done : undefined });
   }
 
   lines.push({ text: "" });
@@ -36,17 +52,17 @@ export function OverviewView() {
   section("Blockers");
   if (data.blockers.length === 0) lines.push({ text: "No blockers.", dim: true });
   for (const b of data.blockers) {
-    lines.push({ text: `${b.shortId}  ${oneLine(b.title)}`, color: "yellow" });
+    lines.push({ text: `${b.shortId}  ${oneLine(b.title)}`, color: palette.attention });
     for (const l of wrapText(plainBlockReason(b.reason, b.detail), w - 4)) lines.push({ text: `    ${l}`, dim: true });
   }
 
   lines.push({ text: "" });
   section("Recent results");
   if (data.recentCompleted.length === 0) lines.push({ text: "Nothing finished yet.", dim: true });
-  for (const r of data.recentCompleted) lines.push({ text: `done  ${r.shortId}  ${oneLine(r.title)}  ${ago(r.at)}`, color: "green" });
+  for (const r of data.recentCompleted) lines.push({ text: `done  ${r.shortId}  ${oneLine(r.title)}  ${ago(r.at)}`, color: palette.done });
   if (data.openDecisions > 0) {
     lines.push({ text: "" });
-    lines.push({ text: `${data.openDecisions} decision${data.openDecisions === 1 ? "" : "s"} waiting for you in the Inbox (view 5).`, color: "yellow", bold: true });
+    lines.push({ text: `${data.openDecisions} decision${data.openDecisions === 1 ? "" : "s"} waiting for you in the Inbox (view 5).`, color: palette.attention, bold: true });
   }
   return <ScrollLines lines={lines} height={ctx.bodyHeight} arrows />;
 }

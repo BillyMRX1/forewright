@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import { SafeText, ScrollLines, TextInput, type DLine } from "../components.js";
-import { useCtx, useKeys, useLoad } from "../context.js";
+import { useCtx, useJump, useKeys, useLoad } from "../context.js";
 import { ago, clip, oneLine, windowed, wrapText } from "../format.js";
 import type { Decision } from "../../core/store-types.js";
+import { palette } from "../theme.js";
 
 const STATUS_NOTE: Record<Decision["status"], string> = {
   open: "",
@@ -15,19 +16,19 @@ const STATUS_NOTE: Record<Decision["status"], string> = {
 export function decisionLines(d: Decision, optIdx: number, width: number, taskNames: Map<string, string>): DLine[] {
   const lines: DLine[] = [{ text: oneLine(d.title), bold: true }, { text: `${d.kind}  asked ${ago(d.createdAt)}`, dim: true }, { text: "" }];
   for (const l of wrapText(d.question, width)) lines.push({ text: l });
-  lines.push({ text: "" }, { text: "Options", bold: true, color: "cyan" });
+  lines.push({ text: "" }, { text: "Options", bold: true, color: palette.accent });
   d.options.forEach((o, i) => {
     const on = d.status === "open" && i === optIdx;
     const rec = d.recommendation === o.key;
-    lines.push({ text: `${on ? ">" : " "} ${oneLine(o.label)}${rec ? "  (CTO recommends this)" : ""}`, bold: on, color: rec ? "green" : undefined });
+    lines.push({ text: `${on ? ">" : " "} ${oneLine(o.label)}${rec ? "  (CTO recommends this)" : ""}`, bold: on, color: rec ? palette.done : undefined });
     for (const l of wrapText(o.consequence, width - 4)) lines.push({ text: `    ${l}`, dim: true });
   });
   if (d.impact) {
-    lines.push({ text: "" }, { text: "Impact", bold: true, color: "cyan" });
+    lines.push({ text: "" }, { text: "Impact", bold: true, color: palette.accent });
     for (const l of wrapText(d.impact, width - 2)) lines.push({ text: `  ${l}` });
   }
   if (d.affectedTaskIds.length > 0) {
-    lines.push({ text: "" }, { text: "Affected tasks", bold: true, color: "cyan" });
+    lines.push({ text: "" }, { text: "Affected tasks", bold: true, color: palette.accent });
     for (const id of d.affectedTaskIds) lines.push({ text: `  ${taskNames.get(id) ?? id.slice(0, 8)}` });
   }
   if (d.status !== "open") {
@@ -50,11 +51,26 @@ export function InboxView() {
   const [detail, setDetail] = useState(false);
   const [note, setNote] = useState("");
   const [noteFocus, setNoteFocus] = useState(false);
+  const [pendingId, setPendingId] = useState<string | null>(null);
 
   const list = (history ? inbox.data?.recent : inbox.data?.open) ?? [];
   const cur = list[Math.min(idx, Math.max(0, list.length - 1))] ?? null;
   const taskNames = new Map<string, string>();
   if (tasks.data) for (const arr of Object.values(tasks.data.board)) for (const t of arr) taskNames.set(t.id, `${t.shortId} ${oneLine(t.title)}`);
+
+  useJump(4, (j) => {
+    if (j.decisionId) setPendingId(j.decisionId);
+  });
+  useEffect(() => {
+    if (pendingId === null || !inbox.data) return;
+    const i = inbox.data.open.findIndex((d) => d.id === pendingId);
+    if (i >= 0) {
+      setHistory(false);
+      setDetail(false);
+      setIdx(i);
+      setPendingId(null);
+    }
+  }, [pendingId, inbox.data]);
 
   const resolve = (d: Decision) => {
     const opt = d.options[optIdx];
@@ -86,7 +102,7 @@ export function InboxView() {
     if (!cur) return;
     if (key.upArrow || input === "k") setOptIdx((i) => Math.max(0, i - 1));
     else if (key.downArrow || input === "j") setOptIdx((i) => Math.min(cur.options.length - 1, i + 1));
-    else if (input === "n" && cur.status === "open") setNoteFocus(true);
+    else if (input === "a" && cur.status === "open") setNoteFocus(true);
     else if (key.return) {
       if (cur.status === "open") resolve(cur);
       else ctx.fail({ plain: "This item is no longer open, so it cannot be resolved.", detail: null });
@@ -99,8 +115,8 @@ export function InboxView() {
     return (
       <Box flexDirection="column" height={ctx.bodyHeight}>
         <ScrollLines lines={decisionLines(cur, optIdx, ctx.cols - 2, taskNames)} height={Math.max(1, ctx.bodyHeight - 2)} resetKey={cur.id} />
-        <SafeText dimColor>{cur.status === "open" ? "up/down choose  Enter resolve  n add note  Esc back  PgUp/PgDn scroll" : "Esc back"}</SafeText>
-        {cur.status === "open" ? <TextInput value={note} onChange={setNote} onSubmit={() => setNoteFocus(false)} onEscape={() => setNoteFocus(false)} focus={noteFocus} width={ctx.cols} placeholder="Optional note (press n)" /> : <Text> </Text>}
+        <SafeText dimColor>{cur.status === "open" ? "up/down choose  Enter resolve  a add note  Esc back  PgUp/PgDn scroll" : "Esc back"}</SafeText>
+        {cur.status === "open" ? <TextInput value={note} onChange={setNote} onSubmit={() => setNoteFocus(false)} onEscape={() => setNoteFocus(false)} focus={noteFocus} width={ctx.cols} placeholder="Optional note (press a)" /> : <Text> </Text>}
       </Box>
     );
   }

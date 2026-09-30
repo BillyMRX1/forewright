@@ -15,6 +15,7 @@ import type { ProjectRuntime } from "./project-runtime.js";
 import type { ProviderStatus, TaskDetail } from "./protocol.js";
 import { PROTOCOL_VERSION } from "./protocol.js";
 import type { Connection } from "./server.js";
+import { engineRoleProblem } from "./engine-roles.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 
 type P = Record<string, unknown>;
@@ -215,8 +216,11 @@ export class ClientApi {
       "settings.set": async (p) => {
         const rt = await this.rt(p);
         const key = reqStr(p, "key", 100);
-        if (key === "ctoEngine" && !d.adapters.has(p["value"] as EngineId)) {
-          throw new ValidationError(`The ${String(p["value"])} provider is not known to this service.`, { key });
+        if (key === "ctoEngine") {
+          const adapter = d.adapters.get(p["value"] as EngineId);
+          if (!adapter) throw new ValidationError(`The ${String(p["value"])} provider is not known to this service.`, { key });
+          const problem = engineRoleProblem(adapter, "cto");
+          if (problem) throw new ValidationError(problem, { key });
         }
         rt.store.setSetting(key, p["value"], HUMAN);
         if (key === "ctoEngine" || key === "ctoModel") {
@@ -229,7 +233,12 @@ export class ClientApi {
       "agents.update": async (p) => {
         const rt = await this.rt(p);
         const engine = optStr(p, "engine") as EngineId | undefined;
-        if (engine && !d.adapters.has(engine)) throw new ValidationError(`The ${engine} provider is not known to this service.`, { engine });
+        if (engine) {
+          const adapter = d.adapters.get(engine);
+          if (!adapter) throw new ValidationError(`The ${engine} provider is not known to this service.`, { engine });
+          const problem = engineRoleProblem(adapter, rt.store.getAgent(reqStr(p, "agentId", 200)).role);
+          if (problem) throw new ValidationError(problem, { engine });
+        }
         const agent = rt.store.updateAgent(
           reqStr(p, "agentId", 200),
           {

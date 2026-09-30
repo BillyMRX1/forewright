@@ -1,7 +1,10 @@
 import type { EngineId, ProviderAdapter, ProviderHealth } from "../core/types.js";
 import { ClaudeAdapter, type ClaudeAdapterOptions } from "./claude.js";
+import { AntigravityAdapter } from "./antigravity.js";
 import { CodexAdapter } from "./codex.js";
+import { CopilotAdapter } from "./copilot.js";
 import { FakeAdapter } from "./fake.js";
+import { OpencodeAdapter } from "./opencode.js";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -19,6 +22,9 @@ export function createAdapters(opts: CreateAdaptersOptions): Map<EngineId, Provi
   const adapters = new Map<EngineId, ProviderAdapter>();
   adapters.set("claude", new ClaudeAdapter({ runsDir, allowApiBilling: billing, ...opts.claude }));
   adapters.set("codex", new CodexAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
+  adapters.set("antigravity", new AntigravityAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
+  adapters.set("opencode", new OpencodeAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
+  adapters.set("copilot", new CopilotAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
   if (opts.includeFake) adapters.set("fake", new FakeAdapter());
   return adapters;
 }

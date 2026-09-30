@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Box, Text } from "ink";
 import { SafeText, ScrollLines, TextInput, type DLine } from "../components.js";
-import { useCtx, useKeys, useLoad } from "../context.js";
+import { useCtx, useJump, useKeys, useLoad } from "../context.js";
+import { LogPeek, peekHeight, runIdFor } from "../peek.js";
 import { STATE_COLOR, TASK_STATE_LABEL, abbreviatePath, ago, clip, duration, fit, oneLine, plainBlockReason, plainRunState, windowed, wrapText } from "../format.js";
 import { TASK_STATES, type TaskState } from "../../core/types.js";
 import type { Task } from "../../core/store-types.js";
 import type { TaskDetail } from "../../runtime/protocol.js";
+import { palette } from "../theme.js";
 
 type Mode = "browse" | "detail" | "pick" | "note";
 
 export function detailLines(d: TaskDetail, width: number): DLine[] {
   const t = d.task;
   const lines: DLine[] = [];
-  const h = (text: string) => lines.push({ text, bold: true, color: "cyan" });
+  const h = (text: string) => lines.push({ text, bold: true, color: palette.accent });
   const para = (text: string, indent = "  ") => {
     for (const l of wrapText(text, width - indent.length)) lines.push({ text: `${indent}${l}` });
   };
@@ -31,7 +33,7 @@ export function detailLines(d: TaskDetail, width: number): DLine[] {
   for (const c of t.verifyCommands) lines.push({ text: `  $ ${oneLine(c)}` });
   h("Depends on");
   if (d.dependencies.length === 0) lines.push({ text: "  (nothing)", dim: true });
-  for (const x of d.dependencies) lines.push({ text: `  ${x.shortId}  ${oneLine(x.title)}  [${TASK_STATE_LABEL[x.state]}]`, color: x.state === "done" ? "green" : undefined });
+  for (const x of d.dependencies) lines.push({ text: `  ${x.shortId}  ${oneLine(x.title)}  [${TASK_STATE_LABEL[x.state]}]`, color: x.state === "done" ? palette.done : undefined });
   h("Linked requirements");
   if (d.requirements.length === 0) lines.push({ text: "  (none)", dim: true });
   for (const r of d.requirements) para(`${r.key}  ${r.text}`);
@@ -40,7 +42,7 @@ export function detailLines(d: TaskDetail, width: number): DLine[] {
   for (const r of d.runs) lines.push({ text: `  ${r.kind}  ${plainRunState(r.state)}  ${r.engine}${r.model ? `/${r.model}` : ""}  ${duration(r.startedAt, r.endedAt)}` });
   h("Evidence");
   if (d.verifications.length === 0) lines.push({ text: "  (no checks or reviews yet)", dim: true });
-  for (const v of d.verifications) lines.push({ text: `  ${v.kind}  ${v.verdict}${v.stale ? " (stale)" : ""}  ${oneLine(v.summary)}`, color: v.verdict === "pass" && !v.stale ? "green" : v.verdict === "fail" ? "red" : undefined });
+  for (const v of d.verifications) lines.push({ text: `  ${v.kind}  ${v.verdict}${v.stale ? " (stale)" : ""}  ${oneLine(v.summary)}`, color: v.verdict === "pass" && !v.stale ? palette.done : v.verdict === "fail" ? palette.error : undefined });
   if (t.branch) lines.push({ text: "" }, { text: `Branch ${t.branch}${t.worktreePath ? `  worktree ${abbreviatePath(t.worktreePath, 40)}` : ""}`, dim: true });
   return lines;
 }
@@ -62,6 +64,15 @@ export function TasksView() {
   const detail = useLoad(() => (selected && mode !== "browse" ? api.call("state.task", { projectId, taskId: selected.id }) : Promise.resolve(null)), [selected?.id, mode === "browse"]);
   const team = useLoad(() => api.call("state.team", { projectId }));
   const agents = (team.data?.agents ?? []).filter((a) => a.lifecycle !== "retired");
+
+  useJump(2, (j) => {
+    if (!j.taskId) return;
+    setSelectedId(j.taskId);
+    setMode("detail");
+  });
+  useEffect(() => {
+    if (mode === "detail" && selected) ctx.markSeen({ taskId: selected.id });
+  }, [mode, selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     ctx.setSelection({ taskId: selected?.id ?? null, runId: null });
@@ -153,21 +164,24 @@ export function TasksView() {
   if (mode !== "browse" && selected) {
     const lines = detail.data ? detailLines(detail.data, ctx.cols - 2) : [{ text: "Loading...", dim: true }];
     if (mode === "pick" || mode === "note") {
-      const list: DLine[] = [{ text: `Reassign ${selected.shortId} to which agent? (up/down, Enter, Esc)`, bold: true, color: "cyan" }];
+      const list: DLine[] = [{ text: `Reassign ${selected.shortId} to which agent? (up/down, Enter, Esc)`, bold: true, color: palette.accent }];
       agents.forEach((a, i) => list.push({ text: `${i === agentIdx ? ">" : " "} ${a.name}  ${a.role}  ${a.engine}${a.model ? `/${a.model}` : ""}`, bold: i === agentIdx }));
       if (mode === "pick") return <ScrollLines lines={list} height={ctx.bodyHeight} />;
       const target = agents.find((a) => a.id === pickedAgent);
       return (
         <Box flexDirection="column" height={ctx.bodyHeight}>
-          <SafeText bold color="cyan">{`Handoff note for ${target?.name ?? "the agent"} (Enter sends, Esc back)`}</SafeText>
+          <SafeText bold color={palette.accent}>{`Handoff note for ${target?.name ?? "the agent"} (Enter sends, Esc back)`}</SafeText>
           <TextInput value={note} onChange={setNote} onSubmit={(v) => target && void reassign(target.id, v.trim()).catch(ctx.fail)} onEscape={() => setMode("pick")} focus width={ctx.cols} maxRows={Math.max(1, ctx.bodyHeight - 2)} multiline placeholder="What should the new agent know?" />
         </Box>
       );
     }
+    const peekRun = detail.data ? runIdFor(ctx.runtime, selected.id, null, detail.data.runs) : null;
+    const peekH = peekRun ? peekHeight(ctx.bodyHeight, 12) : 0;
     return (
       <Box flexDirection="column" height={ctx.bodyHeight}>
-        <ScrollLines lines={lines} height={ctx.bodyHeight - 1} arrows resetKey={selected.id} />
+        <ScrollLines lines={lines} height={Math.max(1, ctx.bodyHeight - 1 - peekH)} arrows resetKey={selected.id} />
         <SafeText dimColor>Esc back  c cancel task  r resume  a reassign  PgUp/PgDn scroll</SafeText>
+        {peekRun && peekH > 0 ? <LogPeek runId={peekRun} height={peekH} /> : null}
       </Box>
     );
   }

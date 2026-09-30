@@ -10,7 +10,7 @@ const INSTRUCTION_CAP = 20 * 1024;
 const SECTION_CAP = 24 * 1024;
 
 /** Engines whose CLI reads AGENTS.md from the working directory without help (verified per adapter, see docs/providers.md). */
-const LOADS_AGENTS_MD: ReadonlySet<EngineId> = new Set<EngineId>(["codex"]);
+const LOADS_AGENTS_MD: ReadonlySet<EngineId> = new Set<EngineId>(["codex", "antigravity"]);
 
 /** Project instruction files, read only from the given roots (project root, and the worktree for task runs). */
 export function readInstructionFiles(roots: string[], engine: EngineId): string {

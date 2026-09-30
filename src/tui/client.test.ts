@@ -33,7 +33,12 @@ function startServer(sock: string): Promise<void> {
               socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: req.id, error: { code: -32001, message: "bad token", data: { code: "auth", plain: "The client token was rejected.", detail: "token mismatch" } } })}\n`);
             } else reply({ ok: true, daemonPid: 1, protocolVersion: 1 });
           } else if (req.method === "subscribe") {
-            subscribes.push({ projectId: req.params["projectId"] as string, sinceSeq: req.params["sinceSeq"] as number });
+            const since = req.params["sinceSeq"] as number;
+            subscribes.push({ projectId: req.params["projectId"] as string, sinceSeq: since });
+            // Like the real service: replay history after sinceSeq before replying.
+            for (let seq = since + 1; seq <= 7; seq++) {
+              socket.write(`${JSON.stringify({ jsonrpc: "2.0", method: "event", params: { projectId: req.params["projectId"], event: { seq, at: "", type: "old", entityKind: "k", entityId: "e", actor: "a", payload: {} } } })}\n`);
+            }
             reply({ lastSeq: 7 });
           } else if (req.method === "slow") {
             // never answers

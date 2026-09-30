@@ -5,14 +5,15 @@ import { useCtx, useKeys, useLoad } from "../context.js";
 import { STATE_COLOR, TASK_STATE_LABEL, ago, clip, oneLine, windowed, wrapText } from "../format.js";
 import { TASK_STATES } from "../../core/types.js";
 import type { Artifact, Task, Verification } from "../../core/store-types.js";
+import { palette } from "../theme.js";
 
 export function evidenceLines(task: Task, verifications: Verification[], artifacts: Artifact[], diff: { diff: string; truncated: boolean; base: string | null; head: string | null } | null, width: number): DLine[] {
   const lines: DLine[] = [{ text: `${task.shortId}  ${oneLine(task.title)}  [${TASK_STATE_LABEL[task.state]}]`, bold: true }];
-  const h = (t: string) => lines.push({ text: "" }, { text: t, bold: true, color: "cyan" });
+  const h = (t: string) => lines.push({ text: "" }, { text: t, bold: true, color: palette.accent });
   h("Verifications");
   if (verifications.length === 0) lines.push({ text: "  None yet.", dim: true });
   for (const v of verifications.filter((x) => x.kind !== "review")) {
-    lines.push({ text: `  ${v.kind}  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}${v.stale ? "  STALE (task changed since)" : ""}`, color: v.stale ? "yellow" : v.verdict === "pass" ? "green" : "red" });
+    lines.push({ text: `  ${v.kind}  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}${v.stale ? "  STALE (task changed since)" : ""}`, color: v.stale ? palette.attention : v.verdict === "pass" ? palette.done : palette.error });
     if (v.command) lines.push({ text: `    $ ${oneLine(v.command)}${v.exitCode !== null ? `  (exit ${v.exitCode})` : ""}`, dim: true });
     for (const l of wrapText(v.summary, width - 4)) lines.push({ text: `    ${l}` });
   }
@@ -20,7 +21,7 @@ export function evidenceLines(task: Task, verifications: Verification[], artifac
   const reviews = verifications.filter((x) => x.kind === "review");
   if (reviews.length === 0) lines.push({ text: "  No review yet.", dim: true });
   for (const v of reviews) {
-    lines.push({ text: `  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}  ${ago(v.createdAt)}${v.stale ? "  STALE" : ""}`, color: v.stale ? "yellow" : v.verdict === "pass" ? "green" : "red" });
+    lines.push({ text: `  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}  ${ago(v.createdAt)}${v.stale ? "  STALE" : ""}`, color: v.stale ? palette.attention : v.verdict === "pass" ? palette.done : palette.error });
     for (const l of wrapText(v.summary, width - 4)) lines.push({ text: `    ${l}` });
   }
   h("Artifacts");
@@ -30,10 +31,10 @@ export function evidenceLines(task: Task, verifications: Verification[], artifac
   if (!diff || diff.diff.length === 0) lines.push({ text: "  No changes recorded.", dim: true });
   else {
     for (const raw of diff.diff.split("\n")) {
-      const color = raw.startsWith("+") && !raw.startsWith("+++") ? "green" : raw.startsWith("-") && !raw.startsWith("---") ? "red" : raw.startsWith("@@") ? "cyan" : undefined;
+      const color = raw.startsWith("+") && !raw.startsWith("+++") ? palette.done : raw.startsWith("-") && !raw.startsWith("---") ? palette.error : raw.startsWith("@@") ? palette.accent : undefined;
       lines.push({ text: raw, ...(color ? { color } : {}) });
     }
-    if (diff.truncated) lines.push({ text: "[diff truncated]", color: "yellow" });
+    if (diff.truncated) lines.push({ text: "[diff truncated]", color: palette.attention });
   }
   return lines;
 }

@@ -1,5 +1,7 @@
 # Provider adapters
 
+This page covers Claude Code and Codex. Antigravity, OpenCode and GitHub Copilot CLI each have their own page: `providers-antigravity.md`, `providers-opencode.md`, `providers-copilot.md`. All five pass the same live checks: a tiny run through the real adapter, and a real CTO turn calling a dept tool through the daemon and MCP bridge.
+
 This document records how `dept` talks to Claude Code and Codex, what was verified on this machine, and what is not supported. Versions checked: Claude Code 2.1.285 and Codex CLI 0.158.0.
 
 ## Transports

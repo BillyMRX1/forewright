@@ -1,15 +1,16 @@
 import { useRef, useState } from "react";
 import { Box, Text } from "ink";
 import { SafeText, ScrollLines, TextInput, type DLine } from "../components.js";
-import { useCtx, useDraft, useKeys, useLoad } from "../context.js";
+import { useCtx, useDraft, useJump, useKeys, useLoad } from "../context.js";
 import { clockTime, diffLines, oneLine, wrapText } from "../format.js";
 import type { Agent, Message, RequirementDoc } from "../../core/store-types.js";
+import { palette } from "../theme.js";
 
 export function senderLabel(m: Message, agents: Agent[]): { label: string; color: string } {
-  if (m.senderKind === "human") return { label: "Billy", color: "cyan" };
-  if (m.senderKind === "system") return { label: "system", color: "gray" };
+  if (m.senderKind === "human") return { label: "Billy", color: palette.accent };
+  if (m.senderKind === "system") return { label: "system", color: palette.muted };
   const a = agents.find((x) => x.id === m.senderId);
-  return { label: a?.name ?? "agent", color: "green" };
+  return { label: a?.name ?? "agent", color: palette.done };
 }
 
 export function messageLines(messages: Message[], agents: Agent[], width: number): DLine[] {
@@ -25,13 +26,13 @@ export function messageLines(messages: Message[], agents: Agent[], width: number
 
 function prdPanelLines(doc: RequirementDoc | null, width: number): DLine[] {
   if (!doc) return [{ text: "No PRD yet.", dim: true }, { text: "Describe what you want to build and the CTO will draft one.", dim: true }];
-  const lines: DLine[] = [{ text: `PRD revision ${doc.revision}`, bold: true, color: "cyan" }];
-  lines.push({ text: `Status: ${doc.status}`, color: doc.status === "proposed" ? "yellow" : doc.status === "approved" ? "green" : "gray", bold: doc.status === "proposed" });
+  const lines: DLine[] = [{ text: `PRD revision ${doc.revision}`, bold: true, color: palette.accent }];
+  lines.push({ text: `Status: ${doc.status}`, color: doc.status === "proposed" ? palette.attention : doc.status === "approved" ? palette.done : palette.muted, bold: doc.status === "proposed" });
   lines.push({ text: oneLine(doc.title), bold: true });
   if (doc.summaryOfChange) for (const l of wrapText(`Change: ${doc.summaryOfChange}`, width)) lines.push({ text: l });
   lines.push({ text: "" });
   for (const r of doc.requirements) for (const l of wrapText(`${r.key} ${r.text}`, width)) lines.push({ text: l });
-  if (doc.status === "proposed") lines.push({ text: "", }, { text: "Press A to approve, D to read it.", color: "yellow" });
+  if (doc.status === "proposed") lines.push({ text: "", }, { text: "Press A to approve, D to read it.", color: palette.attention });
   return lines;
 }
 
@@ -41,6 +42,9 @@ export function CtoView() {
   const [focus, setFocus] = useState(true);
   const [full, setFull] = useState(false);
   const sending = useRef(false);
+  useJump(1, (j) => {
+    if (j.blurInput) setFocus(false);
+  });
   const draft = useDraft("cto", "compose");
   const msgs = useLoad(() => api.call("state.messages", { projectId, channel: "cto", limit: 200 }));
   const team = useLoad(() => api.call("state.team", { projectId }));
@@ -90,9 +94,9 @@ export function CtoView() {
 
   if (full && doc) {
     const approved = prd.data?.approved ?? null;
-    const lines: DLine[] = [{ text: `PRD revision ${doc.revision} (${doc.status})${approved && approved.revision !== doc.revision ? ` compared with approved revision ${approved.revision}` : ""}`, bold: true, color: "cyan" }, { text: "Esc or D closes. PgUp/PgDn/arrows scroll.", dim: true }];
+    const lines: DLine[] = [{ text: `PRD revision ${doc.revision} (${doc.status})${approved && approved.revision !== doc.revision ? ` compared with approved revision ${approved.revision}` : ""}`, bold: true, color: palette.accent }, { text: "Esc or D closes. PgUp/PgDn/arrows scroll.", dim: true }];
     if (approved && approved.revision !== doc.revision) {
-      for (const d of diffLines(approved.body, doc.body)) lines.push({ text: `${d.kind === "add" ? "+ " : d.kind === "del" ? "- " : "  "}${d.text}`, color: d.kind === "add" ? "green" : d.kind === "del" ? "red" : undefined });
+      for (const d of diffLines(approved.body, doc.body)) lines.push({ text: `${d.kind === "add" ? "+ " : d.kind === "del" ? "- " : "  "}${d.text}`, color: d.kind === "add" ? palette.done : d.kind === "del" ? palette.error : undefined });
     } else for (const l of wrapText(doc.body, ctx.cols - 2)) lines.push({ text: l });
     return <ScrollLines lines={lines} height={ctx.bodyHeight} arrows />;
   }
@@ -115,8 +119,8 @@ export function CtoView() {
       </Box>
       <Box height={1}>
         <SafeText dimColor>{`${"-".repeat(3)} message the CTO ${focus ? "(Enter sends, Ctrl+J newline, Esc leaves)" : "(i to type)"}`}</SafeText>
-        {thinking ? <Text color="yellow">{"  CTO is thinking..."}</Text> : null}
-        {!wide && doc?.status === "proposed" ? <Text color="yellow">{"  PRD proposed: A approve, D read"}</Text> : null}
+        {thinking ? <Text color={palette.attention}>{"  CTO is thinking..."}</Text> : null}
+        {!wide && doc?.status === "proposed" ? <Text color={palette.attention}>{"  PRD proposed: A approve, D read"}</Text> : null}
       </Box>
       <TextInput value={draft.value} onChange={draft.setValue} onSubmit={() => void send()} onEscape={() => setFocus(false)} focus={focus} multiline width={ctx.cols} maxRows={inputRows} placeholder="Type a message to the CTO" />
     </Box>

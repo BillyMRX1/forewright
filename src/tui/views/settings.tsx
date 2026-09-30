@@ -6,6 +6,7 @@ import { abbreviatePath, oneLine, wrapText } from "../format.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../../core/store-types.js";
 import type { ProviderStatus } from "../../runtime/protocol.js";
 import type { EngineId } from "../../core/types.js";
+import { palette } from "../theme.js";
 
 export const LOCAL_NOTICE = "Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex) by their CLIs.";
 
@@ -26,12 +27,12 @@ export function providerLines(p: ProviderStatus, width: number): DLine[] {
   const h = p.health;
   const c = p.capabilities;
   const lines: DLine[] = [];
-  lines.push({ text: `${h.engine}${h.isTestDouble ? "   [Test double: simulated, not a real provider]" : ""}`, bold: true, color: h.isTestDouble ? "yellow" : "cyan" });
+  lines.push({ text: `${h.engine}${h.isTestDouble ? "   [Test double: simulated, not a real provider]" : ""}`, bold: true, color: h.isTestDouble ? palette.attention : palette.accent });
   lines.push({ text: `  binary ${h.binaryPath ? abbreviatePath(h.binaryPath, width - 12) : "not found"}   version ${h.version ?? "unknown"}` });
-  lines.push({ text: `  auth ${h.authenticated === true ? "logged in" : h.authenticated === false ? "NOT logged in" : "unknown"}${h.authMethod ? ` (${h.authMethod})` : ""}`, color: h.authenticated === false ? "red" : undefined });
+  lines.push({ text: `  auth ${h.authenticated === true ? "logged in" : h.authenticated === false ? "NOT logged in" : "unknown"}${h.authMethod ? ` (${h.authMethod})` : ""}`, color: h.authenticated === false ? palette.error : undefined });
   const models = h.models.length > 0 ? h.models.join(", ") : "none listed";
   for (const l of wrapText(`  models (${h.modelsSource}): ${models}`, width)) lines.push({ text: l });
-  for (const prob of h.problems) for (const l of wrapText(`  problem: ${prob}`, width)) lines.push({ text: l, color: "red" });
+  for (const prob of h.problems) for (const l of wrapText(`  problem: ${prob}`, width)) lines.push({ text: l, color: palette.error });
   const yes = (b: boolean) => (b ? "yes" : NOT_SUPPORTED);
   const caps = [
     `streaming: ${yes(c.streaming)}`,
@@ -132,7 +133,7 @@ export function SettingsView() {
   const w = ctx.cols - 2;
   const lines: DLine[] = [];
   let selLine = 0;
-  const h = (t: string) => lines.push({ text: t, bold: true, color: "cyan" });
+  const h = (t: string) => lines.push({ text: t, bold: true, color: palette.accent });
   h("Providers");
   for (const p of providers) lines.push(...providerLines(p, w));
   lines.push({ text: "" });
@@ -170,7 +171,7 @@ export function SettingsView() {
     lines.push({ text: `${i === sel ? ">" : " "} ${name}: ${shown}`, bold: i === sel });
   });
   lines.push({ text: "" });
-  for (const l of wrapText(LOCAL_NOTICE, w)) lines.push({ text: l, color: "yellow" });
+  for (const l of wrapText(LOCAL_NOTICE, w)) lines.push({ text: l, color: palette.attention });
 
   const bodyH = Math.max(1, ctx.bodyHeight - (editing ? 2 : 0));
   const maxStart = Math.max(0, lines.length - bodyH);

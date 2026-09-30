@@ -3,11 +3,24 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useInput, type Key } from "ink";
 import type { ClientApi } from "./client.js";
-import type { ProviderStatus, RuntimeStatus } from "../runtime/protocol.js";
+import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
+import type { Decision, Task } from "../core/store-types.js";
+import type { AgentAttention, NeedItem } from "./attention.js";
 
 export interface Selection {
   taskId: string | null;
   runId: string | null;
+}
+
+/** A request to open a view with something specific selected. Views apply it once, keyed by `nonce`. */
+export interface JumpTarget {
+  view: number;
+  decisionId?: string;
+  taskId?: string;
+  agentId?: string;
+  /** Leave any text box so global keys (like `n`) keep working. */
+  blurInput?: boolean;
+  nonce: number;
 }
 
 export interface AppCtx {
@@ -32,6 +45,17 @@ export interface AppCtx {
   claimInput(): () => void;
   setSelection(sel: Partial<Selection>): void;
   goto(viewIndex: number): void;
+  /** Agents in attention order (needs you first), retired ones hidden. */
+  attention: AgentAttention[];
+  /** Things waiting for Billy, in the order the `n` key visits them. */
+  needs: NeedItem[];
+  openDecisions: Decision[];
+  teamAgents: TeamMember[];
+  tasks: Task[];
+  jump: JumpTarget | null;
+  jumpTo(target: Omit<JumpTarget, "nonce">): void;
+  /** Marks finished work as looked at, for one task or every task an agent finished. */
+  markSeen(sel: { taskId?: string; agentId?: string }): void;
 }
 
 export const Ctx = createContext<AppCtx | null>(null);
@@ -40,6 +64,20 @@ export function useCtx(): AppCtx {
   const ctx = useContext(Ctx);
   if (!ctx) throw new Error("useCtx must be used inside <App>.");
   return ctx;
+}
+
+/** Runs `apply` once for each jump aimed at this view. Fires on mount too, so a jump that switched views is applied. */
+export function useJump(view: number, apply: (jump: JumpTarget) => void): void {
+  const ctx = useCtx();
+  const done = useRef<number | null>(null);
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  const jump = ctx.jump;
+  useEffect(() => {
+    if (!jump || jump.view !== view || done.current === jump.nonce) return;
+    done.current = jump.nonce;
+    applyRef.current(jump);
+  }, [jump, view]);
 }
 
 /** Key handler that is silent while a modal is open. */

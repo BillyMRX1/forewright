@@ -16,6 +16,7 @@ import { buildStateDigest } from "./prompts.js";
 import { recordReview } from "./review.js";
 import type { TokenRecord } from "./tokens.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
+import { engineRoleProblem } from "./engine-roles.js";
 
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -286,6 +287,8 @@ const TOOLS: ToolDef[] = [
       const adapter = rt.deps.adapters.get(engine);
       if (!adapter) throw new ToolError(`The ${engine} provider is not available on this machine.`);
       if (adapter.isTestDouble && !rt.deps.testMode) throw new ToolError("Test doubles cannot be hired outside test mode.");
+      const roleProblem = engineRoleProblem(adapter, role);
+      if (roleProblem) throw new ToolError(roleProblem);
       const health = await rt.deps.health.forEngine(engine);
       const problem = unusableReason(health, engine);
       if (problem) throw new ToolError(problem);

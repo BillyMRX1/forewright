@@ -2,6 +2,26 @@
 
 Resumable log of the build. Newest state first.
 
+## Status (2026-10-01, later)
+
+Five engines are supported: Claude Code, Codex, Antigravity (`agy`), OpenCode and GitHub Copilot CLI. The TUI gained an attention model inspired by the herdr project (patterns only, original code).
+
+- [x] E. Antigravity, OpenCode and Copilot adapters, each with isolated homes, narrow per-profile permissions, billing guards, and per-run MCP injection. Engines without working MCP tools cannot be hired as CTO or reviewer.
+- [x] F. TUI: live agent strip sorted by what needs attention, header status summary, prioritized toasts with jump (`g`), next-needs-you key (`n`), command palette (`Ctrl+K` or `:`), keybind table driving help and footer, semantic theme with ASCII fallback, Overview "Now" section, live output peek.
+
+Verification for E and F (coordinator runs):
+- `npm test`: 320 tests, 310 pass, 0 fail, 10 skipped (live tests).
+- `DEPT_LIVE=1 node --test --test-concurrency=1 dist/providers/live*.test.js dist/runtime/live-bridge*.test.js`: 10 of 10 pass. Every engine completes a real run and works as CTO through the dept MCP bridge.
+- Live worker tasks with a Claude reviewer on a real daemon and git repo: Copilot, OpenCode and Antigravity workers each completed a task that passed review and integration (this also verified the Claude reviewer permission fix live).
+- Real TUI driven in a pseudo terminal against a live service with all five engines.
+
+Fixed during this verification:
+- Antigravity: the runtime only gives MCP tools to engines that declare them, so the capability had to be enabled; agy reads tool descriptions from its private home, which is now added with `--add-dir`; the coordinator uses agy's `request-review` mode because `strict` refused those reads.
+- Copilot: the session id was announced before Copilot created the session, so a retry after an early failure tried to resume a session that never existed.
+- TUI: a fresh subscription treated the service's history replay as new events and raised toasts for long-resolved decisions.
+
+Known gaps added: agy runs plain listing commands such as `ls` for read-only agents despite the deny rule (read only); Copilot's model catalog lists models your plan may not include; OpenCode free models occasionally end a run without a result (dept retries).
+
 ## Status (2026-10-01)
 
 All four milestones are implemented and committed. A live end to end run with real Claude Code and Codex completed a small product from brief to merge.
