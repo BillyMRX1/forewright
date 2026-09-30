@@ -1,0 +1,10 @@
+{
+  "autoLocalEdits": true,
+  "autoChecks": true,
+  "autoIntegrateToDeptBranch": true,
+  "mergeToUserBranch": "ask",
+  "publish": "ask",
+  "destructive": "ask",
+  "spendLimitUsd": 0,
+  "allowApiBilling": false
+}

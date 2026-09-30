@@ -143,6 +143,8 @@ export interface RunHandle {
   runId: Id;
   generation: number;
   process: OwnedProcess | null; // null until spawned
+  /** Resolves when the child has been spawned (null when the spawn failed). */
+  spawned?: Promise<OwnedProcess | null>;
   /** Terminates the whole process group: SIGTERM, then SIGKILL after graceMs. */
   cancel(reason: string, graceMs?: number): Promise<void>;
   done: Promise<RunOutcome>;

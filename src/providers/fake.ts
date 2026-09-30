@@ -21,17 +21,27 @@ export interface FakeScript {
   retryAfter?: string;
   /** Stamp events with this generation instead of the request's (simulates a stale session). */
   staleGeneration?: number;
+  /**
+   * Tools to call through the run's MCP servers. The child starts the first `mcpServers`
+   * entry exactly like a real client (stdio, initialize, tools/call), so the real bridge,
+   * token and policy path are exercised. Each result is emitted as a `tool_result` event.
+   */
+  toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+  /** `git add -A && git commit` in the run's cwd after writeFiles. */
+  gitCommit?: boolean;
 }
 
 export interface FakeRule {
   /** String: runId equal or prompt contains it. */
   match: string | ((req: RunRequest) => boolean);
-  script: FakeScript;
+  script: FakeScript | ((req: RunRequest) => FakeScript);
 }
 
 export interface FakeAdapterOptions {
   rules?: FakeRule[];
   defaultScript?: FakeScript;
+  /** Called synchronously at the start of every run, before the child is spawned. */
+  onStart?: (req: RunRequest) => void;
 }
 
 const CHILD = fileURLToPath(new URL("./fake-child.js", import.meta.url));
@@ -41,13 +51,17 @@ export class FakeAdapter implements ProviderAdapter {
   readonly isTestDouble = true;
   readonly capabilities: ProviderCapabilities = {
     streaming: true, resume: true, cancellation: true, approvals: "none", modelSelection: "none",
-    attachments: false, workingDirectory: "cwd", usageReporting: "none", coordinationTools: "none",
+    attachments: false, workingDirectory: "cwd", usageReporting: "none", coordinationTools: "mcp",
     notes: ["Test double: scripted output from a local process. Not a live provider."],
   };
   readonly rules: FakeRule[];
   defaultScript: FakeScript;
+  onStart: ((req: RunRequest) => void) | undefined;
+  /** Every request this adapter has been asked to run, in order (for test assertions). */
+  readonly requests: RunRequest[] = [];
 
   constructor(opts: FakeAdapterOptions = {}) {
+    this.onStart = opts.onStart;
     this.rules = opts.rules ?? [];
     this.defaultScript = opts.defaultScript ?? { outcome: "succeeded", finalText: "fake result" };
   }
@@ -62,12 +76,14 @@ export class FakeAdapter implements ProviderAdapter {
   scriptFor(req: RunRequest): FakeScript {
     for (const r of this.rules) {
       const hit = typeof r.match === "function" ? r.match(req) : req.runId === r.match || req.prompt.includes(r.match);
-      if (hit) return r.script;
+      if (hit) return typeof r.script === "function" ? r.script(req) : r.script;
     }
     return this.defaultScript;
   }
 
   start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {
+    this.requests.push(req);
+    this.onStart?.(req);
     const script = this.scriptFor(req);
     const sessionId = req.resumeSessionId ?? `fake-session-${req.runId}`;
     const lines: string[] = [JSON.stringify({ kind: "session_started", sessionId })];
@@ -94,6 +110,7 @@ export class FakeAdapter implements ProviderAdapter {
     const childScript = {
       lines, delayMs: script.delayMs ?? 0, hang: script.hangUntilCancelled ?? false, ignoreSigterm: script.ignoreSigterm ?? false,
       spawnGrandchild: script.spawnGrandchild ?? false, writeFiles: script.writeFiles ?? {}, exitCode,
+      gitCommit: script.gitCommit ?? false, toolCalls: script.toolCalls ?? [], mcpServers: req.mcpServers ?? [],
     };
     const { env } = childEnv(process.env, req.env ?? {}, { allowApiBilling: false });
     const stampReq = { runId: req.runId, generation: script.staleGeneration ?? req.generation };

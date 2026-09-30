@@ -181,6 +181,7 @@ test("codex: resume form, mcp via -c with secrets in env not argv, CODEX_HOME is
   assert.ok(argv.includes('mcp_servers.dept.command="node"'));
   assert.ok(argv.includes('mcp_servers.dept.args=["/b/bridge.js", "--x"]'));
   assert.ok(argv.includes('mcp_servers.dept.env_vars=["DEPT_TOKEN"]'));
+  assert.ok(argv.includes('mcp_servers.dept.default_tools_approval_mode="approve"'));
   assert.ok(!argv.join(" ").includes("tok-123456789"), "secret must not appear in argv");
   // the argv file is newline-separated, so the multi-line prompt spans three entries
   assert.deepEqual(argv.slice(-5), ["--", "th-9", "SYS", "", baseRequest().prompt]);

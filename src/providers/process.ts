@@ -121,7 +121,7 @@ export interface SpawnedProcess {
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }
 
-function psField(pid: number, field: "lstart" | "pgid"): string {
+export function psField(pid: number, field: "lstart" | "pgid"): string {
   try {
     return execFileSync("ps", ["-o", `${field}=`, "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
@@ -184,8 +184,19 @@ function groupExists(pgid: number): boolean {
     process.kill(-pgid, 0);
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ESRCH") return false;
+    const code = (err as NodeJS.ErrnoException).code;
+    // macOS answers EPERM for a group whose only members are zombies waiting to be reaped: nothing left to signal.
+    if (code === "ESRCH" || code === "EPERM") return false;
     throw err;
+  }
+}
+
+function signalGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") throw err; // the group vanished between the check and the signal
   }
 }
 
@@ -194,7 +205,7 @@ export async function terminateGroup(
   graceMs: number,
 ): Promise<{ terminated: boolean; escalated: boolean }> {
   if (!groupExists(owned.pgid)) return { terminated: false, escalated: false };
-  process.kill(-owned.pgid, "SIGTERM");
+  signalGroup(owned.pgid, "SIGTERM");
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
     if (!groupExists(owned.pgid)) return { terminated: true, escalated: false };
@@ -202,7 +213,7 @@ export async function terminateGroup(
   }
   let escalated = false;
   if (groupExists(owned.pgid)) {
-    process.kill(-owned.pgid, "SIGKILL");
+    signalGroup(owned.pgid, "SIGKILL");
     escalated = true;
   }
   const killDeadline = Date.now() + 3000;

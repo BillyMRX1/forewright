@@ -73,10 +73,16 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
   let timedOut = false;
   let owned: OwnedProcess | null = null;
 
+  let markSpawned: (p: OwnedProcess | null) => void = () => {};
+  const spawnedPromise = new Promise<OwnedProcess | null>((resolve) => {
+    markSpawned = resolve;
+  });
+
   const handle: RunHandle = {
     runId: req.runId,
     generation: req.generation,
     process: null,
+    spawned: spawnedPromise,
     async cancel(reason, graceMs = grace) {
       cancelled = true;
       cancelReason ??= reason;
@@ -91,6 +97,7 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
       spawned = await spawnOwned(plan.bin, plan.args, { cwd: plan.cwd, env: plan.env, stdin: plan.stdin });
     } catch (err) {
       plan.cleanup?.();
+      markSpawned(null);
       const detail = err instanceof Error ? err.message : String(err);
       return {
         ...emptyOutcome(req),
@@ -101,6 +108,7 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
     }
     owned = spawned.owned;
     handle.process = spawned.owned;
+    markSpawned(spawned.owned);
     if (cancelled) await terminateGroup(spawned.owned, grace);
 
     const out = new LineSplitter();

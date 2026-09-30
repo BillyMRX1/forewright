@@ -1623,6 +1623,14 @@ export class Store {
             ? typeof value === "number" && value >= 0
             : value === "ask" || value === "auto" || value === "deny";
       if (!ok) throw new ValidationError(`Invalid value for ${key}.`, { key, value });
+    } else if (key === "ctoEngine") {
+      if (value !== "claude" && value !== "codex" && value !== "fake") throw new ValidationError("ctoEngine must be claude or codex.", { key, value });
+    } else if (key === "ctoModel") {
+      if (value !== null && typeof value !== "string") throw new ValidationError("ctoModel must be a model name or null.", { key, value });
+    } else if (key === "projectChecks") {
+      if (!Array.isArray(value) || value.some((v) => typeof v !== "string" || v.trim() === "")) {
+        throw new ValidationError("projectChecks must be a list of shell commands.", { key });
+      }
     } else {
       if (!(key in DEFAULT_LIMITS)) throw new ValidationError(`Unknown setting "${key}".`, { key });
       if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new ValidationError(`${key} must be a positive whole number.`, { key, value });
@@ -1656,6 +1664,147 @@ export class Store {
 
   deleteDraft(view: string, key: string): void {
     this.run("DELETE FROM draft WHERE project_id = ? AND view = ? AND key = ?", this.projectId, view, key);
+  }
+
+  // ------------------------------------------------------------ runtime support
+
+  /** Working or review task goes back to ready for another attempt; counts as a repair loop. */
+  requeueForRepair(taskId: string, actor: Actor): Task {
+    return tx(this.db, () => {
+      const t = this.getTask(taskId);
+      if (t.state !== "working" && t.state !== "review") throw new InvalidTransitionError(t.state, "ready", { taskId: t.id });
+      this.run(
+        "UPDATE task SET state = 'ready', repair_loops = repair_loops + 1, lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+        this.nowIso(),
+        t.id,
+      );
+      this.appendEvent("task.transitioned", "task", t.id, actorLabel(actor), { from: t.state, to: "ready", reason: "repair", repairLoops: t.repairLoops + 1 });
+      this.freeAgentFor(t.id);
+      return this.getTask(t.id);
+    });
+  }
+
+  /** Removes the assignee from a non-terminal task (used when the team is terminated). */
+  unassignTask(taskId: string, actor: Actor): void {
+    tx(this.db, () => {
+      const t = this.getTask(taskId);
+      if (TERMINAL.includes(t.state)) return;
+      this.run("UPDATE task SET assignee_agent_id = NULL, updated_at = ? WHERE id = ?", this.nowIso(), t.id);
+      this.freeAgentFor(t.id);
+      this.appendEvent("task.unassigned", "task", t.id, actorLabel(actor), { was: t.assigneeAgentId });
+    });
+  }
+
+  /** First assignment of an unassigned task. Reassigning goes through reassignTask. */
+  assignTask(taskId: string, agentId: string, actor: Actor): Task {
+    return tx(this.db, () => {
+      const t = this.getTask(taskId);
+      const a = this.getAgent(agentId);
+      if (a.retiredAt) throw new ValidationError(`${a.name} has been retired.`);
+      if (t.state !== "planned" && t.state !== "ready") throw new InvalidTransitionError(t.state, t.state, { hint: "Use reassignTask for tasks that already started." });
+      this.run("UPDATE task SET assignee_agent_id = ?, updated_at = ? WHERE id = ?", a.id, this.nowIso(), t.id);
+      this.appendEvent("task.assigned", "task", t.id, actorLabel(actor), { to: a.id, from: t.assigneeAgentId });
+      return this.getTask(t.id);
+    });
+  }
+
+  /** Back to idle with no current task (after a run ended without a task result). */
+  releaseAgent(agentId: string): void {
+    this.run("UPDATE agent SET current_task_id = NULL, lifecycle = 'idle' WHERE id = ? AND lifecycle != 'retired'", agentId);
+  }
+
+  /** Clears retry and repair counters when a human resumes an exhausted task. */
+  resetTaskCounters(taskId: string): void {
+    tx(this.db, () => {
+      const t = this.getTask(taskId);
+      this.run("UPDATE task SET retries = 0, repair_loops = 0, updated_at = ? WHERE id = ?", this.nowIso(), t.id);
+      this.appendEvent("task.counters_reset", "task", t.id, "human");
+    });
+  }
+
+  /** Updates the one-line activity summary shown in the Team view; no event row. */
+  touchAgent(agentId: string, summary: string): void {
+    this.setAgentActivity(agentId, summary, null);
+  }
+
+  clearAgentSession(agentId: string): void {
+    this.run("UPDATE agent SET provider_session_id = NULL WHERE id = ?", agentId);
+  }
+
+  /** Puts messages that a failed run received back to pending so the next run sees them. */
+  requeueDeliveries(agentId: string, runId: string): number {
+    return tx(this.db, () => {
+      const n = this.run(
+        "UPDATE message_delivery SET state = 'pending', delivered_run_id = NULL, delivered_at = NULL WHERE recipient_agent_id = ? AND delivered_run_id = ? AND state = 'delivered'",
+        agentId,
+        runId,
+      );
+      if (n > 0) this.appendEvent("message.requeued", "agent", agentId, "system", { runId, count: n });
+      return n;
+    });
+  }
+
+  countEvents(type: string, sinceIso: string): number {
+    return Number(this.one("SELECT COUNT(*) AS n FROM event WHERE project_id = ? AND type = ? AND at >= ?", this.projectId, type, sinceIso)?.["n"] ?? 0);
+  }
+
+  getSetting<T = unknown>(key: string): T | undefined {
+    const r = this.one("SELECT value FROM setting WHERE project_id = ? AND key = ?", this.projectId, key);
+    return r ? (JSON.parse(r["value"] as string) as T) : undefined;
+  }
+
+  /** Runtime-owned bookkeeping (quota waits and similar); not validated as a user-facing setting. */
+  putRuntimeSetting(key: string, value: unknown): void {
+    tx(this.db, () => {
+      this.run(
+        "INSERT INTO setting (project_id, key, value) VALUES (?,?,?) ON CONFLICT(project_id, key) DO UPDATE SET value = excluded.value",
+        this.projectId,
+        key,
+        JSON.stringify(value),
+      );
+      this.appendEvent("setting.runtime", "setting", key, "system", { value });
+    });
+  }
+
+  deleteRuntimeSetting(key: string): void {
+    tx(this.db, () => {
+      if (this.run("DELETE FROM setting WHERE project_id = ? AND key = ?", this.projectId, key) > 0) {
+        this.appendEvent("setting.runtime_cleared", "setting", key, "system");
+      }
+    });
+  }
+
+  markVerificationStale(verificationId: string): void {
+    tx(this.db, () => {
+      this.run("UPDATE verification SET stale = 1 WHERE id = ?", verificationId);
+      this.appendEvent("verification.stale", "verification", verificationId, "system");
+    });
+  }
+
+  /** After an integration, integration checks of other unfinished tasks were made against an older tip. */
+  staleIntegrationChecks(exceptTaskId: string): number {
+    return tx(this.db, () => {
+      const n = this.run(
+        `UPDATE verification SET stale = 1 WHERE kind = 'integration_check' AND stale = 0 AND task_id != ? AND project_id = ?
+           AND task_id IN (SELECT id FROM task WHERE state NOT IN ('done','cancelled'))`,
+        exceptTaskId,
+        this.projectId,
+      );
+      if (n > 0) this.appendEvent("verification.integration_rechecks_needed", "task", exceptTaskId, "system", { count: n });
+      return n;
+    });
+  }
+
+  listMessagesFor(agentId: string, limit = 200): Message[] {
+    return this.all(
+      `SELECT DISTINCT m.* FROM message m LEFT JOIN message_delivery d ON d.message_id = m.id
+       WHERE m.project_id = ? AND (m.sender_id = ? OR d.recipient_agent_id = ?) ORDER BY m.created_at, m.rowid`,
+      this.projectId,
+      agentId,
+      agentId,
+    )
+      .map((r) => this.messageFromRow(r))
+      .slice(-limit);
   }
 
   // ------------------------------------------------------------ events and projections

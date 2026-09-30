@@ -49,7 +49,7 @@ Codex:
 
 `childEnv` builds the child environment from an allowlist (PATH, HOME, USER, LOGNAME, SHELL, LANG, LC_*, TMPDIR, TERM=dumb). `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CODEX_API_KEY` and `AZURE_OPENAI_API_KEY` are dropped unless the project policy enables API billing, and injecting one through extra variables throws. A quota or usage-limit result always becomes `quota_wait`; the adapters never retry in another billing mode.
 
-For Codex MCP servers, secret environment values (such as the scoped run token) are passed in the child environment and referenced with `env_vars`, so they never appear in the process list. For Claude they are in a mode 0600 file that is deleted when the run ends. Both are accepted by the CLIs as verified with `codex mcp list/get` and Claude's `system/init`; a full tool call through the dept bridge is exercised in a later milestone.
+For Codex MCP servers, secret environment values (such as the scoped run token) are passed in the child environment and referenced with `env_vars`, so they never appear in the process list. For Claude they are in a mode 0600 file that is deleted when the run ends. Both are accepted by the CLIs as verified with `codex mcp list/get` and Claude's `system/init`; a full tool call through the dept bridge is exercised end to end with the fake adapter in the runtime tests, and against the real engines by `DEPT_LIVE=1 node --test dist/runtime/live-bridge.test.js`.
 
 ## Output events
 

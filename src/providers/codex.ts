@@ -147,6 +147,9 @@ export function buildCodexArgs(req: RunRequest, lastMessageFile: string): string
     // Secret values travel in the child environment, never in argv (visible in ps).
     const names = Object.keys(s.env);
     if (names.length > 0) args.push("-c", `${key}.env_vars=[${names.map(tomlString).join(", ")}]`);
+    // With approval_policy "never", Codex rejects MCP calls that need approval.
+    // Pre-approve only the servers dept supplies; the daemon authorizes each call itself.
+    args.push("-c", `${key}.default_tools_approval_mode="approve"`);
   }
   args.push("--");
   if (resume) args.push(req.resumeSessionId as string);

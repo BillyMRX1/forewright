@@ -44,6 +44,8 @@ export interface RuntimeStatus {
   activeRuns: Array<{ runId: string; kind: Run["kind"]; agentId: string; taskId: string | null; startedAt: string | null }>;
   maxConcurrentWorkers: number;
   ctoBusy: boolean;
+  /** Plain reason the CTO cannot run right now (unavailable engine, not signed in), or null. */
+  ctoError?: string | null;
   connectedClients: number;
 }
 
