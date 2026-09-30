@@ -43,7 +43,6 @@ async function launchTui(): Promise<number> {
 }
 
 async function serve(): Promise<number> {
-  migrateLegacyHome();
   const home = forewrightHome();
   const adapters = createAdapters({ forewrightHome: home, includeFake: useTestDouble() });
   const daemon = await startDaemon({ forewrightHome: home, adapters, testMode: useTestDouble(), bridgeEntry: fileURLToPath(import.meta.url) });
@@ -119,6 +118,8 @@ async function doctor(): Promise<number> {
 
 async function main(argv: string[]): Promise<number> {
   const [cmd, sub] = argv;
+  // Before any command can create the new data directory (doctor did, seen live), move the old one over.
+  migrateLegacyHome();
   switch (cmd) {
     case undefined:
       return launchTui();
