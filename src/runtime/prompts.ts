@@ -9,6 +9,9 @@ import { truncate } from "../core/safety.js";
 const INSTRUCTION_CAP = 20 * 1024;
 const SECTION_CAP = 24 * 1024;
 
+/** Engines whose CLI reads AGENTS.md from the working directory without help (verified per adapter, see docs/providers.md). */
+const LOADS_AGENTS_MD: ReadonlySet<EngineId> = new Set<EngineId>(["codex"]);
+
 /** Project instruction files, read only from the given roots (project root, and the worktree for task runs). */
 export function readInstructionFiles(roots: string[], engine: EngineId): string {
   const seen = new Set<string>();
@@ -17,9 +20,9 @@ export function readInstructionFiles(roots: string[], engine: EngineId): string 
   for (const root of roots) {
     const agentsFile = path.join(root, "AGENTS.md");
     const claudeFile = path.join(root, "CLAUDE.md");
-    // Codex loads AGENTS.md from its cwd by itself; CLAUDE.md only matters to it when there is no AGENTS.md.
+    // Engines that load AGENTS.md from their cwd by themselves only need CLAUDE.md, and only when there is no AGENTS.md.
     const wanted: Array<[string, string]> = [];
-    if (engine !== "codex") {
+    if (!LOADS_AGENTS_MD.has(engine)) {
       wanted.push(["CLAUDE.md", claudeFile], ["AGENTS.md", agentsFile]);
     } else if (!anyAgentsFile) {
       wanted.push(["CLAUDE.md", claudeFile]);

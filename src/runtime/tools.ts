@@ -7,7 +7,7 @@ import { DeptError, NotFoundError, PolicyDeniedError, ValidationError } from "..
 import { type ActionContext, type ActionName, type Actor, authorize } from "../core/policy.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import { type Agent, type DecisionKind, type DecisionOption, canonicalJson } from "../core/store.js";
-import type { AgentRole, EngineId, PermissionProfile } from "../core/types.js";
+import { LIVE_ENGINES, type AgentRole, type EngineId, type PermissionProfile } from "../core/types.js";
 import { ToolError } from "./errors.js";
 import { gitTry } from "./git.js";
 import { unusableReason } from "./health.js";
@@ -92,7 +92,7 @@ function agentByName(ctx: ToolCtx, name: string): Agent {
 }
 
 const ROLES: readonly AgentRole[] = ["frontend", "backend", "mobile", "testing", "review", "docs", "integration", "generalist"];
-const ENGINES: readonly EngineId[] = ["claude", "codex", "fake"];
+const ENGINES: readonly EngineId[] = [...LIVE_ENGINES, "fake"];
 const DECISION_KINDS: readonly DecisionKind[] = ["scope", "permission", "spend", "publish", "destructive", "question"];
 
 function taskView(ctx: ToolCtx, taskRef: string): unknown {
@@ -263,11 +263,11 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "hire_agent",
-    description: "Hire a specialist. Roles: frontend, backend, mobile, testing, review, docs, integration, generalist. Engines: claude, codex.",
+    description: `Hire a specialist. Roles: frontend, backend, mobile, testing, review, docs, integration, generalist. Engines: ${LIVE_ENGINES.join(", ")}.`,
     properties: {
       name: { type: "string" },
       role: { type: "string", enum: ROLES },
-      engine: { type: "string", enum: ["claude", "codex"] },
+      engine: { type: "string", enum: [...LIVE_ENGINES] },
       model: { type: "string" },
       permission: { type: "string", enum: ["read_only", "workspace_write"] },
     },

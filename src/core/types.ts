@@ -34,7 +34,9 @@ export type RunState = (typeof RUN_STATES)[number];
 
 // ---------------------------------------------------------------- agents
 
-export type EngineId = "claude" | "codex" | "fake";
+export type EngineId = "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "fake";
+/** Real engines an agent can be hired on (the fake adapter is for tests only). */
+export const LIVE_ENGINES = ["claude", "codex", "antigravity", "opencode", "copilot"] as const satisfies readonly EngineId[];
 export type AgentRole = "cto" | "frontend" | "backend" | "mobile" | "testing" | "review" | "docs" | "integration" | "generalist";
 export type AgentLifecycle = "idle" | "working" | "waiting" | "paused" | "retired";
 

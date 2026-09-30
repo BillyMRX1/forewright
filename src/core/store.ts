@@ -53,6 +53,7 @@ import {
   type AgentLifecycle,
   type AgentRole,
   BLOCK_REASONS,
+  LIVE_ENGINES,
   type BlockReason,
   type EngineId,
   type NormalizedEvent,
@@ -1625,7 +1626,9 @@ export class Store {
             : value === "ask" || value === "auto" || value === "deny";
       if (!ok) throw new ValidationError(`Invalid value for ${key}.`, { key, value });
     } else if (key === "ctoEngine") {
-      if (value !== "claude" && value !== "codex" && value !== "fake") throw new ValidationError("ctoEngine must be claude or codex.", { key, value });
+      if (typeof value !== "string" || ![...LIVE_ENGINES, "fake"].includes(value)) {
+        throw new ValidationError(`ctoEngine must be one of ${LIVE_ENGINES.join(", ")}.`, { key, value });
+      }
     } else if (key === "ctoModel") {
       if (value !== null && typeof value !== "string") throw new ValidationError("ctoModel must be a model name or null.", { key, value });
     } else if (key === "projectChecks") {
