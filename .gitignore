@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.dept-test-*/
+*.log
