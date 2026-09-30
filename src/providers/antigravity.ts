@@ -141,6 +141,11 @@ export function prepareAgyHome(opts: {
   fs.writeFileSync(path.join(gemini, "config", ".migrated"), "", { mode: 0o600 });
   const realGemini = path.join(opts.realHome, ".gemini");
   for (const f of AUTH_FILES) linkInto(path.join(gemini, f), path.join(realGemini, f));
+  // macOS finds the login keychain through $HOME/Library/Keychains. Without this link agy cannot reach
+  // it and macOS shows a "Keychain Not Found" dialog on every run (whose "Reset To Defaults" button
+  // would reset the user's keychain). This is the same keychain agy uses when Billy runs it directly.
+  fs.mkdirSync(path.join(home, "Library"), { recursive: true, mode: 0o700 });
+  linkInto(path.join(home, "Library", "Keychains"), path.join(opts.realHome, "Library", "Keychains"));
   for (const f of CLI_AUTH_FILES) linkInto(path.join(cli, f), path.join(realGemini, "antigravity-cli", f));
   const state = agyStateDir(opts.forewrightHome);
   for (const d of SHARED_STATE_DIRS) {

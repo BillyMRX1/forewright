@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { NormalizedEvent, PermissionProfile, RunRequest } from "../core/types.js";
-import { AntigravityAdapter, AntigravityStreamParser, agySettings, buildAntigravityArgs, isApiBilledAuthType } from "./antigravity.js";
+import { AntigravityAdapter, AntigravityStreamParser, agySettings, buildAntigravityArgs, prepareAgyHome, isApiBilledAuthType } from "./antigravity.js";
 import { makeEmitter } from "./runner.js";
 import { baseRequest, drive, exitCode, exitOk, fakeBinary, fixture, tmpDir } from "./test-helpers.js";
 
@@ -369,4 +369,14 @@ test("antigravity: capabilities are honest about system prompt, instruction file
   assert.match(notes, /subscription/);
   assert.ok(!/[–—]/.test(notes), "no em or en dashes in user-facing text");
   void exitOk;
+});
+
+test("antigravity: the private home links the real login keychain folder so macOS never shows Keychain Not Found", () => {
+  const real = fakeRealHome();
+  fs.mkdirSync(path.join(real, "Library", "Keychains"), { recursive: true });
+  const parent = tmpDir();
+  const { home } = prepareAgyHome({ parent, forewrightHome: tmpDir(), realHome: real, settings: agySettings("read_only", parent, [], false) });
+  const link = path.join(home, "Library", "Keychains");
+  assert.ok(fs.lstatSync(link).isSymbolicLink());
+  assert.equal(fs.readlinkSync(link), path.join(real, "Library", "Keychains"));
 });

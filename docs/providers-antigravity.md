@@ -61,3 +61,7 @@ A real Antigravity CTO turn called `get_project_state` through the Forewright da
 3. Under `toolPermission strict` the read was still refused. The default `request-review` mode grants reads inside workspace directories; in headless mode anything else that would need review is refused, and writes and commands stay denied by rule.
 
 Known gap: in both modes agy ran a plain `ls` for the coordinator despite the `command(*)` deny rule. It appears to treat simple listing commands as safe. It is read only, but it means the deny rule is not absolute.
+
+## macOS keychain
+
+agy stores and refreshes its login in the macOS login keychain, which macOS finds through `$HOME/Library/Keychains`. Because Forewright runs agy with a private home, the private home links `Library/Keychains` to the real one. Without that link macOS shows a "Keychain Not Found" dialog on every run. If you ever see that dialog, choose Cancel: "Reset To Defaults" resets your login keychain.
