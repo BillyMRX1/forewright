@@ -1,3 +1,4 @@
+import { socketPathFor } from "../core/paths.js";
 import assert from "node:assert/strict";
 import net from "node:net";
 import path from "node:path";
@@ -123,7 +124,7 @@ test("tools/list shows only the tools a token's role may call, and a token dies 
     addTask(h, { title: "Listed", assignee: wren });
     poke(h);
     await waitFor(() => workRequests(h).length === 1, "the worker run");
-    const sock = path.join(h.home, "dept.sock");
+    const sock = socketPathFor(h.home);
     const names = async (token: string) => ((await daemonRequest(sock, token, "agent.tools.list", {})) as { tools: Array<{ name: string }> }).tools.map((t) => t.name).sort();
 
     const ctoTools = await names(tokenOf(ctoRequests(h)[0]!));
@@ -145,7 +146,7 @@ test("tools/list shows only the tools a token's role may call, and a token dies 
 test("the socket refuses unauthenticated clients, wrong tokens and oversized lines, and files have private permissions", async () => {
   const h = await startHarness();
   try {
-    const sock = path.join(h.home, "dept.sock");
+    const sock = socketPathFor(h.home);
     assert.equal(statSync(sock).mode & 0o777, 0o600, "socket 0600");
     assert.equal(statSync(path.join(h.home, "client.token")).mode & 0o777, 0o600, "token 0600");
     assert.equal(statSync(h.home).mode & 0o777, 0o700, "home 0700");

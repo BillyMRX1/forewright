@@ -84,8 +84,6 @@ test("claude: permission profiles produce the documented flags and never bypass 
   assert.ok(ww.indexOf("Bash(git push *)") > ww.indexOf("--disallowedTools"), "git push is denied, not allowed");
   assert.ok(!ww.slice(0, ww.indexOf("--disallowedTools")).includes("Bash(git push *)"));
   const co = seen["coordinator"] as string[];
-  assert.ok(co.includes("mcp__dept__*"));
-  assert.ok(co.indexOf("mcp__dept__*") < co.indexOf("--disallowedTools"));
 });
 
 test("claude: mcp servers go through a 0600 temp file that is deleted after the run; env has no API key", async () => {
@@ -215,4 +213,12 @@ test("isolatedCodexHome links auth.json (never copies), owns config.toml, and re
   fs.writeFileSync(link, "copied secret");
   assert.throws(() => isolatedCodexHome(dir, home), /Refusing to replace/);
   assert.throws(() => isolatedCodexHome(tmpDir(), tmpDir()), /not logged in/);
+});
+
+test("claude: every permission profile allows the tools of supplied MCP servers", async () => {
+  const { permissionArgs } = await import("./claude.js");
+  for (const p of ["read_only", "workspace_write", "coordinator"] as PermissionProfile[]) {
+    assert.ok(permissionArgs(p, ["dept"]).includes("mcp__dept__*"), p);
+    assert.ok(!permissionArgs(p).includes("mcp__dept__*"), p);
+  }
 });

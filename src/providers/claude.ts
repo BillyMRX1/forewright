@@ -26,24 +26,28 @@ function bashRules(cmds: string[]): string[] {
   return cmds.flatMap((c) => [`Bash(${c})`, `Bash(${c} *)`]);
 }
 
-export function permissionArgs(profile: PermissionProfile): string[] {
+// Tools of the MCP servers dept supplies for this run are always allowed: the
+// daemon scopes them per agent token and authorizes every call itself. Under
+// dontAsk/acceptEdits an unlisted MCP tool is silently denied.
+export function permissionArgs(profile: PermissionProfile, mcpServerNames: readonly string[] = []): string[] {
+  const mcp = mcpServerNames.map((n) => `mcp__${n}__*`);
   switch (profile) {
     case "read_only":
       return [
         "--permission-mode", "dontAsk",
-        "--allowedTools", "Read", "Grep", "Glob",
+        "--allowedTools", "Read", "Grep", "Glob", ...mcp,
         "--disallowedTools", "Edit", "Write", "Bash", "NotebookEdit", "WebFetch", "WebSearch",
       ];
     case "coordinator":
       return [
         "--permission-mode", "dontAsk",
-        "--allowedTools", "Read", "Grep", "Glob", "mcp__dept__*",
+        "--allowedTools", "Read", "Grep", "Glob", ...mcp,
         "--disallowedTools", "Edit", "Write", "Bash", "NotebookEdit", "WebFetch", "WebSearch",
       ];
     case "workspace_write":
       return [
         "--permission-mode", "acceptEdits",
-        "--allowedTools", ...bashRules(DEV_COMMANDS),
+        "--allowedTools", ...bashRules(DEV_COMMANDS), ...mcp,
         "--disallowedTools", ...bashRules(DENIED_BASH), "WebFetch", "WebSearch",
       ];
   }
@@ -159,7 +163,7 @@ export function buildClaudeArgs(req: RunRequest, isolationArgs: string[], mcpFil
   if (req.maxTurns !== undefined) args.push("--max-turns", String(req.maxTurns));
   if (req.systemPrompt) args.push("--append-system-prompt", req.systemPrompt);
   if (mcpFile) args.push("--mcp-config", mcpFile);
-  args.push(...permissionArgs(req.permission));
+  args.push(...permissionArgs(req.permission, (req.mcpServers ?? []).map((m) => m.name)));
   return args;
 }
 

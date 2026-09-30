@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { type Clock, systemClock } from "../core/clock.js";
 import { DuplicateProjectIdError, NotFoundError } from "../core/errors.js";
 import { initProject, openProject, readRegistry, resolveProject } from "../core/identity.js";
-import { ensureDir } from "../core/paths.js";
+import { ensureDir, socketPathFor } from "../core/paths.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { psField } from "../providers/process.js";
 import { ClientApi } from "./api.js";
@@ -67,7 +67,7 @@ export class Daemon {
   constructor(readonly opts: DaemonOptions, clientToken: string, pidFile: string) {
     this.adapters = opts.adapters;
     this.clock = opts.clock ?? systemClock;
-    this.socketPath = path.join(opts.deptHome, "dept.sock");
+    this.socketPath = socketPathFor(opts.deptHome);
     this.clientToken = clientToken;
     this.pidFile = pidFile;
     this.startedAt = new Date().toISOString();

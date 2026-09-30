@@ -1,3 +1,4 @@
+import { socketPathFor } from "../core/paths.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -14,7 +15,7 @@ import { addTask, call, gitIn, hire, isCto, isWork, poke, rule, seedPrd, settle,
 test("reconnect: a client that disconnected gets exactly the events it missed, once, then live events", async () => {
   const h = await startHarness();
   try {
-    const sock = path.join(h.home, "dept.sock");
+    const sock = socketPathFor(h.home);
     const token = RpcClient.tokenFrom(path.join(h.home, "client.token"));
     const seen1: DeptEvent[] = [];
     const a = await RpcClient.connect(sock, token);
@@ -75,11 +76,11 @@ test("single instance: a second daemon on the same home refuses to start; a stal
     // a crashed daemon: the pid is dead, and a stale socket file is left behind
     writeFileSync(pidFile, JSON.stringify({ pid: 999_999, startedAt: "Mon Jan  1 00:00:00 2001" }));
     const stale = net.createServer();
-    await new Promise<void>((r) => stale.listen(path.join(home, "dept.sock"), r));
+    await new Promise<void>((r) => stale.listen(socketPathFor(home), r));
     await new Promise<void>((r) => stale.close(() => r()));
-    writeFileSync(path.join(home, "dept.sock"), "");
+    writeFileSync(socketPathFor(home), "");
     const again = await startDaemon({ deptHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true });
-    const c = await RpcClient.connect(path.join(home, "dept.sock"), RpcClient.tokenFrom(path.join(home, "client.token")));
+    const c = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     assert.equal((await c.request("providers.health", {})).providers.length, 1);
     c.close();
     await again.close();

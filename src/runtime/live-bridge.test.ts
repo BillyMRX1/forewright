@@ -1,3 +1,4 @@
+import { socketPathFor } from "../core/paths.js";
 // Live check that a real engine can drive the coordination tools through the
 // real daemon and MCP bridge. Skipped unless DEPT_LIVE=1 (it uses your Claude
 // and Codex subscriptions).
@@ -18,7 +19,7 @@ for (const engine of ["claude", "codex"] as const satisfies readonly EngineId[])
     const home = tempDir("dept-live-home-");
     const repo = makeRepo();
     const daemon = await startDaemon({ deptHome: home, adapters: createAdapters({ deptHome: home }), defaultCtoEngine: engine, watchdogMs: 60_000 });
-    const client = await RpcClient.connect(path.join(home, "dept.sock"), RpcClient.tokenFrom(path.join(home, "client.token")));
+    const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     try {
       let open = await client.request("projects.open", { cwd: repo });
       if (open.status === "none") open = await client.request("projects.init", { cwd: repo });

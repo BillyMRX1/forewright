@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { openAndMigrate } from "../core/db.js";
-import { dbPath } from "../core/paths.js";
+import { dbPath, socketPathFor } from "../core/paths.js";
 import { Store } from "../core/store.js";
 import { FakeAdapter } from "../providers/fake.js";
 import { isOwnedAlive } from "../providers/process.js";
@@ -36,7 +36,7 @@ test("restart reconciliation: an orphaned owned run is terminated, marked uncert
 
     const adapter2 = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true })] });
     second = await startDaemon({ deptHome: home, adapters: new Map([["fake", adapter2]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
-    const client = await RpcClient.connect(path.join(home, "dept.sock"), RpcClient.tokenFrom(path.join(home, "client.token")));
+    const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     await client.request("projects.open", { cwd: repo });
     const rt2 = second.runtimes.get(h.projectId)!;
 
@@ -83,7 +83,7 @@ test("a run record that points at an alive process that is not ours is never sig
     store.db.close();
 
     second = await startDaemon({ deptHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
-    const client = await RpcClient.connect(path.join(home, "dept.sock"), RpcClient.tokenFrom(path.join(home, "client.token")));
+    const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     await client.request("projects.open", { cwd: repo });
     const rt2 = second.runtimes.get(h.projectId)!;
     process.kill(bystander.pid!, 0); // throws if it was killed

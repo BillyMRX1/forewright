@@ -14,7 +14,7 @@ import type { DeptEvent } from "../core/store.js";
 import type { Agent, RequirementDoc, Task } from "../core/store.js";
 import type { AgentRole, PermissionProfile } from "../core/types.js";
 import { readFileSync } from "node:fs";
-import { logsDir } from "../core/paths.js";
+import { logsDir, socketPathFor } from "../core/paths.js";
 
 export function gitIn(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@localhost", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -66,7 +66,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     watchdogMs: opts.watchdogMs ?? 60_000,
     ...(opts.clock ? { clock: opts.clock } : {}),
   });
-  const client = await RpcClient.connect(path.join(home, "dept.sock"), RpcClient.tokenFrom(path.join(home, "client.token")));
+  const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
   let open = await client.request("projects.open", { cwd: repo });
   if (open.status === "none") open = await client.request("projects.init", { cwd: repo });
   if (open.status !== "found") throw new Error("could not open the test project");
