@@ -14,3 +14,5 @@
 | `allowApiBilling` | true or false | Lets agent environments keep API keys. Off means keys are stripped and only your subscription logins are used. |
 
 A stricter example: set `autoIntegrateToDeptBranch` to false to review every integration yourself, and `mergeToUserBranch` to `deny` to keep dept's work on its own branch until you merge by hand.
+
+Note: `autoLocalEdits`, `autoChecks` and `allowApiBilling` are stored but not enforced in this version. See Known limitations in the README.

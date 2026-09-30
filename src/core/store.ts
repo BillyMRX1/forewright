@@ -761,7 +761,8 @@ export class Store {
         this.run("UPDATE run SET provider_session_id = ? WHERE id = ?", ev.sessionId, runId);
         this.run("UPDATE agent SET provider_session_id = ? WHERE id = ?", ev.sessionId, run.agentId);
       }
-      const summary = ev.text ?? ev.toolName ?? ev.kind;
+      // Tool calls are summarized by tool name; their JSON input stays in the raw log.
+      const summary = ev.kind === "tool_call" ? (ev.toolName ?? "a tool") : (ev.text ?? ev.toolName ?? ev.kind);
       this.appendEvent(`run.${ev.kind}`, "run", runId, `agent:${run.agentId}`, {
         text: ev.text ? truncate(redactSecrets(ev.text), 2000) : undefined,
         toolName: ev.toolName,
@@ -770,7 +771,7 @@ export class Store {
         retryAfter: ev.retryAfter,
       });
       if (ev.kind === "assistant_text" || ev.kind === "tool_call" || ev.kind === "error") {
-        this.setAgentActivity(run.agentId, `${ev.kind === "tool_call" ? "Using " : ""}${summary}`, null);
+        this.setAgentActivity(run.agentId, redactSecrets(`${ev.kind === "tool_call" ? "Using " : ""}${summary}`), null);
       }
     });
   }

@@ -90,9 +90,11 @@ Agents run under your signed-in Claude Code or Codex subscription. Environment v
 
 - Work pauses when the Mac sleeps. Local processes do not continue during ordinary sleep, and `dept` does not claim otherwise. The service reconciles when the Mac wakes.
 - Git worktrees separate agents' files and branches. They are not security sandboxes: an agent with the `workspace_write` permission can run commands as you.
-- Agents launched by `dept` run with isolated config homes, so they do not read your personal hooks, memory files or plugins. Project instruction files in the repository (such as `CLAUDE.md` and `AGENTS.md`) are still read.
+- Agents launched by `dept` run with isolated config homes, so they do not read your personal hooks, memory files or plugins. Project instruction files at the repository root (`CLAUDE.md` and `AGENTS.md`) are still given to agents: Codex reads `AGENTS.md` itself, and `dept` includes them in Claude prompts.
 - Provider model lists come from what each CLI exposes. Where a CLI cannot list models, Settings shows documented aliases and says so.
 - Non-git folders: the CTO can plan, but code tasks wait until you approve a `git init` in the Inbox.
+- Three authority settings are stored but not enforced yet: `autoLocalEdits` and `autoChecks` (agents always edit and run checks inside their own worktree), and `allowApiBilling` (API keys are always stripped from agent environments, so billing stays on your subscriptions). `autoIntegrateToDeptBranch` set to false stops integration and tells the CTO, but does not yet create an approval request.
+- Wide characters (CJK, emoji) are not measured for width in the TUI, so columns can drift.
 
 ## Docs
 

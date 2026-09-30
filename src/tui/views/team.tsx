@@ -112,7 +112,7 @@ export function TeamView() {
       {agents.slice(start, end).map((a) => (
         <Box key={a.id} height={1}>
           <SafeText inverse={a === cur} dimColor={a.lifecycle === "retired"}>
-            {`${cols.map((c) => fit(oneLine(cell(a, c.title)), c.width + 1)).join("")}${lastW >= 12 ? clip(a.lastEventAt ? `${ago(a.lastEventAt)} ${oneLine(a.lastEventSummary ?? "")}` : "no activity yet", lastW) : ""}`}
+            {`${cols.map((c) => fit(clip(oneLine(cell(a, c.title)), c.width), c.width + 1)).join("")}${lastW >= 12 ? clip(a.lastEventAt ? `${ago(a.lastEventAt)} ${oneLine(a.lastEventSummary ?? "")}` : "no activity yet", lastW) : ""}`}
           </SafeText>
         </Box>
       ))}

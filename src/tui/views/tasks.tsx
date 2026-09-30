@@ -209,7 +209,7 @@ export function TasksView() {
             <Box key={s} width={colW} flexDirection="column">
               {list.slice(start, end).map((t) => (
                 <Box key={t.id} height={1}>
-                  <SafeText inverse={t.id === selected?.id}>{fit(`${t.blockReason ? "!" : " "}${oneLine(t.title)}`, colW - 1)}</SafeText>
+                  <SafeText inverse={t.id === selected?.id}>{fit(`${t.blockReason ? "!" : " "}${t.shortId} ${oneLine(t.title)}`, colW - 1)}</SafeText>
                 </Box>
               ))}
             </Box>

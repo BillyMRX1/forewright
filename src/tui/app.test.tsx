@@ -95,6 +95,15 @@ describe("navigation and help", () => {
     assert.equal(api.callsTo("control.pauseAll").length, 1);
   });
 
+  it("T terminates the team only after confirmation", async () => {
+    const { h, api } = await mount(120, 40);
+    await h.send("T");
+    assert.match(h.frame(), /Terminate the team\?/);
+    assert.equal(api.callsTo("control.terminateTeam").length, 0);
+    await h.send("y");
+    assert.equal(api.callsTo("control.terminateTeam").length, 1);
+  });
+
   it("X stops the only active run after confirmation, L opens its log sanitized", async () => {
     const { h, api } = await mount(120, 40);
     await h.send("L");

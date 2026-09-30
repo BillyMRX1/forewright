@@ -358,3 +358,28 @@ test("without any reviewer the CTO is told once and the task waits", async () =>
     await h.close();
   }
 });
+
+test("a reviewer that never submits a verdict is set aside and a newly hired reviewer still completes the task", async () => {
+  const adapter = new FakeAdapter({
+    rules: [
+      rule(isWork, { outcome: "succeeded", writeFiles: { "v.txt": "v\n" } }),
+      rule((req) => isReview(req) && req.prompt.includes("You are Mute"), { outcome: "succeeded" }),
+      rule(isReview, { outcome: "succeeded", toolCalls: [call("submit_review", { verdict: "pass", notes: "fine" })] }),
+    ],
+  });
+  const h = await startHarness({ adapter });
+  try {
+    seedPrd(h);
+    hire(h, "Mute", "review");
+    addTask(h, { title: "Silent reviewer", assignee: hire(h, "Wren"), verify: ["test -f v.txt"] });
+    poke(h);
+    await waitFor(() => h.rt.store.listMessages({ channel: "cto" }).some((m) => m.body.includes("without a verdict twice")), "the CTO to hear the review is stuck");
+    assert.equal(reviewRequests(h).length, 2);
+    hire(h, "Nia", "review");
+    poke(h);
+    await waitFor(() => taskOf(h, "T-1").state === "done", "the new reviewer to complete the task");
+    assert.equal(reviewRequests(h).length, 3);
+  } finally {
+    await h.close();
+  }
+});

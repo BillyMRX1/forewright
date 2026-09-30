@@ -50,6 +50,7 @@ export const HELP_LINES: DLine[] = [
   { text: "  1-8            switch view (Overview, CTO, Tasks, Chat, Inbox, Team, Evidence, Settings)" },
   { text: "  Tab / Shift+Tab  next / previous view" },
   { text: "  P              pause all work, or resume when paused (asks first)" },
+  { text: "  T              terminate the team: pause, stop every run, retire all workers except the CTO (asks first)" },
   { text: "  X              stop the selected run, or the only active run (asks first)" },
   { text: "  L              raw log of the selected run (scroll with arrows, PgUp, PgDn)" },
   { text: "  e              show or hide technical details of the last error" },
@@ -290,6 +291,14 @@ export function App(props: AppProps) {
         const status = await api.call(paused ? "control.resume" : "control.pauseAll", { projectId });
         setRuntime(status);
         notify(status.paused ? "Paused." : "Resumed.");
+      });
+      return;
+    }
+    if (input === "T") {
+      ask("Terminate the team? This pauses the project, stops every run and retires all workers except the CTO. Tasks and history are kept. (y/n)", async () => {
+        const status = await api.call("control.terminateTeam", { projectId });
+        setRuntime(status);
+        notify("Team terminated. The project is paused; press P to resume.");
       });
       return;
     }

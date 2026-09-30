@@ -215,7 +215,8 @@ export class FakeClient implements ClientApi {
         case "state.runtime":
         case "control.pauseAll":
         case "control.resume":
-          if (method === "control.pauseAll") this.paused = true;
+        case "control.terminateTeam":
+          if (method === "control.pauseAll" || method === "control.terminateTeam") this.paused = true;
           if (method === "control.resume") this.paused = false;
           return this.runtime();
         case "state.inbox":

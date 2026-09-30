@@ -32,8 +32,12 @@ export function hasValidReview(rt: ProjectRuntime, t: Task): boolean {
     );
 }
 
-function reviewFailures(rt: ProjectRuntime, t: Task): number {
-  return rt.store.listRuns({ taskId: t.id }).filter((r) => r.kind === "review" && r.generation === t.generation && (r.state === "failed" || r.state === "uncertain")).length;
+// Failures are counted per reviewer, so a reviewer who cannot deliver a verdict
+// is set aside while a newly hired one still gets its turn.
+function reviewFailures(rt: ProjectRuntime, t: Task, reviewerId: string): number {
+  return rt.store
+    .listRuns({ taskId: t.id })
+    .filter((r) => r.kind === "review" && r.generation === t.generation && r.agentId === reviewerId && (r.state === "failed" || r.state === "uncertain")).length;
 }
 
 function pickReviewer(rt: ProjectRuntime, t: Task): Agent | null {
@@ -45,6 +49,7 @@ function pickReviewer(rt: ProjectRuntime, t: Task): Agent | null {
         a.id !== t.assigneeAgentId &&
         a.lifecycle !== "paused" &&
         !rt.activeForAgent(a.id) &&
+        reviewFailures(rt, t, a.id) < MAX_REVIEW_FAILURES &&
         rt.deps.adapters.has(a.engine) &&
         !rt.quotaActive(a.engine),
     );
@@ -57,7 +62,6 @@ export function dispatchReviews(rt: ProjectRuntime): void {
   for (const t of store.listTasks({ states: ["review"] })) {
     if (t.blockReason !== null || t.candidateCommit === null || t.worktreePath === null) continue;
     if (rt.activeForTask(t.id).length > 0 || hasValidReview(rt, t)) continue;
-    if (reviewFailures(rt, t) >= MAX_REVIEW_FAILURES) continue;
     if (rt.countWorkAndReview() >= limit) return;
     const reviewer = pickReviewer(rt, t);
     if (!reviewer) {
@@ -179,7 +183,7 @@ async function handleReviewOutcome(rt: ProjectRuntime, a: ActiveRun, outcome: Ru
   }
   if (a.reviewSubmitted) return;
   const t = store.getTask(taskId);
-  if (t.state === "review" && reviewFailures(rt, t) >= MAX_REVIEW_FAILURES) {
+  if (t.state === "review" && reviewFailures(rt, t, a.agent.id) >= MAX_REVIEW_FAILURES) {
     rt.notifyCto(`review-stuck:${t.id}:${t.generation}`, `The review of ${t.shortId} "${t.title}" ended without a verdict twice (${final.error ?? "no error reported"}). It needs a different reviewer or a look from you.`);
   }
 }
