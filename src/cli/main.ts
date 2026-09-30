@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// The `dept` command: `dept` (interface), `dept serve`, `dept mcp-bridge`,
-// `dept doctor`, `dept status`, `dept service install|uninstall|status`.
+// The `forewright` command: `forewright` (interface), `forewright serve`, `forewright mcp-bridge`,
+// `forewright doctor`, `forewright status`, `forewright service install|uninstall|status`.
 import { existsSync } from "node:fs";
-import { DeptError } from "../core/errors.js";
-import { deptHome, socketPath, tokenPath } from "../core/paths.js";
+import { ForewrightError } from "../core/errors.js";
+import { forewrightHome, migrateLegacyHome, socketPath, tokenPath } from "../core/paths.js";
 import { createAdapters, probeAll } from "../providers/registry.js";
 import { RpcClient } from "../runtime/client.js";
 import { startDaemon } from "../runtime/daemon.js";
@@ -11,20 +11,20 @@ import { runBridge } from "../runtime/mcp-bridge.js";
 import { serviceInstall, serviceStatus, serviceUninstall } from "./service.js";
 import { fileURLToPath } from "node:url";
 
-const HELP = `dept: a CTO agent and specialist coding agents for one project, in your terminal.
+const HELP = `forewright: a CTO agent and specialist coding agents for one project, in your terminal.
 
 Usage:
-  dept                       open the interface for the project in the current folder
-  dept serve                 run the background service in the foreground
-  dept status                say whether the service is running
-  dept doctor                check that Claude Code and Codex are installed and signed in
-  dept service install       start the service at login (macOS launchd)
-  dept service uninstall     remove the login service
-  dept service status        show the login service state
-  dept mcp-bridge            internal: tool bridge used by agent runs
+  forewright                       open the interface for the project in the current folder
+  forewright serve                 run the background service in the foreground
+  forewright status                say whether the service is running
+  forewright doctor                check that Claude Code and Codex are installed and signed in
+  forewright service install       start the service at login (macOS launchd)
+  forewright service uninstall     remove the login service
+  forewright service status        show the login service state
+  forewright mcp-bridge            internal: tool bridge used by agent runs
 `;
 
-const useTestDouble = (): boolean => process.env["DEPT_TEST_DOUBLE"] === "1";
+const useTestDouble = (): boolean => process.env["FOREWRIGHT_TEST_DOUBLE"] === "1";
 
 /** Opens the terminal interface. Loaded on demand so the service and bridge stay light. */
 async function launchTui(): Promise<number> {
@@ -43,20 +43,21 @@ async function launchTui(): Promise<number> {
 }
 
 async function serve(): Promise<number> {
-  const home = deptHome();
-  const adapters = createAdapters({ deptHome: home, includeFake: useTestDouble() });
-  const daemon = await startDaemon({ deptHome: home, adapters, testMode: useTestDouble(), bridgeEntry: fileURLToPath(import.meta.url) });
-  process.stdout.write(`dept service listening on ${socketPath()} (pid ${process.pid})\n`);
+  migrateLegacyHome();
+  const home = forewrightHome();
+  const adapters = createAdapters({ forewrightHome: home, includeFake: useTestDouble() });
+  const daemon = await startDaemon({ forewrightHome: home, adapters, testMode: useTestDouble(), bridgeEntry: fileURLToPath(import.meta.url) });
+  process.stdout.write(`forewright service listening on ${socketPath()} (pid ${process.pid})\n`);
   let closing = false;
   const stop = (signal: string) => {
     if (closing) return;
     closing = true;
-    process.stdout.write(`dept service stopping (${signal})...\n`);
+    process.stdout.write(`forewright service stopping (${signal})...\n`);
     daemon
       .close()
       .then(() => process.exit(0))
       .catch((err: unknown) => {
-        process.stderr.write(`dept service could not stop cleanly: ${String(err)}\n`);
+        process.stderr.write(`forewright service could not stop cleanly: ${String(err)}\n`);
         process.exit(1);
       });
   };
@@ -69,14 +70,14 @@ async function serve(): Promise<number> {
 async function status(): Promise<number> {
   const sock = socketPath();
   if (!existsSync(sock) || !existsSync(tokenPath())) {
-    process.stdout.write("The dept service is not running.\n");
+    process.stdout.write("The Forewright service is not running.\n");
     return 1;
   }
   let client: RpcClient;
   try {
     client = await RpcClient.connect(sock, RpcClient.tokenFrom(tokenPath()));
   } catch (err) {
-    process.stdout.write(`The dept service is not answering (${err instanceof Error ? err.message : String(err)}).\n`);
+    process.stdout.write(`The Forewright service is not answering (${err instanceof Error ? err.message : String(err)}).\n`);
     return 1;
   }
   try {
@@ -87,7 +88,7 @@ async function status(): Promise<number> {
       clients: number;
       projects: Array<{ projectId: string; root: string; name: string; activeRuns: number }>;
     };
-    process.stdout.write(`The dept service is running (pid ${s.pid}, since ${s.startedAt}).\nSocket: ${s.socket}\nConnected clients: ${s.clients}\n`);
+    process.stdout.write(`The Forewright service is running (pid ${s.pid}, since ${s.startedAt}).\nSocket: ${s.socket}\nConnected clients: ${s.clients}\n`);
     if (s.projects.length === 0) process.stdout.write("No projects are open.\n");
     for (const p of s.projects) process.stdout.write(`Project ${p.name}: ${p.root} (${p.activeRuns} active run${p.activeRuns === 1 ? "" : "s"})\n`);
     return 0;
@@ -97,10 +98,10 @@ async function status(): Promise<number> {
 }
 
 async function doctor(): Promise<number> {
-  const adapters = createAdapters({ deptHome: deptHome(), includeFake: useTestDouble() });
+  const adapters = createAdapters({ forewrightHome: forewrightHome(), includeFake: useTestDouble() });
   const list = await probeAll(adapters);
   let problems = 0;
-  process.stdout.write("dept doctor\n\n");
+  process.stdout.write("forewright doctor\n\n");
   for (const h of list) {
     const label = h.isTestDouble ? `${h.engine} (Test double)` : h.engine;
     const auth = h.authenticated === true ? `signed in${h.authMethod ? ` (${h.authMethod})` : ""}` : h.authenticated === false ? "NOT signed in" : "sign-in state unknown";
@@ -135,7 +136,7 @@ async function main(argv: string[]): Promise<number> {
       else if (sub === "uninstall") process.stdout.write(`${serviceUninstall()}\n`);
       else if (sub === "status") process.stdout.write(`${serviceStatus().message}\n`);
       else {
-        process.stderr.write("Usage: dept service install|uninstall|status\n");
+        process.stderr.write("Usage: forewright service install|uninstall|status\n");
         return 2;
       }
       return 0;
@@ -156,10 +157,10 @@ main(process.argv.slice(2)).then(
     process.exitCode = code;
   },
   (err: unknown) => {
-    if (err instanceof DeptError) {
+    if (err instanceof ForewrightError) {
       process.stderr.write(`${err.message}\n`);
     } else {
-      process.stderr.write(`dept failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+      process.stderr.write(`forewright failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     }
     process.exitCode = 1;
   },

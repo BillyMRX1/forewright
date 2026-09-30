@@ -11,7 +11,7 @@ src/providers/  process manager, Claude Code adapter, Codex adapter, fake adapte
 src/runtime/    daemon (unix socket JSON-RPC), scheduler, CTO orchestration, MCP bridge,
                 workspaces (git worktrees), review and integration, recovery
 src/tui/        Ink client, socket client, eight views
-src/cli/        `dept` entry point and launchd service management
+src/cli/        `forewright` entry point and launchd service management
 ```
 
 Dependencies point downward: the TUI and CLI depend on the protocol types in `src/runtime/protocol.ts` and never on the store or the providers directly.
@@ -21,7 +21,7 @@ Dependencies point downward: the TUI and CLI depend on the protocol types in `sr
 ```
    terminal                     background service (one per user)                 model CLIs
  +-----------+   JSON-RPC    +------------------------------------------+     +-------------+
- |  dept TUI | <-----------> |  daemon                                  |     | claude -p   |
+ |  Forewright TUI | <-----------> |  daemon                                  |     | claude -p   |
  |  (client) |  unix socket  |   per project:                           | --> | codex exec  |
  +-----------+  + events     |    scheduler --claims--> store (SQLite)  |     +------+------+
                              |    CTO orchestration      ^   |          |            |
@@ -33,7 +33,7 @@ Dependencies point downward: the TUI and CLI depend on the protocol types in `sr
 
 1. The TUI sends requests (`state.*`, `cto.send`, `decisions.resolve`, `control.*`) and subscribes to an event stream from a sequence number. On reconnect it resubscribes from the last event it saw.
 2. Every state change is a store transaction that also appends an event. Events are the only way clients learn about changes.
-3. Agents never write state through their output text. Each run gets a small MCP server (`dept mcp-bridge`) with a per-run token bound to project, agent, run and task generation. The daemon validates and authorizes every call. Free text in agent output cannot approve, spend, publish or change scope.
+3. Agents never write state through their output text. Each run gets a small MCP server (`forewright mcp-bridge`) with a per-run token bound to project, agent, run and task generation. The daemon validates and authorizes every call. Free text in agent output cannot approve, spend, publish or change scope.
 
 ## Task lifecycle
 
@@ -47,7 +47,7 @@ planned --> ready --> working --> review --> done
 - ready: dependencies are done and an agent can take it.
 - working: an agent owns it through a lease and runs in its own worktree on its own branch.
 - review: candidate work exists. A different agent reviews it, and checks run.
-- done: independent review passed and checks passed again after integration on `dept/integration`.
+- done: independent review passed and checks passed again after integration on `forewright/integration`.
 
 A task can be blocked for one plain reason at a time: dependency, human input, quota, environment, failed verification, or exhausted recovery. The UI states each reason in a sentence. Evidence (checks, reviews) is tied to a commit and a task revision, and becomes stale when either changes.
 
@@ -75,5 +75,5 @@ The CTO is woken only by events: a message from you, a worker finishing or faili
 - All untrusted text passes through one `SafeText` component backed by `sanitizeTerminal`, which removes cursor, screen and link escape sequences and control characters.
 - Views load data through the `ClientApi` interface and reload when the service reports a change, so they can be tested with an in-memory fake.
 - `attention.ts` derives one status per agent (needs you, blocked, done, working, idle) from the team, task, inbox and runtime state the client already has, and sorts them by urgency. "Done" is client-side memory only: it means finished since this screen started and not yet viewed. `agent-strip.tsx`, the header summary, the Overview "Now" section, the `n` key and the command palette all read that one model, so they agree.
-- `theme.ts` holds the semantic palette and status glyphs (ASCII when `TERM=dumb` or `DEPT_ASCII=1`). `keys.ts` is the key table that generates the footer hints and the `?` help. `toasts.ts` is the notice queue policy (priority, lifetime, cap of 8); notices are raised from subscribed events and `g` jumps to the item behind the current one. `DEPT_BELL=1` rings the terminal bell for needs-you notices.
+- `theme.ts` holds the semantic palette and status glyphs (ASCII when `TERM=dumb` or `FOREWRIGHT_ASCII=1`). `keys.ts` is the key table that generates the footer hints and the `?` help. `toasts.ts` is the notice queue policy (priority, lifetime, cap of 8); notices are raised from subscribed events and `g` jumps to the item behind the current one. `FOREWRIGHT_BELL=1` rings the terminal bell for needs-you notices.
 - The live output peek (`peek.tsx`) polls `runs.log` every 2 seconds while a Team or Tasks detail panel is visible and sanitizes every line. None of this adds protocol methods.

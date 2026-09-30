@@ -79,7 +79,7 @@ test("cancel task: the run is stopped, the task is cancelled, the branch and wor
     const t = taskOf(h, task.shortId);
     assert.ok(t.worktreePath && existsSync(t.worktreePath), "the workspace is kept");
     assert.equal(existsSync(`${t.worktreePath}/wip.txt`), true, "unfinished work is kept");
-    assert.match(gitIn(h.repo, "branch", "--list", "dept/task-t-1"), /dept\/task-t-1/);
+    assert.match(gitIn(h.repo, "branch", "--list", "forewright/task-t-1"), /forewright\/task-t-1/);
     assert.ok(h.rt.store.listMessages({ channel: "cto" }).some((m) => m.dedupeKey === `cancel:${task.id}`));
     await sleep(200);
     assert.equal(workRequests(h).length, 1, "a cancelled task never restarts");

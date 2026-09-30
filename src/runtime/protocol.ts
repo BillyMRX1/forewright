@@ -1,4 +1,4 @@
-// Client protocol between the TUI (or any client) and the dept service.
+// Client protocol between the TUI (or any client) and the Forewright service.
 // Transport: newline-delimited JSON-RPC 2.0 over the unix socket at paths.socketPath().
 // The first request on a connection must be `hello`. Agent tool bridges use
 // `agent.hello` / `agent.tools.*` instead and never see these methods.
@@ -9,7 +9,7 @@ import type {
   Agent,
   Artifact,
   Decision,
-  DeptEvent,
+  ForewrightEvent,
   Message,
   MessageChannel,
   RequirementDoc,
@@ -91,7 +91,7 @@ export interface Methods {
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
   "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null } };
-  "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: DeptEvent[] } };
+  "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
   "evidence.diff": { params: { projectId: string; taskId: string }; result: { base: string | null; head: string | null; diff: string; truncated: boolean } };
   "runs.log": { params: { projectId: string; runId: string; tailLines?: number }; result: { lines: string[]; path: string } };
   "providers.health": { params: { refresh?: boolean }; result: { providers: ProviderStatus[] } };
@@ -128,7 +128,7 @@ export type Result<M extends MethodName> = Methods[M]["result"];
 
 /** Server-to-client notifications. */
 export interface Notifications {
-  event: { projectId: string; event: DeptEvent };
+  event: { projectId: string; event: ForewrightEvent };
   runtime: { projectId: string; status: RuntimeStatus };
 }
 

@@ -36,7 +36,7 @@ import {
   type Decision,
   type DecisionKind,
   type DecisionOption,
-  type DeptEvent,
+  type ForewrightEvent,
   type Limits,
   type Message,
   type MessageChannel,
@@ -1813,7 +1813,7 @@ export class Store {
 
   // ------------------------------------------------------------ events and projections
 
-  recentEvents(sinceSeq = 0, limit = 200): DeptEvent[] {
+  recentEvents(sinceSeq = 0, limit = 200): ForewrightEvent[] {
     return this.all("SELECT * FROM event WHERE project_id = ? AND seq > ? ORDER BY seq LIMIT ?", this.projectId, sinceSeq, limit).map((r) => ({
       seq: r["seq"] as number,
       at: r["at"] as string,

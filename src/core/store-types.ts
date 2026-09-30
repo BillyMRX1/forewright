@@ -173,7 +173,7 @@ export interface Artifact {
   createdAt: string;
 }
 
-export interface DeptEvent {
+export interface ForewrightEvent {
   seq: number;
   at: string;
   type: string;
@@ -217,7 +217,7 @@ export const DEFAULT_LIMITS: Limits = {
 export const DEFAULT_AUTHORITY: Authority = {
   autoLocalEdits: true,
   autoChecks: true,
-  autoIntegrateToDeptBranch: true,
+  autoIntegrateToForewrightBranch: true,
   mergeToUserBranch: "ask",
   publish: "ask",
   destructive: "ask",

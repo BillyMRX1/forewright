@@ -1,6 +1,6 @@
-# Agentic Department: Product Requirements
+# Forewright: Product Requirements
 
-Status: baseline (revision 1). Owner: Billy (Brilian Ade Putra). CLI name: `dept`.
+Status: baseline (revision 1). Owner: Billy (Brilian Ade Putra). CLI name: `forewright`.
 
 ## Problem
 
@@ -12,7 +12,7 @@ A single founder and product owner working on a Mac (Apple silicon, 16 GB) who a
 
 ## Goals
 
-- Launch `dept` in any folder and get that project's workspace, resumed if it exists.
+- Launch `forewright` in any folder and get that project's workspace, resumed if it exists.
 - A configurable CTO agent discusses scope with the owner, keeps a versioned PRD and architecture decisions, hires specialists only when needed, delegates, coordinates review and integration, and escalates real decisions to a human inbox.
 - Work is verified by evidence (independent review and integrated checks), never by an agent saying it is done.
 - Local state is authoritative, inspectable and survives restarts. Closing the terminal UI does not stop workers.

@@ -7,7 +7,7 @@ import { Ctx, type AppCtx, type JumpTarget, type Selection } from "./context.js"
 import { SafeText, ScrollLines } from "./components.js";
 import { VIEW_NAMES, VIEW_SHORT, abbreviatePath, clip, wrapText } from "./format.js";
 import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
-import type { Decision, DeptEvent, Task } from "../core/store-types.js";
+import type { Decision, ForewrightEvent, Task } from "../core/store-types.js";
 import { TASK_STATES } from "../core/types.js";
 import { countStatuses, deriveAttention, needsYouItems, nextNeedItem, summarize, SUMMARY_SEPARATOR, type UnseenDone } from "./attention.js";
 import { AgentStrip, stripHeight } from "./agent-strip.js";
@@ -136,7 +136,7 @@ export function App(props: AppProps) {
   const shownKind = shown?.kind ?? null;
   useEffect(() => {
     if (shownId === null || shownKind === null) return;
-    if (shownKind === "needs_you" && process.env["DEPT_BELL"] === "1") process.stdout.write("\x07");
+    if (shownKind === "needs_you" && process.env["FOREWRIGHT_BELL"] === "1") process.stdout.write("\x07");
     const t = setTimeout(() => setToasts((q) => removeToast(q, shownId)), toastMs[shownKind]);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,7 +153,7 @@ export function App(props: AppProps) {
     if (known) return then(known);
     api.call("state.task", { projectId, taskId }).then((d) => then(d.task), fail);
   };
-  const onEvent = (ev: DeptEvent) => {
+  const onEvent = (ev: ForewrightEvent) => {
     const p = ev.payload;
     switch (ev.type) {
       case "decision.requested":
@@ -521,7 +521,7 @@ export function App(props: AppProps) {
         {headerRows === 2 ? (
           <>
             <Box height={1}>
-              <Text bold>dept </Text>
+              <Text bold>Forewright </Text>
               <SafeText bold>{props.projectName}</SafeText>
               <SafeText dimColor>{`  ${abbreviatePath(props.root, Math.max(10, cols - props.projectName.length - 28))}  ${props.isGit ? "git" : "no git"}  `}</SafeText>
               <Text color={conn === "lost" ? colors.error : colors.done}>{connText}</Text>

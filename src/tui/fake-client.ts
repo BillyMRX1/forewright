@@ -2,7 +2,7 @@
 
 import type { ClientApi, ConnectionState, Subscription } from "./client.js";
 import type { MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
-import type { Agent, Decision, DeptEvent, Message, RequirementDoc, Run, Task, Verification } from "../core/store-types.js";
+import type { Agent, Decision, ForewrightEvent, Message, RequirementDoc, Run, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { TASK_STATES, type TaskState } from "../core/types.js";
 
@@ -195,7 +195,7 @@ export class FakeClient implements ClientApi {
   openDecisions: Decision[] = [this.data.decision];
   /** Lines returned by runs.log. */
   logLines = ["line one \x1b[31mred\x1b[0m", "line two"];
-  private eventListeners = new Set<(e: DeptEvent) => void>();
+  private eventListeners = new Set<(e: ForewrightEvent) => void>();
   failWith: Error | null = null;
   private connListeners = new Set<(s: ConnectionState) => void>();
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
@@ -316,12 +316,12 @@ export class FakeClient implements ClientApi {
 
   /** Delivers a service event to every subscriber, like the daemon's event stream. */
   emitEvent(type: string, entityKind: string, entityId: string, payload: Record<string, unknown> = {}, actor = "system"): void {
-    const event: DeptEvent = { seq: ++this.seq, at: NOW, type, entityKind, entityId, actor, payload };
+    const event: ForewrightEvent = { seq: ++this.seq, at: NOW, type, entityKind, entityId, actor, payload };
     for (const cb of this.eventListeners) cb(event);
   }
   private seq = 0;
 
-  async subscribe(_projectId: string, sinceSeq: number, onEvent: (event: DeptEvent) => void): Promise<Subscription> {
+  async subscribe(_projectId: string, sinceSeq: number, onEvent: (event: ForewrightEvent) => void): Promise<Subscription> {
     this.eventListeners.add(onEvent);
     return { lastSeq: sinceSeq, stop: () => void this.eventListeners.delete(onEvent) };
   }

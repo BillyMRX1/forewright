@@ -1,6 +1,6 @@
-// Git workspaces: the dept/integration branch, one branch + worktree per task,
+// Git workspaces: the forewright/integration branch, one branch + worktree per task,
 // and the detached integration worktree. Worktrees live under
-// DEPT_HOME/projects/<id>/worktrees and are never deleted automatically.
+// FOREWRIGHT_HOME/projects/<id>/worktrees and are never deleted automatically.
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Store, Task } from "../core/store.js";
@@ -8,9 +8,9 @@ import { worktreesDir } from "../core/paths.js";
 import { WorkspaceError } from "./errors.js";
 import { git, gitLine, gitTry, isGitRepo, refExists } from "./git.js";
 
-export const INTEGRATION_BRANCH = "dept/integration";
+export const INTEGRATION_BRANCH = "forewright/integration";
 
-export const taskBranchName = (shortId: string): string => `dept/task-${shortId.toLowerCase()}`;
+export const taskBranchName = (shortId: string): string => `forewright/task-${shortId.toLowerCase()}`;
 
 export class WorkspaceManager {
   constructor(
@@ -27,13 +27,13 @@ export class WorkspaceManager {
     return path.join(this.worktreeBase, "_integration");
   }
 
-  /** Creates dept/integration from the user's current HEAD the first time it is needed. */
+  /** Creates forewright/integration from the user's current HEAD the first time it is needed. */
   ensureIntegrationBranch(): string {
     if (!isGitRepo(this.root)) throw new WorkspaceError("This folder is not a git repository, so isolated workspaces cannot be created.", { root: this.root });
     if (refExists(this.root, `refs/heads/${INTEGRATION_BRANCH}`)) return this.integrationTip();
     const head = gitTry(this.root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
     if (head.code !== 0) {
-      throw new WorkspaceError("This git repository has no commits yet. Make an initial commit so dept can branch from it.", { root: this.root });
+      throw new WorkspaceError("This git repository has no commits yet. Make an initial commit so Forewright can branch from it.", { root: this.root });
     }
     const base = head.stdout.trim();
     git(this.root, ["branch", INTEGRATION_BRANCH, base]);
@@ -50,8 +50,8 @@ export class WorkspaceManager {
     const file = path.resolve(worktree, raw);
     mkdirSync(path.dirname(file), { recursive: true });
     const current = existsSync(file) ? readFileSync(file, "utf8") : "";
-    if (!current.split(/\r?\n/).some((l) => l.trim() === ".dept-tmp/")) {
-      appendFileSync(file, `${current.length > 0 && !current.endsWith("\n") ? "\n" : ""}.dept-tmp/\n`);
+    if (!current.split(/\r?\n/).some((l) => l.trim() === ".forewright-tmp/")) {
+      appendFileSync(file, `${current.length > 0 && !current.endsWith("\n") ? "\n" : ""}.forewright-tmp/\n`);
     }
   }
 
@@ -64,7 +64,7 @@ export class WorkspaceManager {
     if (!existsSync(path.join(wt, ".git"))) {
       if (existsSync(wt)) {
         gitTry(this.root, ["worktree", "prune"]);
-        if (existsSync(wt)) throw new WorkspaceError(`${wt} exists but is not a git worktree; move it aside so dept can recreate the workspace.`, { path: wt });
+        if (existsSync(wt)) throw new WorkspaceError(`${wt} exists but is not a git worktree; move it aside so Forewright can recreate the workspace.`, { path: wt });
       }
       gitTry(this.root, ["worktree", "prune"]);
       if (refExists(this.root, `refs/heads/${branch}`)) git(this.root, ["worktree", "add", wt, branch]);
@@ -89,7 +89,7 @@ export class WorkspaceManager {
     return wt;
   }
 
-  /** Number of commits on the candidate that are not on dept/integration. */
+  /** Number of commits on the candidate that are not on forewright/integration. */
   commitsAhead(worktree: string, ref = "HEAD"): number {
     return Number(gitLine(worktree, ["rev-list", "--count", `${INTEGRATION_BRANCH}..${ref}`]));
   }

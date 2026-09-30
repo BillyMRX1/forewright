@@ -5,7 +5,7 @@ import type { NormalizedEvent, RunRequest } from "../core/types.js";
 import type { EngineParser, ExitInfo } from "./runner.js";
 import { makeEmitter } from "./runner.js";
 
-export function tmpDir(prefix = "dept-test-"): string {
+export function tmpDir(prefix = "forewright-test-"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 

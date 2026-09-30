@@ -191,7 +191,7 @@ test("the MCP bridge negotiates the protocol version, answers ping, reports tool
   const stderr = new PassThrough();
   let out = "";
   stdout.on("data", (d: Buffer) => (out += d.toString()));
-  const done = runBridge({ stdin, stdout, stderr, env: { DEPT_SOCKET: "/nonexistent/dept.sock", DEPT_AGENT_TOKEN: "p.t" } });
+  const done = runBridge({ stdin, stdout, stderr, env: { FOREWRIGHT_SOCKET: "/nonexistent/forewright.sock", FOREWRIGHT_AGENT_TOKEN: "p.t" } });
   const send = (o: unknown) => stdin.write(JSON.stringify(o) + "\n");
   send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "x", version: "1" } } });
   send({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "1999-01-01" } });
@@ -204,12 +204,12 @@ test("the MCP bridge negotiates the protocol version, answers ping, reports tool
   const lines = out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: number; result?: { protocolVersion?: string; isError?: boolean; content?: Array<{ text: string }>; capabilities?: unknown; serverInfo?: { name: string } }; error?: { code: number } });
   const byId = (id: number) => lines.find((l) => l.id === id)!;
   assert.equal(byId(1).result!.protocolVersion, "2025-03-26");
-  assert.equal(byId(1).result!.serverInfo!.name, "dept");
+  assert.equal(byId(1).result!.serverInfo!.name, "forewright");
   assert.deepEqual(byId(1).result!.capabilities, { tools: {} });
   assert.equal(byId(2).result!.protocolVersion, "2025-06-18", "unknown versions fall back to the newest supported");
   assert.deepEqual(byId(3).result, {});
   assert.equal(byId(4).result!.isError, true);
-  assert.match(byId(4).result!.content![0]!.text, /Cannot reach the dept service/);
+  assert.match(byId(4).result!.content![0]!.text, /Cannot reach the Forewright service/);
   assert.equal(byId(5).error!.code, -32601);
   assert.equal(lines.length, 5, "the initialized notification gets no reply");
   await sleep(1);

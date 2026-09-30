@@ -1,9 +1,9 @@
 // Per-project event publisher. The runtime calls publishNew() after mutations;
 // it reads event rows the bus has not published yet and hands them to
 // subscribers and internal listeners. There is no polling loop.
-import type { DeptEvent, Store } from "../core/store.js";
+import type { ForewrightEvent, Store } from "../core/store.js";
 
-export type EventListener = (event: DeptEvent) => void;
+export type EventListener = (event: ForewrightEvent) => void;
 
 export class EventBus {
   private last: number;
@@ -24,8 +24,8 @@ export class EventBus {
   }
 
   /** Events with seq <= lastPublished that a reconnecting client has not seen. */
-  replay(sinceSeq: number): DeptEvent[] {
-    const out: DeptEvent[] = [];
+  replay(sinceSeq: number): ForewrightEvent[] {
+    const out: ForewrightEvent[] = [];
     let cursor = sinceSeq;
     while (cursor < this.last) {
       const batch = this.store.recentEvents(cursor, 500).filter((e) => e.seq <= this.last);
@@ -36,8 +36,8 @@ export class EventBus {
     return out;
   }
 
-  publishNew(): DeptEvent[] {
-    const fresh: DeptEvent[] = [];
+  publishNew(): ForewrightEvent[] {
+    const fresh: ForewrightEvent[] = [];
     for (;;) {
       const batch = this.store.recentEvents(this.last, 500);
       if (batch.length === 0) break;

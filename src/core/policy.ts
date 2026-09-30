@@ -34,7 +34,7 @@ export type AuthorityMode = "ask" | "auto" | "deny";
 export interface Authority {
   autoLocalEdits: boolean;
   autoChecks: boolean;
-  autoIntegrateToDeptBranch: boolean;
+  autoIntegrateToForewrightBranch: boolean;
   mergeToUserBranch: AuthorityMode;
   publish: AuthorityMode;
   destructive: AuthorityMode;

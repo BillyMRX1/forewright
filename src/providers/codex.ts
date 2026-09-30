@@ -20,7 +20,7 @@ const SANDBOX: Record<PermissionProfile, string> = {
 };
 
 export interface CodexAdapterOptions {
-  deptHome: string;
+  forewrightHome: string;
   runsDir?: string;
   allowApiBilling?: boolean;
   binary?: string;
@@ -72,7 +72,7 @@ export class CodexAdapter implements ProviderAdapter {
     }
     health.binaryPath = bin;
     try {
-      const home = isolatedCodexHome(this.opts.deptHome, this.opts.realHome);
+      const home = isolatedCodexHome(this.opts.forewrightHome, this.opts.realHome);
       const { env } = childEnv(this.baseEnv, { CODEX_HOME: home }, { allowApiBilling: this.opts.allowApiBilling ?? false });
       const v = await capture(bin, ["--version"], env);
       health.version = v.stdout.trim().replace(/^codex(-cli)?\s+/i, "") || null;
@@ -97,12 +97,12 @@ export class CodexAdapter implements ProviderAdapter {
 
   start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {
     const bin = this.resolveBin() ?? "codex";
-    const home = isolatedCodexHome(this.opts.deptHome, this.opts.realHome);
+    const home = isolatedCodexHome(this.opts.forewrightHome, this.opts.realHome);
     const mcpEnv: Record<string, string> = {};
     for (const s of req.mcpServers ?? []) Object.assign(mcpEnv, s.env);
     const { env, secrets } = childEnv(this.baseEnv, { ...mcpEnv, ...(req.env ?? {}), CODEX_HOME: home }, { allowApiBilling: this.opts.allowApiBilling ?? false });
 
-    const runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "dept-codex-run-"));
+    const runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "forewright-codex-run-"));
     fs.chmodSync(runDir, 0o700);
     const lastMessageFile = path.join(runDir, "last-message.txt");
     let args: string[];
@@ -148,7 +148,7 @@ export function buildCodexArgs(req: RunRequest, lastMessageFile: string): string
     const names = Object.keys(s.env);
     if (names.length > 0) args.push("-c", `${key}.env_vars=[${names.map(tomlString).join(", ")}]`);
     // With approval_policy "never", Codex rejects MCP calls that need approval.
-    // Pre-approve only the servers dept supplies; the daemon authorizes each call itself.
+    // Pre-approve only the servers Forewright supplies; the daemon authorizes each call itself.
     args.push("-c", `${key}.default_tools_approval_mode="approve"`);
   }
   args.push("--");

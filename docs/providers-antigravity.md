@@ -12,13 +12,13 @@ Adapter: `src/providers/antigravity.ts`, class `AntigravityAdapter`, engine id `
 
 ## Isolation
 
-agy keeps everything under `$HOME/.gemini`, so each run gets a private `HOME` inside the dept runs directory. It contains:
+agy keeps everything under `$HOME/.gemini`, so each run gets a private `HOME` inside the Forewright runs directory. It contains:
 
 - read-only symlinks to the existing login files (`oauth_creds.json`, `google_accounts.json`, `antigravity-cli/antigravity-oauth-token`, ids). Nothing is copied or printed. agy may refresh its token through the symlink, which updates your real file in place.
-- shared symlinks to `<deptHome>/provider-homes/antigravity/state/{conversations,brain,annotations,implicit,bin}` so conversations survive the deleted home and can be resumed.
-- a dept-owned `antigravity-cli/settings.json` (permissions, sandbox, telemetry off) and, when MCP servers are supplied, a 0600 `config/mcp_config.json`.
+- shared symlinks to `<forewrightHome>/provider-homes/antigravity/state/{conversations,brain,annotations,implicit,bin}` so conversations survive the deleted home and can be resumed.
+- a forewright-owned `antigravity-cli/settings.json` (permissions, sandbox, telemetry off) and, when MCP servers are supplied, a 0600 `config/mcp_config.json`.
 
-Your global rules, skills, hooks, MCP servers (`~/.gemini/config/mcp_config.json`), trusted folders and history are therefore invisible to workers. The real `~/.gemini` is never written by dept (only the token refresh above can touch it). `AGY_CLI_DISABLE_AUTO_UPDATE=1` stops the CLI replacing its own binary from a worker. `GIT_CONFIG_GLOBAL` points at your real `~/.gitconfig` so commits made by a worker keep your identity.
+Your global rules, skills, hooks, MCP servers (`~/.gemini/config/mcp_config.json`), trusted folders and history are therefore invisible to workers. The real `~/.gemini` is never written by Forewright (only the token refresh above can touch it). `AGY_CLI_DISABLE_AUTO_UPDATE=1` stops the CLI replacing its own binary from a worker. `GIT_CONFIG_GLOBAL` points at your real `~/.gitconfig` so commits made by a worker keep your identity.
 
 agy still loads `AGENTS.md` and `GEMINI.md` from the working directory up to the repository root. Isolation cannot turn that off.
 
@@ -45,7 +45,7 @@ agy reports refused actions in `result.denied_actions` (for example `{"action":"
 
 MCP servers are injected per run through the private home's `mcp_config.json`; the token travels in the child environment and inside that 0600 file, never in argv. agy exposes each MCP tool to the model as a documentation file under `<home>/.gemini/antigravity-cli/mcp/<server>/<tool>.json` that the model reads before calling it. That directory is outside the workspace, so the first live CTO attempt was refused the read. The adapter now allows `read_file` on that directory only (plus `mcp(<server>/*)`).
 
-Status: that fix has not been proven live because the five-call live budget was used up. `capabilities.coordinationTools` is therefore `"none"` until `DEPT_LIVE=1 node --test dist/runtime/live-bridge-antigravity.test.js` passes; then flip it to `"mcp"`.
+Status: that fix has not been proven live because the five-call live budget was used up. `capabilities.coordinationTools` is therefore `"none"` until `FOREWRIGHT_LIVE=1 node --test dist/runtime/live-bridge-antigravity.test.js` passes; then flip it to `"mcp"`.
 
 ## Limits
 
@@ -54,10 +54,10 @@ Status: that fix has not been proven live because the five-call live budget was 
 
 ## Coordination tools (verified live on 2026-10-01)
 
-A real Antigravity CTO turn called `get_project_state` through the dept daemon and MCP bridge. Three things were needed, each found by a failing live run:
+A real Antigravity CTO turn called `get_project_state` through the Forewright daemon and MCP bridge. Three things were needed, each found by a failing live run:
 
 1. The runtime only passes MCP servers to engines that declare `coordinationTools: "mcp"`, so the capability had to be switched on before any live check could exercise the bridge.
-2. agy describes each MCP tool in a file under the private home (`.gemini/antigravity-cli/mcp/<server>/`), and the model reads that file before calling the tool. That directory is outside the workspace, so dept adds only that directory with `--add-dir`.
+2. agy describes each MCP tool in a file under the private home (`.gemini/antigravity-cli/mcp/<server>/`), and the model reads that file before calling the tool. That directory is outside the workspace, so forewright adds only that directory with `--add-dir`.
 3. Under `toolPermission strict` the read was still refused. The default `request-review` mode grants reads inside workspace directories; in headless mode anything else that would need review is refused, and writes and commands stay denied by rule.
 
 Known gap: in both modes agy ran a plain `ls` for the coordinator despite the `command(*)` deny rule. It appears to treat simple listing commands as safe. It is read only, but it means the deny rule is not absolute.

@@ -16,7 +16,7 @@ const BASE_ENV = {
 const SID = "15fd3316-170d-4437-9e2c-a73b7be29260";
 
 const argvOf = (file: string): string[] => fs.readFileSync(file, "utf8").split("\n").slice(0, -1);
-const adapter = (dir: string, bin: string) => new CopilotAdapter({ deptHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV });
+const adapter = (dir: string, bin: string) => new CopilotAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV });
 const parserFor = (emit: ReturnType<typeof makeEmitter>) => new CopilotJsonParser({ runId: "run-1", generation: 3 }, emit, [], "sid-start", 60);
 
 const assistant = (content: string, toolRequests: unknown[] = []) =>
@@ -28,7 +28,7 @@ test("copilot fixture: success with a denied curl is visible and still succeeds"
   assert.equal(outcome.state, "succeeded");
   assert.equal(outcome.sessionId, SID);
   assert.match(outcome.finalText ?? "", /Created a\.txt/);
-  assert.match(outcome.finalText ?? "", /dept note: 1 tool action\(s\) were denied/);
+  assert.match(outcome.finalText ?? "", /forewright note: 1 tool action\(s\) were denied/);
   assert.match(outcome.finalText ?? "", /bash: Permission to run this tool was denied/);
   const denied = events.filter((e) => e.kind === "diagnostic" && /Denied tool action bash/.test(e.text ?? ""));
   assert.equal(denied.length, 1);
@@ -156,9 +156,9 @@ test("copilot: permission profiles use narrow flags and never a blanket bypass",
 
 test("copilot: every profile pre-approves exactly the supplied MCP servers", () => {
   for (const p of ["read_only", "workspace_write", "coordinator"] as PermissionProfile[]) {
-    assert.ok(permissionArgs(p, ["dept"]).includes("--allow-tool=dept"), p);
-    assert.ok(!permissionArgs(p).includes("--allow-tool=dept"), p);
-    assert.ok(!permissionArgs(p, ["dept"]).includes("--allow-tool=other"), p);
+    assert.ok(permissionArgs(p, ["forewright"]).includes("--allow-tool=forewright"), p);
+    assert.ok(!permissionArgs(p).includes("--allow-tool=forewright"), p);
+    assert.ok(!permissionArgs(p, ["forewright"]).includes("--allow-tool=other"), p);
   }
 });
 
@@ -169,8 +169,8 @@ test("copilot: mcp goes through a 0600 file with the secret, not argv or copilot
   const userHome = tmpDir();
   fs.mkdirSync(path.join(userHome, ".copilot"));
   fs.writeFileSync(path.join(userHome, ".copilot", "mcp-config.json"), "{}");
-  await new CopilotAdapter({ deptHome: dir, binary: bin, runsDir: dir, baseEnv: { ...BASE_ENV, HOME: userHome } }).start(
-    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "dept", command: "node", args: ["bridge.js"], env: { DEPT_AGENT_TOKEN: "tok-123456789" } }] }),
+  await new CopilotAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: { ...BASE_ENV, HOME: userHome } }).start(
+    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }),
     () => {},
   ).done;
   const argv = argvOf(argvFile);
@@ -179,10 +179,10 @@ test("copilot: mcp goes through a 0600 file with the secret, not argv or copilot
   assert.ok(!argv.join(" ").includes("tok-123456789"), "secret must not appear in argv");
   assert.match(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"), /^-rw-------/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), {
-    mcpServers: { dept: { type: "local", command: "node", args: ["bridge.js"], env: { DEPT_AGENT_TOKEN: "tok-123456789" }, tools: ["*"] } },
+    mcpServers: { forewright: { type: "local", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" }, tools: ["*"] } },
   });
   assert.equal(fs.existsSync(flag.slice("--additional-mcp-config=@".length)), false, "temp file is removed");
-  assert.ok(argv.includes("--allow-tool=dept"));
+  assert.ok(argv.includes("--allow-tool=forewright"));
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
   assert.ok(!env.includes("tok-123456789"), "the agent token is not in copilot's own environment");
   assert.ok(env.includes(`COPILOT_HOME=${path.join(dir, "provider-homes", "copilot")}`));
@@ -227,13 +227,13 @@ exit 9
   assert.equal(h.authenticated, "unknown");
   assert.equal(h.authMethod, "subscription");
   assert.deepEqual(h.problems, []);
-  const missing = await new CopilotAdapter({ deptHome: dir, baseEnv: { PATH: "/nonexistent" } }).probe();
+  const missing = await new CopilotAdapter({ forewrightHome: dir, baseEnv: { PATH: "/nonexistent" } }).probe();
   assert.match(missing.problems.join(" "), /not found on PATH/);
   assert.deepEqual(parseModelCatalog("nothing here"), []);
 });
 
 test("copilot: capabilities tell the truth about billing, isolation and limits", () => {
-  const a = new CopilotAdapter({ deptHome: tmpDir() });
+  const a = new CopilotAdapter({ forewrightHome: tmpDir() });
   assert.equal(a.capabilities.coordinationTools, "mcp");
   const notes = a.capabilities.notes.join("\n");
   assert.match(notes, /AI credits/);

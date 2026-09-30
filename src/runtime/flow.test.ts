@@ -49,13 +49,13 @@ test("a decision resolution is committed before the blocked task's next run star
     await settle(h);
 
     // Merge approval: bind to the current commits, move the integration branch, then approve.
-    const tree = gitIn(h.repo, "rev-parse", "dept/integration^{tree}");
-    const c1 = gitIn(h.repo, "commit-tree", tree, "-p", "dept/integration", "-m", "integrated work");
-    gitIn(h.repo, "update-ref", "refs/heads/dept/integration", c1);
+    const tree = gitIn(h.repo, "rev-parse", "forewright/integration^{tree}");
+    const c1 = gitIn(h.repo, "commit-tree", tree, "-p", "forewright/integration", "-m", "integrated work");
+    gitIn(h.repo, "update-ref", "refs/heads/forewright/integration", c1);
     await h.client.request("cto.send", { projectId: h.projectId, body: "please request the merge" });
     const merge = await waitFor(() => h.rt.store.listDecisions({ status: "open" }).find((m) => m.kind === "merge"), "the merge decision");
-    const c2 = gitIn(h.repo, "commit-tree", tree, "-p", "dept/integration", "-m", "more integrated work");
-    gitIn(h.repo, "update-ref", "refs/heads/dept/integration", c2);
+    const c2 = gitIn(h.repo, "commit-tree", tree, "-p", "forewright/integration", "-m", "more integrated work");
+    gitIn(h.repo, "update-ref", "refs/heads/forewright/integration", c2);
     const mainBefore = gitIn(h.repo, "rev-parse", "main");
     await h.client.request("decisions.resolve", { projectId: h.projectId, decisionId: merge.id, option: "approve" });
     assert.equal(gitIn(h.repo, "rev-parse", "main"), mainBefore, "the stale approval merged nothing");
@@ -251,7 +251,7 @@ test("two schedulers on separate connections racing for one task start exactly o
   }
 });
 
-test("a merge conflict in integration is aborted cleanly, the task goes back with feedback, and dept/integration is unchanged", async () => {
+test("a merge conflict in integration is aborted cleanly, the task goes back with feedback, and forewright/integration is unchanged", async () => {
   const adapter = new FakeAdapter({
     rules: [
       rule((r) => isWork(r) && r.prompt.includes("Feedback from earlier attempts"), { outcome: "succeeded", hangUntilCancelled: true }),
@@ -273,7 +273,7 @@ test("a merge conflict in integration is aborted cleanly, the task goes back wit
     const loser = h.rt.store.getTask(conflict.entityId);
     const done = h.rt.store.listTasks({ states: ["done"] });
     assert.equal(done.length, 1, "the other task was integrated first");
-    const tip = gitIn(h.repo, "rev-parse", "dept/integration");
+    const tip = gitIn(h.repo, "rev-parse", "forewright/integration");
     assert.equal(tip, eventsOf(h, "integration.completed")[0]!.payload["mergeSha"], "the tip is still the winner's merge commit");
     assert.notEqual(loser.id, done[0]!.id);
     const wt = path.join(h.home, "projects", h.projectId, "worktrees", "_integration");
@@ -281,9 +281,9 @@ test("a merge conflict in integration is aborted cleanly, the task goes back wit
     assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: wt, encoding: "utf8" }).trim(), tip);
     assert.equal(loser.repairLoops, 1);
     const feedback = h.rt.store.listMessages({ channel: "task", taskId: loser.id }).find((m) => m.dedupeKey?.startsWith("feedback:integration-conflict"));
-    assert.ok(feedback && /Merge dept\/integration into your branch/.test(feedback.body));
+    assert.ok(feedback && /Merge forewright\/integration into your branch/.test(feedback.body));
     // the winner's content is what integration holds; the loser's commit is not in it
-    assert.throws(() => gitIn(h.repo, "merge-base", "--is-ancestor", loser.candidateCommit!, "dept/integration"), "the conflicting commit is not part of dept/integration");
+    assert.throws(() => gitIn(h.repo, "merge-base", "--is-ancestor", loser.candidateCommit!, "forewright/integration"), "the conflicting commit is not part of forewright/integration");
   } finally {
     await h.close();
   }

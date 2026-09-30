@@ -141,7 +141,7 @@ export function SettingsView() {
   const label: Record<string, string> = {
     autoLocalEdits: "Edit files in agent workspaces without asking",
     autoChecks: "Run checks without asking",
-    autoIntegrateToDeptBranch: "Merge finished work into the dept branch",
+    autoIntegrateToForewrightBranch: "Merge finished work into the Forewright branch",
     mergeToUserBranch: "Merge into your own branch",
     publish: "Publish (push, release)",
     destructive: "Destructive actions",

@@ -3,7 +3,7 @@
 // by hand, executed through the Store, and made idempotent with an action
 // receipt. Free text an agent writes never changes state by itself.
 import { createHash } from "node:crypto";
-import { DeptError, NotFoundError, PolicyDeniedError, ValidationError } from "../core/errors.js";
+import { ForewrightError, NotFoundError, PolicyDeniedError, ValidationError } from "../core/errors.js";
 import { type ActionContext, type ActionName, type Actor, authorize } from "../core/policy.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import { type Agent, type DecisionKind, type DecisionOption, canonicalJson } from "../core/store.js";
@@ -390,7 +390,7 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "request_merge_to_user_branch",
-    description: "Ask Billy to approve merging dept/integration into his own branch. The approval is bound to the exact commits.",
+    description: "Ask Billy to approve merging forewright/integration into his own branch. The approval is bound to the exact commits.",
     properties: { target_branch: { type: "string" } },
     required: [],
     roles: ["cto"],
@@ -606,14 +606,14 @@ export async function callTool(rt: ProjectRuntime, record: TokenRecord, name: st
     store.recordEvent("tool.called", "run", record.runId, { kind: "agent", id: agent.id }, { tool: name, ok: true });
     return { content: [{ type: "text", text: redactSecrets(toText(result ?? { ok: true })) }], isError: false };
   } catch (err) {
-    const plain = err instanceof DeptError ? err.message : `Internal error: ${err instanceof Error ? err.message : String(err)}`;
-    if (!(err instanceof DeptError)) rt.reportInternalError(`tool ${name}`, err);
+    const plain = err instanceof ForewrightError ? err.message : `Internal error: ${err instanceof Error ? err.message : String(err)}`;
+    if (!(err instanceof ForewrightError)) rt.reportInternalError(`tool ${name}`, err);
     try {
       store.recordEvent("tool.called", "run", record.runId, agent ? { kind: "agent", id: agent.id } : { kind: "system" }, {
         tool: name,
         ok: false,
         error: truncate(plain, 300),
-        code: err instanceof DeptError ? err.code : "internal",
+        code: err instanceof ForewrightError ? err.code : "internal",
       });
     } catch (eventErr) {
       // The event is diagnostic; the caller still gets the real error below.

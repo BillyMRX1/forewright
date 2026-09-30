@@ -1,6 +1,6 @@
 import { socketPathFor } from "../core/paths.js";
 // Live check that a real Antigravity CTO can call the coordination tools through the real daemon
-// and MCP bridge. Skipped unless DEPT_LIVE=1 (it uses your Antigravity login quota).
+// and MCP bridge. Skipped unless FOREWRIGHT_LIVE=1 (it uses your Antigravity login quota).
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
@@ -11,13 +11,13 @@ import { startDaemon } from "./daemon.js";
 import { RpcClient } from "./client.js";
 import { makeRepo } from "./test-harness.js";
 
-const live = process.env["DEPT_LIVE"] === "1";
+const live = process.env["FOREWRIGHT_LIVE"] === "1";
 
 test("live: a real antigravity CTO turn calls get_project_state through the daemon and bridge", { skip: !live, timeout: 240_000 }, async () => {
-  const home = tempDir("dept-live-home-");
+  const home = tempDir("forewright-live-home-");
   const repo = makeRepo();
-  const adapters = new Map<"antigravity", ProviderAdapter>([["antigravity", new AntigravityAdapter({ deptHome: home, runsDir: home })]]);
-  const daemon = await startDaemon({ deptHome: home, adapters, defaultCtoEngine: "antigravity", watchdogMs: 120_000 });
+  const adapters = new Map<"antigravity", ProviderAdapter>([["antigravity", new AntigravityAdapter({ forewrightHome: home, runsDir: home })]]);
+  const daemon = await startDaemon({ forewrightHome: home, adapters, defaultCtoEngine: "antigravity", watchdogMs: 120_000 });
   const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
   try {
     let open = await client.request("projects.open", { cwd: repo });

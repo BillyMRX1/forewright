@@ -38,7 +38,7 @@ export function migrate(db: Db, now: () => Date = () => new Date()): void {
   const known = MIGRATIONS.reduce((m, x) => Math.max(m, x.version), 0);
   if (row.v > known) {
     throw new MigrationError(
-      `This database was created by a newer version of dept (schema ${row.v}, this build knows ${known}). Upgrade dept before opening it.`,
+      `This database was created by a newer version of Forewright (schema ${row.v}, this build knows ${known}). Upgrade Forewright before opening it.`,
       { dbVersion: row.v, knownVersion: known },
     );
   }

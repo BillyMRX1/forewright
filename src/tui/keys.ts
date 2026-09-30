@@ -39,7 +39,7 @@ export const BINDINGS: Binding[] = [
   { id: "error.detail", keys: ["e"], label: "e", action: "error details", description: "show or hide technical details of the last error", scope: "global" },
   { id: "escape", keys: ["esc"], label: "Esc", action: "close", description: "leave a text box, close an overlay, dismiss the error or notice", scope: "global" },
   { id: "help", keys: ["?"], label: "?", action: "help", description: "this help", scope: "global", footer: true },
-  { id: "quit", keys: ["q"], label: "q", action: "quit", description: "quit the screen (the dept service keeps running)", scope: "global", footer: true },
+  { id: "quit", keys: ["q"], label: "q", action: "quit", description: "quit the screen (the Forewright service keeps running)", scope: "global", footer: true },
 
   { id: "overview.scroll", keys: ["pgup", "pgdn", "up", "down", "home", "end"], label: "PgUp/PgDn, arrows", action: "scroll", description: "scroll; Home and End jump to the top and bottom", scope: VIEW.overview, footer: true },
 
@@ -133,7 +133,7 @@ export function helpLines(): DLine[] {
     lines.push({ text: "" }, { text: name, bold: true });
     for (const b of list) lines.push({ text: row(b) });
   });
-  lines.push({ text: "" }, { text: "Status: ! needs you, x blocked, + done, * working, - idle (or the round symbols). Set DEPT_ASCII=1 for plain symbols, DEPT_BELL=1 for a bell on needs-you notices.", dim: true });
+  lines.push({ text: "" }, { text: "Status: ! needs you, x blocked, + done, * working, - idle (or the round symbols). Set FOREWRIGHT_ASCII=1 for plain symbols, FOREWRIGHT_BELL=1 for a bell on needs-you notices.", dim: true });
   lines.push({ text: "Press Esc, ? or q to close this help." });
   return lines;
 }

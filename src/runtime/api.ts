@@ -271,7 +271,7 @@ export class ClientApi {
       "control.cancelTask": async (p) => ({ task: await (await this.rt(p)).cancelTask(reqStr(p, "taskId", 200)) }),
       "control.terminateTeam": async (p) => (await this.rt(p)).terminateTeam(),
 
-      // Not part of protocol.ts: used by `dept status`.
+      // Not part of protocol.ts: used by `forewright status`.
       "daemon.status": () => d.statusSummary(),
       "daemon.protocol": () => ({ protocolVersion: PROTOCOL_VERSION }),
     };

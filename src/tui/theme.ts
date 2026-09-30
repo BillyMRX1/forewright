@@ -1,7 +1,7 @@
 // One semantic palette and one status glyph set for the whole TUI.
 // Color always carries the same meaning; glyphs and words carry it too, so the
 // screen stays readable without color. ASCII glyphs are used when the terminal
-// is "dumb" or DEPT_ASCII=1.
+// is "dumb" or FOREWRIGHT_ASCII=1.
 
 import type { TaskState } from "../core/types.js";
 
@@ -21,7 +21,7 @@ export const palette = {
 export type ThemeColor = (typeof palette)[keyof typeof palette];
 
 export function asciiMode(): boolean {
-  return process.env["TERM"] === "dumb" || process.env["DEPT_ASCII"] === "1";
+  return process.env["TERM"] === "dumb" || process.env["FOREWRIGHT_ASCII"] === "1";
 }
 
 const UNICODE_GLYPHS: Record<AgentStatus, string> = {

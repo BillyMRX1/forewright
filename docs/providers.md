@@ -1,8 +1,8 @@
 # Provider adapters
 
-This page covers Claude Code and Codex. Antigravity, OpenCode and GitHub Copilot CLI each have their own page: `providers-antigravity.md`, `providers-opencode.md`, `providers-copilot.md`. All five pass the same live checks: a tiny run through the real adapter, and a real CTO turn calling a dept tool through the daemon and MCP bridge.
+This page covers Claude Code and Codex. Antigravity, OpenCode and GitHub Copilot CLI each have their own page: `providers-antigravity.md`, `providers-opencode.md`, `providers-copilot.md`. All five pass the same live checks: a tiny run through the real adapter, and a real CTO turn calling a Forewright tool through the daemon and MCP bridge.
 
-This document records how `dept` talks to Claude Code and Codex, what was verified on this machine, and what is not supported. Versions checked: Claude Code 2.1.285 and Codex CLI 0.158.0.
+This document records how `forewright` talks to Claude Code and Codex, what was verified on this machine, and what is not supported. Versions checked: Claude Code 2.1.285 and Codex CLI 0.158.0.
 
 ## Transports
 
@@ -22,7 +22,7 @@ The Codex app-server is experimental in 0.158.0 and is not used.
 ## Permission profiles
 
 - `read_only`: Claude allows Read, Grep, Glob with `--permission-mode dontAsk` and denies Edit, Write, Bash, NotebookEdit, WebFetch, WebSearch. Codex uses `-s read-only`.
-- `coordinator`: same as `read_only` for Claude plus `mcp__dept__*`. Codex uses `-s read-only`.
+- `coordinator`: same as `read_only` for Claude plus `mcp__forewright__*`. Codex uses `-s read-only`.
 - `workspace_write`: Claude uses `--permission-mode acceptEdits` and allows Bash for `npm`, `npx`, `node`, `pnpm`, `yarn`, `tsc`, `uv run`, `uv sync`, `git status/diff/log/show/branch/add/commit`, and read or simple file commands (`ls`, `cat`, `pwd`, `head`, `tail`, `wc`, `grep`, `rg`, `find`, `mkdir`, `touch`, `cp`, `mv`). It denies `git push`, `sudo`, `rm -rf`, `curl`, `wget`, WebFetch and WebSearch. Each command is allowed both bare and with arguments. Codex uses `-s workspace-write`.
 
 `--dangerously-skip-permissions`, `bypassPermissions` and Codex `danger-full-access` are never used. The Claude Bash allowlist is a convenience, not a sandbox: `node` and `npm` can run arbitrary code, so the real containment is the task worktree plus the process group. Codex sandbox modes are enforced by Codex itself.
@@ -45,13 +45,13 @@ Claude:
 
 Codex:
 
-- `CODEX_HOME=<deptHome>/provider-homes/codex` contains a symlink `auth.json` to `~/.codex/auth.json` (never a copy) and a `config.toml` that dept owns (`approval_policy = "never"`). A live run through this home authenticated with the ChatGPT login, and `~/.codex/config.toml` kept its modification time. Codex writes its own session and state files inside this private home, which is also where `resume` finds them.
+- `CODEX_HOME=<forewrightHome>/provider-homes/codex` contains a symlink `auth.json` to `~/.codex/auth.json` (never a copy) and a `config.toml` that Forewright owns (`approval_policy = "never"`). A live run through this home authenticated with the ChatGPT login, and `~/.codex/config.toml` kept its modification time. Codex writes its own session and state files inside this private home, which is also where `resume` finds them.
 
 ## Secrets and billing
 
 `childEnv` builds the child environment from an allowlist (PATH, HOME, USER, LOGNAME, SHELL, LANG, LC_*, TMPDIR, TERM=dumb). `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CODEX_API_KEY` and `AZURE_OPENAI_API_KEY` are dropped unless the project policy enables API billing, and injecting one through extra variables throws. A quota or usage-limit result always becomes `quota_wait`; the adapters never retry in another billing mode.
 
-For Codex MCP servers, secret environment values (such as the scoped run token) are passed in the child environment and referenced with `env_vars`, so they never appear in the process list. For Claude they are in a mode 0600 file that is deleted when the run ends. Both are accepted by the CLIs as verified with `codex mcp list/get` and Claude's `system/init`; a full tool call through the dept bridge is exercised end to end with the fake adapter in the runtime tests, and against the real engines by `DEPT_LIVE=1 node --test dist/runtime/live-bridge.test.js`.
+For Codex MCP servers, secret environment values (such as the scoped run token) are passed in the child environment and referenced with `env_vars`, so they never appear in the process list. For Claude they are in a mode 0600 file that is deleted when the run ends. Both are accepted by the CLIs as verified with `codex mcp list/get` and Claude's `system/init`; a full tool call through the Forewright bridge is exercised end to end with the fake adapter in the runtime tests, and against the real engines by `FOREWRIGHT_LIVE=1 node --test dist/runtime/live-bridge.test.js`.
 
 ## Output events
 
@@ -77,4 +77,4 @@ Every event carries `runId` and `generation` from the request so the runtime can
 
 ## Live tests
 
-`DEPT_LIVE=1 node --test dist/providers/live.test.js` sends the prompt "Reply with the single word OK and nothing else." to each engine through the real adapters. It skips otherwise.
+`FOREWRIGHT_LIVE=1 node --test dist/providers/live.test.js` sends the prompt "Reply with the single word OK and nothing else." to each engine through the real adapters. It skips otherwise.

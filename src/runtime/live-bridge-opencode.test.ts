@@ -1,5 +1,5 @@
 // Live check that a real OpenCode CTO turn can drive the coordination tools
-// through the real daemon and MCP bridge. Skipped unless DEPT_LIVE=1. It uses a
+// through the real daemon and MCP bridge. Skipped unless FOREWRIGHT_LIVE=1. It uses a
 // free or OAuth OpenCode model only; API-billed models are refused by the adapter.
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -12,13 +12,13 @@ import { RpcClient } from "./client.js";
 import { startDaemon } from "./daemon.js";
 import { makeRepo } from "./test-harness.js";
 
-const live = process.env["DEPT_LIVE"] === "1";
+const live = process.env["FOREWRIGHT_LIVE"] === "1";
 
 test("live: a real opencode CTO turn calls get_project_state through the daemon and bridge", { skip: !live, timeout: 240_000 }, async () => {
-  const home = tempDir("dept-live-home-");
+  const home = tempDir("forewright-live-home-");
   const repo = makeRepo();
-  const adapters = new Map<EngineId, ProviderAdapter>([["opencode", new OpencodeAdapter({ deptHome: home })]]);
-  const daemon = await startDaemon({ deptHome: home, adapters, defaultCtoEngine: "opencode", watchdogMs: 120_000 });
+  const adapters = new Map<EngineId, ProviderAdapter>([["opencode", new OpencodeAdapter({ forewrightHome: home })]]);
+  const daemon = await startDaemon({ forewrightHome: home, adapters, defaultCtoEngine: "opencode", watchdogMs: 120_000 });
   const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
   try {
     let open = await client.request("projects.open", { cwd: repo });

@@ -6,16 +6,16 @@ import { IsolationError } from "./errors.js";
 // Worker children must never inherit the user's config home: global hooks,
 // memory protocols and profiles caused junk writes into the Obsidian vault.
 
-const CODEX_CONFIG = `# Owned by dept. Workers run without the user's Codex profile, hooks or memory.
+const CODEX_CONFIG = `# Owned by forewright. Workers run without the user's Codex profile, hooks or memory.
 approval_policy = "never"
 `;
 
 /**
- * <deptHome>/provider-homes/codex containing only a symlink to the user's
- * auth.json (never a copy) and a config.toml that dept owns.
+ * <forewrightHome>/provider-homes/codex containing only a symlink to the user's
+ * auth.json (never a copy) and a config.toml that Forewright owns.
  */
-export function isolatedCodexHome(deptHome: string, realHome: string = os.homedir()): string {
-  const dir = path.join(deptHome, "provider-homes", "codex");
+export function isolatedCodexHome(forewrightHome: string, realHome: string = os.homedir()): string {
+  const dir = path.join(forewrightHome, "provider-homes", "codex");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const source = path.join(realHome, ".codex", "auth.json");
   if (!fs.existsSync(source)) {

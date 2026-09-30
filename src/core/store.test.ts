@@ -300,7 +300,7 @@ test("a task with two open decisions stays blocked until both are resolved", () 
 
 test("approvals are bound to the exact action and revision and can be used once", () => {
   const env = makeEnv();
-  const action = { type: "merge", branch: "dept/integration", into: "main", commit: "abc123" };
+  const action = { type: "merge", branch: "forewright/integration", into: "main", commit: "abc123" };
   const mk = () =>
     env.store.requestDecision({
       kind: "merge",
@@ -319,7 +319,7 @@ test("approvals are bound to the exact action and revision and can be used once"
   env.store.resolveDecision(d.id, { option: "approve", by: HUMAN });
   assert.throws(() => env.store.consumeApproval(d.id, { ...action, commit: "different" }, 3), StaleApprovalError);
   assert.throws(() => env.store.consumeApproval(d.id, action, 4), StaleApprovalError);
-  assert.deepEqual(env.store.consumeApproval(d.id, { commit: "abc123", into: "main", branch: "dept/integration", type: "merge" }, 3), { ok: true });
+  assert.deepEqual(env.store.consumeApproval(d.id, { commit: "abc123", into: "main", branch: "forewright/integration", type: "merge" }, 3), { ok: true });
   assert.throws(() => env.store.consumeApproval(d.id, action, 3), StaleApprovalError, "replay");
 
   const rejected = mk();

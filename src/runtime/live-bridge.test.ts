@@ -1,6 +1,6 @@
 import { socketPathFor } from "../core/paths.js";
 // Live check that a real engine can drive the coordination tools through the
-// real daemon and MCP bridge. Skipped unless DEPT_LIVE=1 (it uses your Claude
+// real daemon and MCP bridge. Skipped unless FOREWRIGHT_LIVE=1 (it uses your Claude
 // and Codex subscriptions).
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -12,13 +12,13 @@ import { RpcClient } from "./client.js";
 import { makeRepo } from "./test-harness.js";
 import path from "node:path";
 
-const live = process.env["DEPT_LIVE"] === "1";
+const live = process.env["FOREWRIGHT_LIVE"] === "1";
 
 for (const engine of ["claude", "codex"] as const satisfies readonly EngineId[]) {
   test(`live: a real ${engine} CTO turn calls get_project_state through the daemon and bridge`, { skip: !live, timeout: 180_000 }, async () => {
-    const home = tempDir("dept-live-home-");
+    const home = tempDir("forewright-live-home-");
     const repo = makeRepo();
-    const daemon = await startDaemon({ deptHome: home, adapters: createAdapters({ deptHome: home }), defaultCtoEngine: engine, watchdogMs: 60_000 });
+    const daemon = await startDaemon({ forewrightHome: home, adapters: createAdapters({ forewrightHome: home }), defaultCtoEngine: engine, watchdogMs: 60_000 });
     const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     try {
       let open = await client.request("projects.open", { cwd: repo });

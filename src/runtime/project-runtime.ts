@@ -6,7 +6,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Clock } from "../core/clock.js";
 import { openAndMigrate } from "../core/db.js";
-import { DeptError, ValidationError } from "../core/errors.js";
+import { ForewrightError, ValidationError } from "../core/errors.js";
 import { ensureProjectDirs } from "../core/paths.js";
 import { authorize } from "../core/policy.js";
 import { redactSecrets } from "../core/safety.js";
@@ -29,7 +29,7 @@ export const UNKNOWN_QUOTA_RETRY_MS = 30 * 60 * 1000;
 export const NOT_GIT_MARKER = "This folder is not a git repository";
 
 export interface RuntimeDeps {
-  deptHome: string;
+  forewrightHome: string;
   clock: Clock;
   adapters: Map<EngineId, ProviderAdapter>;
   health: ProviderHealthCache;
@@ -137,13 +137,13 @@ export class ProjectRuntime {
   reportInternalError(context: string, err: unknown): void {
     const message = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? (err.stack ?? "") : "";
-    process.stderr.write(`[dept ${this.projectId}] ${context}: ${message}\n${stack}\n`);
+    process.stderr.write(`[forewright ${this.projectId}] ${context}: ${message}\n${stack}\n`);
     if (this.closed) return;
     try {
-      this.store.recordEvent("runtime.error", "project", this.projectId, { kind: "system" }, { context, message: redactSecrets(message), code: err instanceof DeptError ? err.code : undefined });
+      this.store.recordEvent("runtime.error", "project", this.projectId, { kind: "system" }, { context, message: redactSecrets(message), code: err instanceof ForewrightError ? err.code : undefined });
       this.publish();
     } catch (inner) {
-      process.stderr.write(`[dept ${this.projectId}] could not record the error: ${String(inner)}\n`);
+      process.stderr.write(`[forewright ${this.projectId}] could not record the error: ${String(inner)}\n`);
     }
   }
 
@@ -304,7 +304,7 @@ export class ProjectRuntime {
       if (decision.kind === "git_init" && approved) this.initGit(decision);
       if (decision.kind === "merge" && approved) this.executeMerge(decision.id);
     } catch (err) {
-      if (err instanceof DeptError) {
+      if (err instanceof ForewrightError) {
         this.store.recordEvent(`${decision.kind}.refused`, "decision", decision.id, { kind: "system" }, { code: err.code, message: err.message });
         this.notifyCto(`decision-failed:${decision.id}`, `The approved action for "${decision.title}" was not carried out: ${err.message}`);
       } else {
@@ -322,7 +322,7 @@ export class ProjectRuntime {
     const exclude = path.resolve(this.root, gitLine(this.root, ["rev-parse", "--git-path", "info/exclude"]));
     mkdirSync(path.dirname(exclude), { recursive: true });
     const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-    if (!current.split(/\r?\n/).some((l) => l.trim() === ".dept/")) appendFileSync(exclude, `${current.length > 0 && !current.endsWith("\n") ? "\n" : ""}.dept/\n`);
+    if (!current.split(/\r?\n/).some((l) => l.trim() === ".forewright/")) appendFileSync(exclude, `${current.length > 0 && !current.endsWith("\n") ? "\n" : ""}.forewright/\n`);
     git(this.root, ["add", "-A"]);
     git(this.root, ["commit", "--allow-empty", "-m", "Initial commit"], { identity: true });
     this.store.ensureProject({ name: this.name, root: this.root, isGit: true });
@@ -364,7 +364,7 @@ export class ProjectRuntime {
     return { merged: true, message };
   }
 
-  /** Merges dept/integration into Billy's branch. Refuses when the approved facts changed. */
+  /** Merges forewright/integration into Billy's branch. Refuses when the approved facts changed. */
   executeMerge(decisionId: string): { merged: boolean; message: string } {
     const d = this.store.getDecision(decisionId);
     const bound = d.boundAction as { target?: string } | null;

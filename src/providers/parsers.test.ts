@@ -179,7 +179,7 @@ test("codex: command_execution and mcp_tool_call items map to tool events", () =
   const { events } = drive(codex, [
     JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "ls" } }),
     JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "ls", aggregated_output: "a\n", exit_code: 0 } }),
-    JSON.stringify({ type: "item.started", item: { type: "mcp_tool_call", server: "dept", tool: "report", arguments: { a: 1 } } }),
+    JSON.stringify({ type: "item.started", item: { type: "mcp_tool_call", server: "forewright", tool: "report", arguments: { a: 1 } } }),
   ]);
-  assert.deepEqual(events.map((e) => [e.kind, e.toolName]), [["tool_call", "shell"], ["tool_result", "shell"], ["tool_call", "dept.report"]]);
+  assert.deepEqual(events.map((e) => [e.kind, e.toolName]), [["tool_call", "shell"], ["tool_result", "shell"], ["tool_call", "forewright.report"]]);
 });

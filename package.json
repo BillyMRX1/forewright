@@ -1,11 +1,11 @@
 {
-  "name": "agentic-department",
+  "name": "forewright",
   "version": "0.1.0",
   "private": true,
   "description": "Local workspace that coordinates a CTO agent and specialist coding agents per project, through a terminal UI.",
   "type": "module",
   "bin": {
-    "dept": "dist/cli/main.js"
+    "forewright": "dist/cli/main.js"
   },
   "engines": {
     "node": ">=24"

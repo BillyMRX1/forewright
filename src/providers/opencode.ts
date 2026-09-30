@@ -112,14 +112,14 @@ const API_ENV = /(?:API_KEY|API_TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TO
 // ---------------------------------------------------------------- isolation
 
 /**
- * <deptHome>/provider-homes/opencode/{data,config,cache,state}, used through the
+ * <forewrightHome>/provider-homes/opencode/{data,config,cache,state}, used through the
  * XDG_* variables so Billy's ~/.config/opencode (plugins, AGENTS.md, hooks) and
  * ~/.local/share/opencode (sessions, db) are never loaded or written. The
  * credential file is symlinked (never copied) when it exists; with no
  * credentials the isolated install still runs OpenCode's free models.
  */
-export function isolatedOpencodeHome(deptHome: string, realAuthPath: string): { env: Record<string, string>; authLink: string; dataDir: string } {
-  const root = path.join(deptHome, "provider-homes", "opencode");
+export function isolatedOpencodeHome(forewrightHome: string, realAuthPath: string): { env: Record<string, string>; authLink: string; dataDir: string } {
+  const root = path.join(forewrightHome, "provider-homes", "opencode");
   const dirs = { data: path.join(root, "data"), config: path.join(root, "config"), cache: path.join(root, "cache"), state: path.join(root, "state") };
   for (const d of Object.values(dirs)) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
   const dataDir = path.join(dirs.data, "opencode");
@@ -186,7 +186,7 @@ export function buildPermission(profile: PermissionProfile, mcpServerNames: read
     perm["edit"] = "allow";
     perm["bash"] = { "*": "ask", ...bashRules(DEV_COMMANDS, "allow"), ...bashRules(DENIED_BASH, "deny") };
   }
-  // dept's own MCP tools are pre-approved under every profile: the daemon scopes and authorizes each call.
+  // Forewright's own MCP tools are pre-approved under every profile: the daemon scopes and authorizes each call.
   for (const n of mcpServerNames) perm[mcpToolPrefix(n)] = "allow";
   return perm;
 }
@@ -217,7 +217,7 @@ export function buildOpencodeConfig(req: Pick<RunRequest, "permission" | "mcpSer
 // ---------------------------------------------------------------- adapter
 
 export interface OpencodeAdapterOptions {
-  deptHome: string;
+  forewrightHome: string;
   runsDir?: string;
   /** Only the project policy may enable this. Without it, API-key billed models are refused. */
   allowApiBilling?: boolean;
@@ -250,9 +250,9 @@ export class OpencodeAdapter implements ProviderAdapter {
     usageReporting: "cost_and_tokens",
     coordinationTools: "mcp",
     notes: [
-      "OpenCode can route to many providers. dept only starts a model that is free (zero list price, no API key stored), or uses an OAuth subscription login. API-key billed models are refused unless API billing is enabled for the project.",
-      "Runs use a private OpenCode home under the dept home. Your OpenCode plugins, global AGENTS.md, Claude Code CLAUDE.md and skills are not loaded. Only your auth file is linked, read-only.",
-      "OpenCode reads AGENTS.md and CONTEXT.md from the working directory upwards; dept turns that off unless instruction files are enabled.",
+      "OpenCode can route to many providers. Forewright only starts a model that is free (zero list price, no API key stored), or uses an OAuth subscription login. API-key billed models are refused unless API billing is enabled for the project.",
+      "Runs use a private OpenCode home under the Forewright home. Your OpenCode plugins, global AGENTS.md, Claude Code CLAUDE.md and skills are not loaded. Only your auth file is linked, read-only.",
+      "OpenCode reads AGENTS.md and CONTEXT.md from the working directory upwards; Forewright turns that off unless instruction files are enabled.",
       "Tool permissions are policy rules in the per-run config. Anything not allowed is refused: a headless run auto-rejects approval requests and never approves one. They are not an operating system sandbox.",
       "OpenCode has no turn limit flag, so the max turns setting is not applied. There is no system prompt flag, so system instructions are placed at the top of the prompt.",
       "Denied tool actions are reported as diagnostics and appended to the final text.",
@@ -289,7 +289,7 @@ export class OpencodeAdapter implements ProviderAdapter {
   }
 
   private baseChildEnv(extra: Record<string, string>) {
-    const iso = isolatedOpencodeHome(this.opts.deptHome, this.realAuthPath());
+    const iso = isolatedOpencodeHome(this.opts.forewrightHome, this.realAuthPath());
     const api = this.apiEnv();
     const built = childEnv(this.baseEnv, { ...iso.env, ...api, ...extra }, { allowApiBilling: this.allowApiBilling });
     return { ...built, secrets: [...built.secrets, ...Object.values(api)] };
@@ -584,7 +584,7 @@ export class OpencodeJsonParser implements EngineParser {
   finish(exit: ExitInfo): RunOutcome {
     if (this.denied.length === 0) this.denied.push(...this.plainDenials);
     const denialNote = this.denied.length > 0
-      ? `[dept] ${this.denied.length} action${this.denied.length === 1 ? " was" : "s were"} denied by the permission profile and did not run: ${[...new Set(this.denied)].join("; ")}`
+      ? `[forewright] ${this.denied.length} action${this.denied.length === 1 ? " was" : "s were"} denied by the permission profile and did not run: ${[...new Set(this.denied)].join("; ")}`
       : null;
     const body = this.finalText?.trim() ?? "";
     const finalText = body !== "" ? (denialNote ? `${body}\n\n${denialNote}` : body) : denialNote;

@@ -1,4 +1,4 @@
-// Socket client for the dept service. One connection, request/response with
+// Socket client for the Forewright service. One connection, request/response with
 // timeouts, event subscriptions that survive reconnects.
 
 import { spawn } from "node:child_process";
@@ -6,14 +6,14 @@ import { closeSync, openSync, readFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DeptError } from "../core/errors.js";
-import { deptHome, ensureDir, socketPath, tokenPath } from "../core/paths.js";
-import type { DeptEvent } from "../core/store-types.js";
+import { ForewrightError } from "../core/errors.js";
+import { forewrightHome, ensureHome, socketPath, tokenPath } from "../core/paths.js";
+import type { ForewrightEvent } from "../core/store-types.js";
 import { PROTOCOL_VERSION } from "../runtime/protocol.js";
 import type { ErrorData, MethodName, Notifications, Params, Result, RuntimeStatus } from "../runtime/protocol.js";
 
 /** A failed request. `plain` is one sentence for Billy, `detail` is behind the "e" key. */
-export class ClientError extends DeptError {
+export class ClientError extends ForewrightError {
   readonly plain: string;
   readonly detail: string | null;
   constructor(code: string, plain: string, detail: string | null = null) {
@@ -33,7 +33,7 @@ export interface Subscription {
 /** Everything the views need from the service. Views depend on this, never on the socket. */
 export interface ClientApi {
   call<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>>;
-  subscribe(projectId: string, sinceSeq: number, onEvent: (event: DeptEvent) => void): Promise<Subscription>;
+  subscribe(projectId: string, sinceSeq: number, onEvent: (event: ForewrightEvent) => void): Promise<Subscription>;
   onRuntime(cb: (projectId: string, status: RuntimeStatus) => void): () => void;
   onConnection(cb: (state: ConnectionState) => void): () => void;
   close(): void;
@@ -56,12 +56,12 @@ interface Pending {
 
 interface Sub {
   lastSeq: number;
-  onEvent: (event: DeptEvent) => void;
+  onEvent: (event: ForewrightEvent) => void;
   /** True while a fresh subscription (sinceSeq 0) waits for its reply: the service replays history first. */
   skipReplay: boolean;
 }
 
-export class DeptClient implements ClientApi {
+export class ForewrightClient implements ClientApi {
   private socket: net.Socket | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
@@ -95,7 +95,7 @@ export class DeptClient implements ClientApi {
     } catch (err) {
       throw new ClientError(
         "token_unreadable",
-        "Could not read the dept client token, so the service cannot be trusted or reached.",
+        "Could not read the Forewright client token, so the service cannot be trusted or reached.",
         `${this.opts.tokenPath}: ${(err as Error).message}`,
       );
     }
@@ -107,7 +107,7 @@ export class DeptClient implements ClientApi {
       const s = net.connect(this.opts.socketPath);
       s.once("connect", () => resolve(s));
       s.once("error", (err) =>
-        reject(new ClientError("service_unreachable", "The dept service is not running.", `${this.opts.socketPath}: ${err.message}`)),
+        reject(new ClientError("service_unreachable", "The Forewright service is not running.", `${this.opts.socketPath}: ${err.message}`)),
       );
     });
     socket.setEncoding("utf8");
@@ -143,7 +143,7 @@ export class DeptClient implements ClientApi {
     try {
       msg = JSON.parse(line) as typeof msg;
     } catch (err) {
-      throw new ClientError("bad_frame", "The dept service sent a message that could not be read.", `${(err as Error).message}: ${line.slice(0, 200)}`);
+      throw new ClientError("bad_frame", "The Forewright service sent a message that could not be read.", `${(err as Error).message}: ${line.slice(0, 200)}`);
     }
     if (typeof msg.id === "number") {
       const p = this.pending.get(msg.id);
@@ -175,7 +175,7 @@ export class DeptClient implements ClientApi {
     this.connected = false;
     for (const [id, p] of this.pending) {
       clearTimeout(p.timer);
-      p.reject(new ClientError("connection_lost", "The connection to the dept service was lost.", `request ${p.method} was in flight`));
+      p.reject(new ClientError("connection_lost", "The connection to the Forewright service was lost.", `request ${p.method} was in flight`));
       this.pending.delete(id);
     }
     if (this.closed) return;
@@ -212,13 +212,13 @@ export class DeptClient implements ClientApi {
   private request<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>> {
     const socket = this.socket;
     if (!socket) {
-      return Promise.reject(new ClientError("not_connected", "Not connected to the dept service.", `method ${method}`));
+      return Promise.reject(new ClientError("not_connected", "Not connected to the Forewright service.", `method ${method}`));
     }
     const id = this.nextId++;
     return new Promise<Result<M>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new ClientError("timeout", `The dept service did not answer ${method} in time.`, `${this.opts.requestTimeoutMs} ms elapsed`));
+        reject(new ClientError("timeout", `The Forewright service did not answer ${method} in time.`, `${this.opts.requestTimeoutMs} ms elapsed`));
       }, this.opts.requestTimeoutMs);
       this.pending.set(id, { method, resolve: resolve as (v: unknown) => void, reject, timer });
       socket.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
@@ -229,7 +229,7 @@ export class DeptClient implements ClientApi {
     return this.request(method, params);
   }
 
-  async subscribe(projectId: string, sinceSeq: number, onEvent: (event: DeptEvent) => void): Promise<Subscription> {
+  async subscribe(projectId: string, sinceSeq: number, onEvent: (event: ForewrightEvent) => void): Promise<Subscription> {
     // sinceSeq 0 means "from now". The service replays history before its reply (that is how a
     // reconnect catches up), so a fresh subscription ignores the replay instead of treating old events
     // as new ones (which raised toasts for long-resolved decisions, seen live).
@@ -285,13 +285,13 @@ export interface EnsureDaemonResult {
   logPath: string;
 }
 
-/** Starts `dept serve` in the background when nothing answers on the socket. */
+/** Starts `forewright serve` in the background when nothing answers on the socket. */
 export async function ensureDaemon(opts: { waitMs?: number; mainPath?: string } = {}): Promise<EnsureDaemonResult> {
   const sock = socketPath();
-  const logPath = path.join(deptHome(), "daemon.log");
+  const logPath = path.join(forewrightHome(), "daemon.log");
   if (await socketAnswers(sock)) return { started: false, message: null, logPath };
 
-  ensureDir(deptHome());
+  ensureHome();
   const mainPath = opts.mainPath ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../cli/main.js");
   const fd = openSync(logPath, "a", 0o600);
   try {
@@ -304,12 +304,12 @@ export async function ensureDaemon(opts: { waitMs?: number; mainPath?: string } 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 100));
     if (await socketAnswers(sock)) {
-      return { started: true, message: `Started the dept service in the background (log: ${logPath})`, logPath };
+      return { started: true, message: `Started the Forewright service in the background (log: ${logPath})`, logPath };
     }
   }
   throw new ClientError(
     "daemon_start_failed",
-    `The dept service did not start. See the log at ${logPath}.`,
+    `The Forewright service did not start. See the log at ${logPath}.`,
     `Waited ${opts.waitMs ?? 5_000} ms for ${sock} to accept connections after running ${process.execPath} ${mainPath} serve`,
   );
 }

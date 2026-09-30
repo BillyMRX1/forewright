@@ -9,22 +9,22 @@ import path from "node:path";
 import fs from "node:fs";
 
 export interface CreateAdaptersOptions {
-  deptHome: string;
+  forewrightHome: string;
   includeFake?: boolean;
   claude?: ClaudeAdapterOptions;
   allowApiBilling?: boolean;
 }
 
 export function createAdapters(opts: CreateAdaptersOptions): Map<EngineId, ProviderAdapter> {
-  const runsDir = path.join(opts.deptHome, "provider-runs");
+  const runsDir = path.join(opts.forewrightHome, "provider-runs");
   fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   const billing = opts.allowApiBilling ?? false;
   const adapters = new Map<EngineId, ProviderAdapter>();
   adapters.set("claude", new ClaudeAdapter({ runsDir, allowApiBilling: billing, ...opts.claude }));
-  adapters.set("codex", new CodexAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
-  adapters.set("antigravity", new AntigravityAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
-  adapters.set("opencode", new OpencodeAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
-  adapters.set("copilot", new CopilotAdapter({ deptHome: opts.deptHome, runsDir, allowApiBilling: billing }));
+  adapters.set("codex", new CodexAdapter({ forewrightHome: opts.forewrightHome, runsDir, allowApiBilling: billing }));
+  adapters.set("antigravity", new AntigravityAdapter({ forewrightHome: opts.forewrightHome, runsDir, allowApiBilling: billing }));
+  adapters.set("opencode", new OpencodeAdapter({ forewrightHome: opts.forewrightHome, runsDir, allowApiBilling: billing }));
+  adapters.set("copilot", new CopilotAdapter({ forewrightHome: opts.forewrightHome, runsDir, allowApiBilling: billing }));
   if (opts.includeFake) adapters.set("fake", new FakeAdapter());
   return adapters;
 }

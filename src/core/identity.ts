@@ -5,10 +5,11 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { Clock } from "./clock.js";
 import { DuplicateProjectIdError, ValidationError } from "./errors.js";
-import { deptHome, ensureDir, registryPath } from "./paths.js";
+import { forewrightHome, ensureDir, ensureHome, registryPath } from "./paths.js";
 
-const MARKER_DIR = ".dept";
+const MARKER_DIR = ".forewright";
 const MARKER_FILE = "project.json";
+const LEGACY_MARKER_DIR = ".dept";
 
 export type ResolveResult =
   | { status: "found"; projectId: string; root: string; isGit: boolean; worktreeOf?: string }
@@ -35,7 +36,40 @@ function markerPath(root: string): string {
   return path.join(root, MARKER_DIR, MARKER_FILE);
 }
 
+/** Renames a pre-rename `.dept` marker dir to `.forewright` (same project id) and fixes the git exclude line. */
+function migrateLegacyMarker(root: string): void {
+  const legacyFile = path.join(root, LEGACY_MARKER_DIR, MARKER_FILE);
+  if (!existsSync(legacyFile) || existsSync(markerPath(root))) return;
+  try {
+    renameSync(path.join(root, LEGACY_MARKER_DIR), path.join(root, MARKER_DIR));
+  } catch (err) {
+    throw new ValidationError(`Could not rename ${path.join(root, LEGACY_MARKER_DIR)} to ${path.join(root, MARKER_DIR)}: ${(err as Error).message}`, { root });
+  }
+  if (git(root, ["rev-parse", "--show-toplevel"]) === null) return;
+  const excludeRaw = git(root, ["rev-parse", "--git-path", "info/exclude"]);
+  if (excludeRaw === null) return;
+  const exclude = path.resolve(root, excludeRaw);
+  mkdirSync(path.dirname(exclude), { recursive: true });
+  const lines = existsSync(exclude) ? readFileSync(exclude, "utf8").split("\n") : [];
+  let replaced = false;
+  const out = lines.map((l) => {
+    if (l.trim() === ".dept/" || l.trim() === ".dept") {
+      replaced = true;
+      return ".forewright/";
+    }
+    return l;
+  });
+  if (!replaced) {
+    if (out.some((l) => l.trim() === ".forewright/" || l.trim() === ".forewright")) return;
+    if (out.length > 0 && out[out.length - 1] === "") out.pop();
+    out.push(".forewright/");
+    out.push("");
+  }
+  writeFileSync(exclude, out.join("\n"));
+}
+
 function readMarker(root: string): Marker | null {
+  migrateLegacyMarker(root);
   const file = markerPath(root);
   if (!existsSync(file)) return null;
   let parsed: unknown;
@@ -101,7 +135,7 @@ export function initProject(root: string, clock: Clock): { projectId: string; ro
   const abs = real(root);
   const file = markerPath(abs);
   if (existsSync(file)) {
-    throw new ValidationError(`${abs} is already a dept project; the existing marker was left untouched.`, { file });
+    throw new ValidationError(`${abs} is already a Forewright project; the existing marker was left untouched.`, { file });
   }
   const marker: Marker = { id: randomUUID(), createdAt: clock.now().toISOString(), formatVersion: 1 };
   mkdirSync(path.join(abs, MARKER_DIR), { recursive: true });
@@ -114,8 +148,8 @@ export function initProject(root: string, clock: Clock): { projectId: string; ro
       const exclude = path.resolve(abs, excludeRaw);
       mkdirSync(path.dirname(exclude), { recursive: true });
       const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-      const has = current.split(/\r?\n/).some((l) => l.trim() === ".dept/" || l.trim() === ".dept");
-      if (!has) appendFileSync(exclude, `${current.length > 0 && !current.endsWith("\n") ? "\n" : ""}.dept/\n`);
+      const has = current.split(/\r?\n/).some((l) => l.trim() === ".forewright/" || l.trim() === ".forewright");
+      if (!has) appendFileSync(exclude, `${current.length > 0 && !current.endsWith("\n") ? "\n" : ""}.forewright/\n`);
     }
   }
   return { projectId: marker.id, root: abs };
@@ -140,7 +174,7 @@ export function readRegistry(): Registry {
 }
 
 export function writeRegistry(reg: Registry): void {
-  ensureDir(deptHome());
+  ensureHome();
   const file = registryPath();
   const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
   writeFileSync(tmp, JSON.stringify(reg, null, 2) + "\n", { mode: 0o600 });

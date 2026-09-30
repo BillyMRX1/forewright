@@ -19,7 +19,7 @@ import { type Connection, RpcServer } from "./server.js";
 import { type TokenRecord, tokenProjectId } from "./tokens.js";
 
 export interface DaemonOptions {
-  deptHome: string;
+  forewrightHome: string;
   adapters: Map<EngineId, ProviderAdapter>;
   clock?: Clock;
   watchdogMs?: number;
@@ -67,13 +67,13 @@ export class Daemon {
   constructor(readonly opts: DaemonOptions, clientToken: string, pidFile: string) {
     this.adapters = opts.adapters;
     this.clock = opts.clock ?? systemClock;
-    this.socketPath = socketPathFor(opts.deptHome);
+    this.socketPath = socketPathFor(opts.forewrightHome);
     this.clientToken = clientToken;
     this.pidFile = pidFile;
     this.startedAt = new Date().toISOString();
     this.health = new ProviderHealthCache(opts.adapters);
     this.deps = {
-      deptHome: opts.deptHome,
+      forewrightHome: opts.forewrightHome,
       clock: this.clock,
       adapters: opts.adapters,
       health: this.health,
@@ -209,7 +209,7 @@ export class Daemon {
 }
 
 function acquireLock(home: string): string {
-  const file = path.join(home, "dept.pid");
+  const file = path.join(home, "forewright.pid");
   const mine: LockRecord = { pid: process.pid, startedAt: psField(process.pid, "lstart") };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -225,7 +225,7 @@ function acquireLock(home: string): string {
       existing = null; // unreadable lock file: treat as stale
     }
     if (existing && lockAlive(existing)) {
-      throw new DaemonLockError(`Another dept service is already running (pid ${existing.pid}). Stop it first, or use it.`, { pid: existing.pid, file });
+      throw new DaemonLockError(`Another Forewright service is already running (pid ${existing.pid}). Stop it first, or use it.`, { pid: existing.pid, file });
     }
     unlinkSync(file); // stale lock from a crashed service: take over
   }
@@ -241,12 +241,12 @@ function ensureToken(home: string): string {
 }
 
 export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
-  // paths.ts reads DEPT_HOME lazily, so the daemon's home has to be the process's home.
-  process.env["DEPT_HOME"] = opts.deptHome;
-  ensureDir(opts.deptHome);
-  const pidFile = acquireLock(opts.deptHome);
+  // paths.ts reads FOREWRIGHT_HOME lazily, so the daemon's home has to be the process's home.
+  process.env["FOREWRIGHT_HOME"] = opts.forewrightHome;
+  ensureDir(opts.forewrightHome);
+  const pidFile = acquireLock(opts.forewrightHome);
   try {
-    const token = ensureToken(opts.deptHome);
+    const token = ensureToken(opts.forewrightHome);
     const daemon = new Daemon(opts, token, pidFile);
     await daemon.start();
     return daemon;

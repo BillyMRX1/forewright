@@ -1,10 +1,10 @@
-// Serial integration into dept/integration. One task at a time is merged in a
+// Serial integration into forewright/integration. One task at a time is merged in a
 // detached integration worktree, its checks are re-run there, and only a
 // passing result moves the branch (compare-and-swap). Merging into Billy's own
 // branch is a separate, approved action (see ProjectRuntime.executeMerge).
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { DeptError, StaleGenerationError } from "../core/errors.js";
+import { ForewrightError, StaleGenerationError } from "../core/errors.js";
 import { logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
 import type { Task } from "../core/store.js";
@@ -39,7 +39,7 @@ export function integrateNext(rt: ProjectRuntime): void {
     .filter((t) => t.blockReason === null && t.candidateCommit !== null && t.assigneeAgentId !== null && rt.activeForTask(t.id).length === 0 && hasValidReview(rt, t));
   const next = candidates[0];
   if (!next) return;
-  if (!store.getSettings().authority.autoIntegrateToDeptBranch) {
+  if (!store.getSettings().authority.autoIntegrateToForewrightBranch) {
     rt.notifyCto(`integration-disabled:${next.id}:${next.candidateCommit}`, `${next.shortId} passed review, but integration into ${INTEGRATION_BRANCH} is turned off in the authority settings, so it waits.`);
     return;
   }
@@ -49,7 +49,7 @@ export function integrateNext(rt: ProjectRuntime): void {
       store.completeTask(next.id, next.generation);
       rt.publish();
     } catch (err) {
-      if (!(err instanceof DeptError)) throw err;
+      if (!(err instanceof ForewrightError)) throw err;
       rt.reportInternalError(`completing ${next.shortId}`, err);
     }
     return;
@@ -94,7 +94,7 @@ async function integrate(rt: ProjectRuntime, task: Task): Promise<void> {
     git(wt, ["reset", "--hard"]);
     git(wt, ["checkout", "--detach", old]);
     if (!conflicted) {
-      throw new DeptError("integration_merge_failed", `Merging ${task.shortId} failed: ${truncate((merge.stderr || merge.stdout).trim(), 400)}`, { taskId: task.id });
+      throw new ForewrightError("integration_merge_failed", `Merging ${task.shortId} failed: ${truncate((merge.stderr || merge.stdout).trim(), 400)}`, { taskId: task.id });
     }
     store.recordEvent("task.integration_conflict", "task", task.id, { kind: "system" }, { candidate, base: old });
     if (!stillCurrent(rt, task)) return;
@@ -111,7 +111,7 @@ async function integrate(rt: ProjectRuntime, task: Task): Promise<void> {
 
   const mergeSha = gitLine(wt, ["rev-parse", "HEAD"]);
   const commands = [...task.verifyCommands, ...(store.getSetting<string[]>("projectChecks") ?? [])];
-  const extraEnv = { PORT: String(taskPort(task.shortId)), DEPT_TASK_TMP: path.join(wt, ".dept-tmp") };
+  const extraEnv = { PORT: String(taskPort(task.shortId)), FOREWRIGHT_TASK_TMP: path.join(wt, ".forewright-tmp") };
   mkdirSync(logsDir(rt.projectId), { recursive: true });
   const results: Array<{ result: CheckResult; logFile: string }> = [];
   let allPassed = true;

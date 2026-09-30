@@ -35,7 +35,7 @@ const AUTH_FILES = ["oauth_creds.json", "google_account_id", "google_accounts.js
 const CLI_AUTH_FILES = ["antigravity-oauth-token", "installation_id"] as const;
 
 export interface AntigravityAdapterOptions {
-  deptHome: string;
+  forewrightHome: string;
   runsDir?: string;
   allowApiBilling?: boolean;
   binary?: string;
@@ -103,8 +103,8 @@ function linkInto(target: string, source: string): void {
 }
 
 /** Path of the shared state store that keeps conversations between runs. */
-export function agyStateDir(deptHome: string): string {
-  return path.join(deptHome, "provider-homes", "antigravity", "state");
+export function agyStateDir(forewrightHome: string): string {
+  return path.join(forewrightHome, "provider-homes", "antigravity", "state");
 }
 
 export function requireAgyLogin(realHome: string): void {
@@ -120,10 +120,10 @@ export interface PreparedHome {
   secrets: string[];
 }
 
-/** Builds <parent>/home with linked auth, shared conversation state and dept-owned settings. */
+/** Builds <parent>/home with linked auth, shared conversation state and forewright-owned settings. */
 export function prepareAgyHome(opts: {
   parent: string;
-  deptHome: string;
+  forewrightHome: string;
   realHome: string;
   settings: AgySettings;
   mcpServers?: RunRequest["mcpServers"];
@@ -136,13 +136,13 @@ export function prepareAgyHome(opts: {
   fs.mkdirSync(cli, { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.join(gemini, "config"), { recursive: true, mode: 0o700 });
   // On a home without this marker agy runs a one-time migration that replaces config/mcp_config.json
-  // with an empty file (seen in agy's log: "Migration marker ... does not exist"), so dept's MCP
-  // servers would silently disappear. The home is dept-built, so there is nothing to migrate.
+  // with an empty file (seen in agy's log: "Migration marker ... does not exist"), so Forewright's MCP
+  // servers would silently disappear. The home is forewright-built, so there is nothing to migrate.
   fs.writeFileSync(path.join(gemini, "config", ".migrated"), "", { mode: 0o600 });
   const realGemini = path.join(opts.realHome, ".gemini");
   for (const f of AUTH_FILES) linkInto(path.join(gemini, f), path.join(realGemini, f));
   for (const f of CLI_AUTH_FILES) linkInto(path.join(cli, f), path.join(realGemini, "antigravity-cli", f));
-  const state = agyStateDir(opts.deptHome);
+  const state = agyStateDir(opts.forewrightHome);
   for (const d of SHARED_STATE_DIRS) {
     const shared = path.join(state, d);
     fs.mkdirSync(shared, { recursive: true, mode: 0o700 });
@@ -196,7 +196,7 @@ export function buildAntigravityArgs(req: RunRequest): string[] {
     throw new ProviderError("Prompt is too large to pass to agy as an argument", { bytes: Buffer.byteLength(prompt), limit: MAX_PROMPT_ARG_BYTES });
   }
   const args = ["--output-format", "stream-json", "--disable-slash-commands", "--sandbox"];
-  // dept enforces timeoutMs itself; agy's own limit is a little later so dept's message wins.
+  // Forewright enforces timeoutMs itself; agy's own limit is a little later so Forewright's message wins.
   args.push("--print-timeout", `${Math.ceil(req.timeoutMs / 1000) + 30}s`);
   if (req.model) args.push("--model", req.model);
   if (req.resumeSessionId) args.push("--conversation", req.resumeSessionId);
@@ -267,7 +267,7 @@ export class AntigravityAdapter implements ProviderAdapter {
     health.binaryPath = bin;
     let probeDir: string | null = null;
     try {
-      const parent = path.join(this.opts.deptHome, "provider-homes", "antigravity", "probe");
+      const parent = path.join(this.opts.forewrightHome, "provider-homes", "antigravity", "probe");
       fs.rmSync(parent, { recursive: true, force: true });
       fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
       probeDir = parent;
@@ -280,7 +280,7 @@ export class AntigravityAdapter implements ProviderAdapter {
         return health;
       }
       const prepared = prepareAgyHome({
-        parent, deptHome: this.opts.deptHome, realHome: this.realHome,
+        parent, forewrightHome: this.opts.forewrightHome, realHome: this.realHome,
         settings: agySettings("read_only", os.tmpdir(), [], this.opts.allowApiBilling ?? false),
       });
       const { env } = this.runEnv(prepared.home, {});
@@ -323,14 +323,14 @@ export class AntigravityAdapter implements ProviderAdapter {
     if (isApiBilledAuthType(declared) && !this.opts.allowApiBilling) {
       return failedHandle(req, "Antigravity uses an API key backend and API billing is not enabled for this project", `selectedAuthType=${declared}`);
     }
-    const runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "dept-agy-run-"));
+    const runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "forewright-agy-run-"));
     fs.chmodSync(runDir, 0o700);
     let prepared: PreparedHome;
     let args: string[];
     try {
       args = buildAntigravityArgs(req);
       prepared = prepareAgyHome({
-        parent: runDir, deptHome: this.opts.deptHome, realHome: this.realHome,
+        parent: runDir, forewrightHome: this.opts.forewrightHome, realHome: this.realHome,
         settings: agySettings(req.permission, realDir(req.cwd), (req.mcpServers ?? []).map((s) => s.name), this.opts.allowApiBilling ?? false),
         ...(req.mcpServers ? { mcpServers: req.mcpServers } : {}),
       });
@@ -536,7 +536,7 @@ export class AntigravityStreamParser implements EngineParser {
     const failureText =
       this.status !== null && this.status !== "SUCCESS" && this.status !== "WAITING" && this.status !== "RUNNING" && this.status !== "INVALID"
         ? (this.resultError ?? `agy run ended with status ${this.status}`)
-        : unsafe ? "agy reported the always-proceed permission mode, which dept never allows" : null;
+        : unsafe ? "agy reported the always-proceed permission mode, which Forewright never allows" : null;
     const outcome = decideOutcome({
       req: this.req, exit, completed: this.completed && !unsafe, failureText,
       quotaSignal: false, retryAfterHint: null, stderrTail: this.stderr.value,

@@ -131,10 +131,10 @@ export function launchRun(rt: ProjectRuntime, spec: RunSpec): ActiveRun {
     adapter.capabilities.coordinationTools === "mcp"
       ? [
           {
-            name: "dept",
+            name: "forewright",
             command: process.execPath,
             args: [rt.deps.bridgeEntry, "mcp-bridge"],
-            env: { DEPT_SOCKET: rt.deps.socketPath, DEPT_AGENT_TOKEN: token },
+            env: { FOREWRIGHT_SOCKET: rt.deps.socketPath, FOREWRIGHT_AGENT_TOKEN: token },
           },
         ]
       : [];

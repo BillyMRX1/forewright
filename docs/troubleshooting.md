@@ -1,29 +1,29 @@
 # Troubleshooting
 
-Paths below assume the default data directory, `~/Library/Application Support/dept`. Set `DEPT_HOME` to change it.
+Paths below assume the default data directory, `~/Library/Application Support/forewright`. Set `FOREWRIGHT_HOME` to change it.
 
 ## The service does not start
 
-`dept` prints "The dept service did not start" with a log path.
+`forewright` prints "The Forewright service did not start" with a log path.
 
-1. Read the log: `tail -50 "$HOME/Library/Application Support/dept/daemon.log"`.
-2. Run it in the foreground to see errors directly: `dept serve`.
-3. Run `dept doctor` to check Node version, data directory permissions and provider binaries.
-4. A leftover `dept.sock` can remain after a crash. If no `dept serve` is running (`pgrep -fl "main.js serve"`) and the service refuses to start because of it, remove the file and try again. If one is running, stop it first.
-5. If you installed the launchd service, check `dept service status`. `dept service uninstall` removes it.
+1. Read the log: `tail -50 "$HOME/Library/Application Support/forewright/daemon.log"`.
+2. Run it in the foreground to see errors directly: `forewright serve`.
+3. Run `forewright doctor` to check Node version, data directory permissions and provider binaries.
+4. A leftover `forewright.sock` can remain after a crash. If no `forewright serve` is running (`pgrep -fl "main.js serve"`) and the service refuses to start because of it, remove the file and try again. If one is running, stop it first.
+5. If you installed the launchd service, check `forewright service status`. `forewright service uninstall` removes it.
 
 ## Socket permission errors
 
-The data directory must be mode 0700, and `dept.sock` and `client.token` mode 0600, owned by you.
+The data directory must be mode 0700, and `forewright.sock` and `client.token` mode 0600, owned by you.
 
 ```
-ls -ld "$HOME/Library/Application Support/dept"
-ls -l  "$HOME/Library/Application Support/dept"
-chmod 700 "$HOME/Library/Application Support/dept"
-chmod 600 "$HOME/Library/Application Support/dept/client.token"
+ls -ld "$HOME/Library/Application Support/forewright"
+ls -l  "$HOME/Library/Application Support/forewright"
+chmod 700 "$HOME/Library/Application Support/forewright"
+chmod 600 "$HOME/Library/Application Support/forewright/client.token"
 ```
 
-"The client token was rejected" means the token file changed since the client read it. Quit the screen and start `dept` again. If `DEPT_HOME` differs between the service and the client, they look at different sockets: check the environment of the launchd plist against your shell.
+"The client token was rejected" means the token file changed since the client read it. Quit the screen and start `forewright` again. If `FOREWRIGHT_HOME` differs between the service and the client, they look at different sockets: check the environment of the launchd plist against your shell.
 
 ## A provider is not logged in
 
@@ -32,7 +32,7 @@ Settings (`8`) shows the state per engine. Log in with the provider's own tool, 
 - Claude Code: run `claude` once and complete login.
 - Codex: run `codex login`.
 
-`dept` never reads or stores provider credentials. Where a login state cannot be checked, Settings says "unknown" rather than guessing.
+`forewright` never reads or stores provider credentials. Where a login state cannot be checked, Settings says "unknown" rather than guessing.
 
 ## Work is waiting on quota
 
@@ -52,7 +52,7 @@ Task work lives in `projects/<id>/worktrees/<task>-g<generation>` on a branch na
 ```
 cd path/to/your/repo
 git worktree list
-git log --oneline dept/integration
+git log --oneline forewright/integration
 git worktree prune          # after deleting a worktree folder by hand
 ```
 
@@ -69,3 +69,7 @@ To take work out of a worktree by hand, commit or copy from it and then `git wor
 - Under 80 columns the tab bar shortens and Tasks shows a list. Under 24 rows the header shrinks to one line.
 - If the terminal was left in an odd state after a crash, run `reset`.
 - `e` shows technical details of the last error.
+
+## Coming from the old name (dept)
+
+Forewright was called dept before. On first start it moves the old data folder (`.../dept`) to `.../forewright` and renames a project's `.dept/` marker to `.forewright/`, keeping the same project id. If both the old and the new folder exist, the new one is used and the old one is left untouched. Existing integration branches in old projects keep their `dept/...` names; new work uses `forewright/...`, and the old branches can be deleted by hand once you no longer need them. Rename the environment variables `DEPT_*` to `FOREWRIGHT_*`.

@@ -26,7 +26,7 @@ function bashRules(cmds: string[]): string[] {
   return cmds.flatMap((c) => [`Bash(${c})`, `Bash(${c} *)`]);
 }
 
-// Tools of the MCP servers dept supplies for this run are always allowed: the
+// Tools of the MCP servers Forewright supplies for this run are always allowed: the
 // daemon scopes them per agent token and authorizes every call itself. Under
 // dontAsk/acceptEdits an unlisted MCP tool is silently denied.
 export function permissionArgs(profile: PermissionProfile, mcpServerNames: readonly string[] = []): string[] {
@@ -134,7 +134,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     let runDir: string | null = null;
     const mcpSecrets: string[] = [];
     if (req.mcpServers && req.mcpServers.length > 0) {
-      runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "dept-claude-run-"));
+      runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "forewright-claude-run-"));
       fs.chmodSync(runDir, 0o700);
       mcpFile = path.join(runDir, "mcp.json");
       const servers: Record<string, unknown> = {};

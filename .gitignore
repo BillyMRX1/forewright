@@ -1,4 +1,4 @@
 node_modules/
 dist/
-.dept-test-*/
+.forewright-test-*/
 *.log

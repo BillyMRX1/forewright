@@ -48,7 +48,7 @@ function treeHash(dir: string): string {
 }
 
 function adapter(dir: string, bin: string, home: string, extra: { allowApiBilling?: boolean } = {}) {
-  return new AntigravityAdapter({ deptHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV, realHome: home, ...extra });
+  return new AntigravityAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV, realHome: home, ...extra });
 }
 
 /** Makes the fake binary also dump the env, settings and MCP config of the run home. */
@@ -110,11 +110,11 @@ test("antigravity: settings per profile are narrow and never always-proceed", ()
   assert.equal(ro.toolPermission, "request-review");
   assert.ok(ro.permissions.deny.includes("write_file(*)") && ro.permissions.deny.includes("command(*)"));
   assert.deepEqual(ro.permissions.allow, []);
-  const co = agySettings("coordinator", "/w", ["dept"], false);
-  assert.deepEqual(co.permissions.allow, ["mcp(dept/*)"]);
+  const co = agySettings("coordinator", "/w", ["forewright"], false);
+  assert.deepEqual(co.permissions.allow, ["mcp(forewright/*)"]);
   assert.ok(co.permissions.deny.includes("command(*)"));
-  const ww = agySettings("workspace_write", "/w", ["dept"], false);
-  assert.ok(ww.permissions.allow.includes("mcp(dept/*)") && ww.permissions.allow.includes("command(git commit)") && ww.permissions.allow.includes("command(ls)"));
+  const ww = agySettings("workspace_write", "/w", ["forewright"], false);
+  assert.ok(ww.permissions.allow.includes("mcp(forewright/*)") && ww.permissions.allow.includes("command(git commit)") && ww.permissions.allow.includes("command(ls)"));
   assert.ok(ww.permissions.deny.includes("command(git push)") && ww.permissions.deny.includes("command(sudo)") && !ww.permissions.deny.includes("command(*)"));
   assert.ok(!ww.permissions.allow.includes("command(*)") && !ww.permissions.allow.includes("read_file(*)") && !ww.permissions.allow.includes("mcp(*)"));
   for (const s of [ro, co, ww]) {
@@ -127,20 +127,20 @@ test("antigravity: settings per profile are narrow and never always-proceed", ()
   assert.equal(agySettings("read_only", "/w", [], true).useG1Credits, true, "credit overflow only when API billing is allowed");
 });
 
-test("antigravity: private home has linked (not copied) auth, shared state, dept-owned settings; the user's files are untouched", async () => {
+test("antigravity: private home has linked (not copied) auth, shared state, forewright-owned settings; the user's files are untouched", async () => {
   const dir = tmpDir();
   const home = fakeRealHome();
   const before = treeHash(home);
   const { bin } = fakeBinary(dir, "agy", { stdoutLines: [] });
   recordRun(bin, dir);
-  await adapter(dir, bin, home).start(baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "dept", command: "node", args: ["bridge.js"], env: { DEPT_AGENT_TOKEN: "tok-123456789" } }] }), () => {}).done;
+  await adapter(dir, bin, home).start(baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }), () => {}).done;
   const runHome = fs.readFileSync(path.join(dir, "home.txt"), "utf8").trim();
   assert.notEqual(runHome, home);
   assert.match(fs.readFileSync(path.join(dir, "link.txt"), "utf8"), /^l.*oauth_creds\.json -> /, "credential is a symlink");
   const settings = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8")) as ReturnType<typeof agySettings>;
   const docs = path.join(fs.realpathSync(dir), path.basename(path.dirname(runHome)), "home", ".gemini", "antigravity-cli", "mcp");
   assert.equal(settings.permissions.allow.length, 2);
-  assert.equal(settings.permissions.allow[0], "mcp(dept/*)");
+  assert.equal(settings.permissions.allow[0], "mcp(forewright/*)");
   assert.equal(settings.permissions.allow[1], `read_file(${docs})`, "only the MCP tool docs directory is readable outside the workspace");
   assert.ok(settings.permissions.deny.includes("write_file(*)"));
   assert.equal(treeHash(home), before, "real ~/.gemini is unchanged");
@@ -153,15 +153,15 @@ test("antigravity: MCP servers go into a per-run 0600 config file, never argv; e
   const { bin, argvFile } = fakeBinary(dir, "agy", { stdoutLines: [] });
   recordRun(bin, dir);
   await adapter(dir, bin, fakeRealHome()).start(
-    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "dept", command: "node", args: ["bridge.js"], env: { DEPT_AGENT_TOKEN: "tok-123456789" } }] }),
+    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }),
     () => {},
   ).done;
   assert.ok(!argvOf(argvFile).join(" ").includes("tok-123456789"), "secret must not appear in argv");
   assert.match(fs.readFileSync(path.join(dir, "mcp-mode.txt"), "utf8"), /^-rw-------/);
-  assert.ok(fs.existsSync(path.join(dir, "migrated.txt")), "the migration marker exists so agy keeps dept's mcp_config.json");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp.json"), "utf8")), { mcpServers: { dept: { command: "node", args: ["bridge.js"], env: { DEPT_AGENT_TOKEN: "tok-123456789" } } } });
+  assert.ok(fs.existsSync(path.join(dir, "migrated.txt")), "the migration marker exists so agy keeps Forewright's mcp_config.json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } } } });
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
-  assert.ok(env.includes("DEPT_AGENT_TOKEN=tok-123456789"));
+  assert.ok(env.includes("FOREWRIGHT_AGENT_TOKEN=tok-123456789"));
   assert.ok(env.includes("AGY_CLI_DISABLE_AUTO_UPDATE=1"));
   assert.ok(!env.includes("GEMINI_API_KEY") && !env.includes("ANTHROPIC_API_KEY") && !env.includes("AGY_LLM_GATEWAY_API_KEY"));
   assert.ok(!env.includes(`HOME=${os.homedir()}\n`), "HOME points at the private home");
@@ -346,7 +346,7 @@ test("antigravity: probe never runs the CLI without login files and reports plai
   assert.equal(health.authenticated, false);
   assert.match(health.problems.join(" "), /not logged in/);
   assert.equal(fs.existsSync(argvFile), false, "no login flow is ever started by a probe");
-  const none = await new AntigravityAdapter({ deptHome: dir, baseEnv: { PATH: "/nonexistent" }, realHome: tmpDir() }).probe();
+  const none = await new AntigravityAdapter({ forewrightHome: dir, baseEnv: { PATH: "/nonexistent" }, realHome: tmpDir() }).probe();
   assert.equal(none.binaryPath, null);
   assert.match(none.problems.join(" "), /not found on PATH/);
 });
@@ -360,7 +360,7 @@ test("antigravity: probe flags an API key backed setup", async () => {
 });
 
 test("antigravity: capabilities are honest about system prompt, instruction files and sandboxed commands", () => {
-  const a = new AntigravityAdapter({ deptHome: tmpDir() });
+  const a = new AntigravityAdapter({ forewrightHome: tmpDir() });
   assert.equal(a.engine, "antigravity");
   assert.equal(a.capabilities.resume, true);
   const notes = a.capabilities.notes.join("\n");

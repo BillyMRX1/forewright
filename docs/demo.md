@@ -7,19 +7,19 @@ A reproducible walkthrough with a tiny disposable product, including a restart c
 ```
 cd path/to/agentic-department
 npm install && npm run build && npm link
-mkdir -p /tmp/dept-demo && cd /tmp/dept-demo
+mkdir -p /tmp/forewright-demo && cd /tmp/forewright-demo
 git init && git commit --allow-empty -m "start"
 ```
 
 Use a throwaway data directory so the demo leaves nothing behind:
 
 ```
-export DEPT_HOME=/tmp/dept-demo-home
+export FOREWRIGHT_HOME=/tmp/forewright-demo-home
 ```
 
 ## Steps
 
-1. Run `dept`. Press `y` on the welcome screen to create the workspace.
+1. Run `forewright`. Press `y` on the welcome screen to create the workspace.
 2. Press `2` and paste the brief from `examples/tip-calculator/BRIEF.md`.
 3. Wait for "CTO is thinking" to finish. A PRD revision appears with status `proposed`. Press `Esc`, then `D` to read it, then `A` and `y` to approve.
 4. Press `3`. Tasks appear in Planned and Ready, then move to Working as agents pick them up. Press `Enter` on a task to see its dependencies and acceptance checks.
@@ -31,9 +31,9 @@ export DEPT_HOME=/tmp/dept-demo-home
 ## Restart continuity check
 
 1. While at least one task is Working, press `q`. The screen closes and says the service keeps running.
-2. Run `pgrep -fl "serve"` to confirm the service is still up, and run `dept` again in the same folder. The same project, PRD, tasks and messages are there, and the working task is still progressing.
-3. Stop the service: press `Ctrl+C` if you ran `dept serve` in the foreground, or `pkill -f "cli/main.js serve"` for the background one. Run `dept` again. It restarts the service, which reconciles unfinished runs (a run whose process is gone is marked and retried, never silently counted as done).
-4. Type half a message in the CTO box, press `Esc`, `3`, then `q`, run `dept`, press `2`. The draft is restored.
+2. Run `pgrep -fl "serve"` to confirm the service is still up, and run `forewright` again in the same folder. The same project, PRD, tasks and messages are there, and the working task is still progressing.
+3. Stop the service: press `Ctrl+C` if you ran `forewright serve` in the foreground, or `pkill -f "cli/main.js serve"` for the background one. Run `forewright` again. It restarts the service, which reconciles unfinished runs (a run whose process is gone is marked and retried, never silently counted as done).
+4. Type half a message in the CTO box, press `Esc`, `3`, then `q`, run `forewright`, press `2`. The draft is restored.
 
 ## Pause, stop, resume
 
@@ -45,5 +45,5 @@ export DEPT_HOME=/tmp/dept-demo-home
 
 ```
 pkill -f "cli/main.js serve"
-rm -rf /tmp/dept-demo /tmp/dept-demo-home
+rm -rf /tmp/forewright-demo /tmp/forewright-demo-home
 ```

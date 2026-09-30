@@ -67,7 +67,7 @@ exit ${opts.exitCode ?? 0}
   const baseEnv = { PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: home, OPENAI_API_KEY: "sk-openai-should-not-leak", GEMINI_API_KEY: "gem-should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000" };
   return {
     dir, home, bin, argvFile, envFile, cfgFile, ranFile,
-    adapter: (over = {}) => new OpencodeAdapter({ deptHome: dir, binary: bin, runsDir: dir, baseEnv, realHome: home, ...over }),
+    adapter: (over = {}) => new OpencodeAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv, realHome: home, ...over }),
   };
 }
 
@@ -106,22 +106,22 @@ test("opencode: readAuthTypes returns only the type field, never credential valu
 });
 
 test("opencode: isolated home links auth.json (never copies), owns every XDG dir, and refuses to clobber a real file", () => {
-  const dept = tmpDir();
+  const forewright = tmpDir();
   const real = path.join(tmpDir(), "auth.json");
   fs.writeFileSync(real, "{}");
-  const iso = isolatedOpencodeHome(dept, real);
+  const iso = isolatedOpencodeHome(forewright, real);
   assert.ok(fs.lstatSync(iso.authLink).isSymbolicLink());
   assert.equal(fs.readlinkSync(iso.authLink), real);
   for (const k of ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]) {
-    assert.ok((iso.env[k] ?? "").startsWith(path.join(dept, "provider-homes", "opencode")), k);
+    assert.ok((iso.env[k] ?? "").startsWith(path.join(forewright, "provider-homes", "opencode")), k);
   }
   assert.equal(iso.env["OPENCODE_DISABLE_CLAUDE_CODE"], "1");
   assert.equal(iso.env["OPENCODE_DISABLE_AUTOUPDATE"], "1");
   // no credentials: the link is removed, the isolated install still exists
-  const none = isolatedOpencodeHome(dept, path.join(tmpDir(), "none.json"));
+  const none = isolatedOpencodeHome(forewright, path.join(tmpDir(), "none.json"));
   assert.equal(fs.existsSync(none.authLink), false);
   fs.writeFileSync(none.authLink, "copied secret");
-  assert.throws(() => isolatedOpencodeHome(dept, real), /Refusing to replace/);
+  assert.throws(() => isolatedOpencodeHome(forewright, real), /Refusing to replace/);
 });
 
 // ---------------------------------------------------------------- argv, config, env
@@ -134,21 +134,21 @@ test("opencode: exact argv, resume, and never an auto-approve flag", () => {
 });
 
 test("opencode: permission profiles refuse by default (ask, auto-rejected) and allow narrowly", () => {
-  const ro = buildPermission("read_only", ["dept"]) as Record<string, unknown>;
+  const ro = buildPermission("read_only", ["forewright"]) as Record<string, unknown>;
   assert.equal(ro["*"], "ask");
   assert.equal(Object.keys(ro)[0], "*", "the catch-all comes first so later rules win");
   assert.equal(ro["edit"], "ask");
   assert.equal(ro["bash"], "ask");
   // a whole-tool deny would drop the tool from the model request, which OpenCode's free tier rejects
   for (const p of ["read_only", "workspace_write", "coordinator"] as PermissionProfile[]) {
-    const perm = buildPermission(p, ["dept"]);
+    const perm = buildPermission(p, ["forewright"]);
     for (const [k, v] of Object.entries(perm)) if (k !== "external_directory" && k !== "doom_loop") assert.notEqual(v, "deny", `${p}.${k}`);
   }
-  assert.equal(ro["dept_*"], "allow");
+  assert.equal(ro["forewright_*"], "allow");
   assert.equal(ro["external_directory"], "deny");
   assert.equal(ro["webfetch"], "ask");
-  assert.deepEqual(buildPermission("coordinator", ["dept"]), ro);
-  const ww = buildPermission("workspace_write", ["dept"]) as Record<string, unknown>;
+  assert.deepEqual(buildPermission("coordinator", ["forewright"]), ro);
+  const ww = buildPermission("workspace_write", ["forewright"]) as Record<string, unknown>;
   assert.equal(ww["edit"], "allow");
   const bash = ww["bash"] as Record<string, string>;
   assert.equal(bash["*"], "ask");
@@ -156,18 +156,18 @@ test("opencode: permission profiles refuse by default (ask, auto-rejected) and a
   assert.equal(bash["git commit *"], "allow");
   assert.equal(bash["git push *"], "deny");
   assert.ok(Object.keys(bash).indexOf("git push *") > Object.keys(bash).indexOf("npm *"), "denies come after allows");
-  assert.equal(ww["dept_*"], "allow");
+  assert.equal(ww["forewright_*"], "allow");
   for (const p of ["read_only", "workspace_write", "coordinator"] as PermissionProfile[]) {
-    assert.ok(!("dept_*" in buildPermission(p, [])), p);
+    assert.ok(!("forewright_*" in buildPermission(p, [])), p);
   }
   assert.equal(mcpToolPrefix("my.server"), "my_server_*");
 });
 
 test("opencode: mcp config references env vars, so the secret is in neither argv nor the config text", () => {
-  const cfg = buildOpencodeConfig({ permission: "coordinator", mcpServers: [{ name: "dept", command: "node", args: ["/b/bridge.js", "--x"], env: { DEPT_AGENT_TOKEN: "tok-123456789", DEPT_SOCKET: "/s.sock" } }] }) as Record<string, any>;
-  assert.deepEqual(cfg["mcp"]["dept"], {
+  const cfg = buildOpencodeConfig({ permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["/b/bridge.js", "--x"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789", FOREWRIGHT_SOCKET: "/s.sock" } }] }) as Record<string, any>;
+  assert.deepEqual(cfg["mcp"]["forewright"], {
     type: "local", command: ["node", "/b/bridge.js", "--x"], enabled: true, timeout: 30000,
-    environment: { DEPT_AGENT_TOKEN: "{env:DEPT_AGENT_TOKEN}", DEPT_SOCKET: "{env:DEPT_SOCKET}" },
+    environment: { FOREWRIGHT_AGENT_TOKEN: "{env:FOREWRIGHT_AGENT_TOKEN}", FOREWRIGHT_SOCKET: "{env:FOREWRIGHT_SOCKET}" },
   });
   assert.deepEqual(cfg["plugin"], []);
   assert.equal(cfg["share"], "disabled");
@@ -186,7 +186,7 @@ test("opencode: end to end with a fake binary: success, isolation env, config in
   const out = await r.adapter().start(
     baseRequest({
       cwd: r.dir, model: MODEL, permission: "workspace_write", systemPrompt: "SYS",
-      mcpServers: [{ name: "dept", command: "node", args: ["bridge.js"], env: { DEPT_AGENT_TOKEN: "tok-123456789" } }],
+      mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }],
     }),
     (e) => events.push(e),
   ).done;
@@ -204,14 +204,14 @@ test("opencode: end to end with a fake binary: success, isolation env, config in
   assert.equal(argv[argv.indexOf("--") + 1], "SYS", "system prompt is prepended to the message");
 
   const env = fs.readFileSync(r.envFile, "utf8");
-  assert.ok(env.includes("DEPT_AGENT_TOKEN=tok-123456789"));
+  assert.ok(env.includes("FOREWRIGHT_AGENT_TOKEN=tok-123456789"));
   assert.ok(env.includes(`XDG_DATA_HOME=${path.join(r.dir, "provider-homes", "opencode", "data")}`));
   assert.ok(env.includes("OPENCODE_DISABLE_CLAUDE_CODE=1") && env.includes("OPENCODE_DISABLE_PROJECT_CONFIG=1"));
   assert.ok(!/OPENAI_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY/.test(env));
   const cfg = JSON.parse(fs.readFileSync(r.cfgFile, "utf8")) as Record<string, any>;
-  assert.equal(cfg["permission"]["dept_*"], "allow");
+  assert.equal(cfg["permission"]["forewright_*"], "allow");
   assert.equal(cfg["permission"]["edit"], "allow");
-  assert.equal(cfg["mcp"]["dept"]["environment"]["DEPT_AGENT_TOKEN"], "{env:DEPT_AGENT_TOKEN}");
+  assert.equal(cfg["mcp"]["forewright"]["environment"]["FOREWRIGHT_AGENT_TOKEN"], "{env:FOREWRIGHT_AGENT_TOKEN}");
   assert.ok(!JSON.stringify(cfg).includes("tok-123456789"));
   assert.deepEqual(fs.readdirSync(r.home, { recursive: true }).sort(), before, "the user's home is not written to");
 });
@@ -310,7 +310,7 @@ test("opencode: probe lists only permitted models, reports billing mode and name
   const all = await rig().adapter({ allowApiBilling: true }).probe();
   assert.ok(all.models.includes("google/gemini-x"));
   assert.equal(all.authMethod, "mixed (free, api_key)");
-  const missing = await new OpencodeAdapter({ deptHome: tmpDir(), baseEnv: { PATH: "/nonexistent" } }).probe();
+  const missing = await new OpencodeAdapter({ forewrightHome: tmpDir(), baseEnv: { PATH: "/nonexistent" } }).probe();
   assert.equal(missing.binaryPath, null);
   assert.match(missing.problems.join(" "), /not found on PATH/);
 });
@@ -329,7 +329,7 @@ test("opencode parser: an MCP tool call is reported and the final step text is t
   const { events, outcome } = drive((emit) => new OpencodeJsonParser({ runId: "run-1", generation: 3 }, emit, []), fixture("opencode-tool-mcp.jsonl"));
   assert.equal(outcome.state, "succeeded");
   assert.equal(outcome.finalText, "DONE");
-  assert.ok(events.some((e) => e.kind === "tool_call" && e.toolName === "dept_get_project_state"));
+  assert.ok(events.some((e) => e.kind === "tool_call" && e.toolName === "forewright_get_project_state"));
   assert.ok(events.some((e) => e.kind === "tool_result" && /tasks/.test(e.text ?? "")));
   assert.deepEqual(outcome.usage, { inputTokens: 220, outputTokens: 11, costUsd: 0 });
 });
@@ -340,7 +340,7 @@ test("opencode parser: a denied tool action is a diagnostic and is named in the 
   assert.equal(diag.length, 1);
   assert.equal(outcome.state, "succeeded");
   assert.match(outcome.finalText ?? "", /I could not run that command\./);
-  assert.match(outcome.finalText ?? "", /\[dept\] 1 action was denied by the permission profile and did not run: bash was denied/);
+  assert.match(outcome.finalText ?? "", /\[forewright\] 1 action was denied by the permission profile and did not run: bash was denied/);
 });
 
 test("opencode parser: the plain auto-reject line counts as a denial only when no tool error carried it", () => {
@@ -403,7 +403,7 @@ test("opencode: exit codes through a real child process, and stderr is kept for 
 
 test("opencode: a missing binary is a failed outcome, not a crash", async () => {
   const dir = tmpDir();
-  const a = new OpencodeAdapter({ deptHome: dir, binary: path.join(dir, "nope"), baseEnv: { PATH: "/usr/bin:/bin" }, realHome: dir });
+  const a = new OpencodeAdapter({ forewrightHome: dir, binary: path.join(dir, "nope"), baseEnv: { PATH: "/usr/bin:/bin" }, realHome: dir });
   const o = await a.start(baseRequest({ cwd: dir, model: MODEL }), () => {}).done;
   assert.equal(o.state, "failed");
 });
@@ -438,7 +438,7 @@ test("opencode: secrets in events and outcomes are redacted", async () => {
   const r = rig({ stdoutLines: ['{"type":"error","sessionID":"s","error":{"name":"E","data":{"message":"bad token tok-123456789 here"}}}'], exitCode: 1 });
   const events: NormalizedEvent[] = [];
   const o = await r.adapter().start(
-    baseRequest({ cwd: r.dir, model: MODEL, mcpServers: [{ name: "dept", command: "node", args: [], env: { DEPT_AGENT_TOKEN: "tok-123456789" } }] }),
+    baseRequest({ cwd: r.dir, model: MODEL, mcpServers: [{ name: "forewright", command: "node", args: [], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }),
     (e) => events.push(e),
   ).done;
   assert.ok(!JSON.stringify(events).includes("tok-123456789"));

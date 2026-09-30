@@ -60,11 +60,11 @@ test("happy path: message, PRD via the real MCP bridge, approval, tasks, work, r
     assert.notEqual(review.reviewerAgentId, t1.assigneeAgentId, "the reviewer is not the author");
     assert.equal(review.commitSha, t1.candidateCommit);
 
-    assert.equal(gitIn(h.repo, "show", "dept/integration:hello.txt"), "hello");
-    assert.equal(gitIn(h.repo, "show", "dept/integration:second.txt"), "second");
+    assert.equal(gitIn(h.repo, "show", "forewright/integration:hello.txt"), "hello");
+    assert.equal(gitIn(h.repo, "show", "forewright/integration:second.txt"), "second");
     // the user's own branch is untouched until Billy approves a merge
     assert.equal(gitIn(h.repo, "log", "--oneline", "main").split("\n").length, 1);
-    const merges = gitIn(h.repo, "log", "--merges", "--format=%s", "dept/integration");
+    const merges = gitIn(h.repo, "log", "--merges", "--format=%s", "forewright/integration");
     assert.match(merges, /Integrate T-1: Write hello\.txt/);
     assert.equal(h.rt.store.getAgent(t1.assigneeAgentId!).lifecycle, "idle");
   } finally {

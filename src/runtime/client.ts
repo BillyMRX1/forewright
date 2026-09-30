@@ -1,4 +1,4 @@
-// Minimal JSON-RPC client for the daemon socket. Used by `dept status`, tests
+// Minimal JSON-RPC client for the daemon socket. Used by `forewright status`, tests
 // and tooling; the TUI has its own client built on protocol.ts.
 import net from "node:net";
 import { readFileSync } from "node:fs";
@@ -29,7 +29,7 @@ export class RpcClient {
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.onData(chunk));
     socket.on("close", () => {
-      for (const p of this.pending.values()) p.reject(new RpcClientError(-1, "The connection to the dept service closed.", null));
+      for (const p of this.pending.values()) p.reject(new RpcClientError(-1, "The connection to the Forewright service closed.", null));
       this.pending.clear();
     });
     socket.on("error", () => {
@@ -41,7 +41,7 @@ export class RpcClient {
     const socket = net.connect(socketPath);
     await new Promise<void>((resolve, reject) => {
       socket.once("connect", resolve);
-      socket.once("error", (err) => reject(new RpcClientError(-1, `Cannot reach the dept service at ${socketPath}: ${err.message}`, null)));
+      socket.once("error", (err) => reject(new RpcClientError(-1, `Cannot reach the Forewright service at ${socketPath}: ${err.message}`, null)));
     });
     const client = new RpcClient(socket);
     await client.requestRaw("hello", { token, protocolVersion: PROTOCOL_VERSION });

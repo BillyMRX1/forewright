@@ -4,7 +4,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import net from "node:net";
-import { DeptError } from "../core/errors.js";
+import { ForewrightError } from "../core/errors.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import { PROTOCOL_VERSION, type ErrorData } from "./protocol.js";
 import type { Notifier, ProjectRuntime } from "./project-runtime.js";
@@ -58,7 +58,7 @@ export function toErrorData(err: unknown): { rpcCode: number; message: string; d
   if (err instanceof RpcError) {
     return { rpcCode: err.rpcCode, message: err.message, data: { code: err.code, plain: err.message, detail: err.details ? redactSecrets(JSON.stringify(err.details)) : null } };
   }
-  if (err instanceof DeptError) {
+  if (err instanceof ForewrightError) {
     return {
       rpcCode: -32000,
       message: err.message,
@@ -69,7 +69,7 @@ export function toErrorData(err: unknown): { rpcCode: number; message: string; d
   return {
     rpcCode: -32603,
     message: "Internal error",
-    data: { code: "internal", plain: "Something went wrong inside the dept service.", detail: truncate(redactSecrets(err instanceof Error ? (err.stack ?? message) : message), 2000) },
+    data: { code: "internal", plain: "Something went wrong inside the Forewright service.", detail: truncate(redactSecrets(err instanceof Error ? (err.stack ?? message) : message), 2000) },
   };
 }
 
@@ -145,7 +145,7 @@ export class RpcServer {
     const id = typeof msg.id === "number" || typeof msg.id === "string" ? msg.id : null;
     const respondError = (err: unknown) => {
       const e = toErrorData(err);
-      if (!(err instanceof DeptError)) process.stderr.write(`[dept] request failed: ${e.data.detail ?? e.message}\n`);
+      if (!(err instanceof ForewrightError)) process.stderr.write(`[forewright] request failed: ${e.data.detail ?? e.message}\n`);
       conn.write({ jsonrpc: "2.0", id, error: { code: e.rpcCode, message: e.message, data: e.data } });
     };
     if (typeof msg.method !== "string") {
@@ -166,7 +166,7 @@ export class RpcServer {
             return;
           }
           if (params["protocolVersion"] !== undefined && params["protocolVersion"] !== PROTOCOL_VERSION) {
-            respondError(new RpcError(-32002, "protocol_mismatch", `This service speaks protocol ${PROTOCOL_VERSION}; the client sent ${String(params["protocolVersion"])}. Update dept.`));
+            respondError(new RpcError(-32002, "protocol_mismatch", `This service speaks protocol ${PROTOCOL_VERSION}; the client sent ${String(params["protocolVersion"])}. Update forewright.`));
             conn.socket.end();
             return;
           }

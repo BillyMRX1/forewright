@@ -39,7 +39,7 @@ const DEV_COMMANDS = [
 const DENIED_SHELL = ["git push", "sudo", "rm -rf", "rm -fr", "curl", "wget"];
 
 // Built-in tools that are never offered: network fetching and sub-agents (they
-// share the credit limit and would fan out work dept cannot see).
+// share the credit limit and would fan out work Forewright cannot see).
 const ALWAYS_EXCLUDED = ["web_fetch", "fetch_copilot_cli_documentation", "task", "read_agent", "write_agent", "list_agents"];
 // Shell and file-mutating built-ins, hidden from read-only profiles.
 const MUTATING_TOOLS = ["bash", "read_bash", "stop_bash", "list_bash", "create", "edit"];
@@ -50,7 +50,7 @@ const shellRules = (cmds: readonly string[]): string[] => cmds.flatMap((c) => [`
 const flagEach = (flag: string, values: readonly string[]): string[] => values.map((v) => `${flag}=${v}`);
 
 /**
- * Permission flags for a profile. Tools of the MCP servers dept supplies are
+ * Permission flags for a profile. Tools of the MCP servers Forewright supplies are
  * always allowed (the daemon scopes and authorizes every call itself); nothing
  * else is ever pre-approved beyond the profile. There is no blanket allow flag.
  */
@@ -76,8 +76,8 @@ export function permissionArgs(profile: PermissionProfile, mcpServerNames: reado
 }
 
 export interface CopilotAdapterOptions {
-  /** dept home: the isolated Copilot home lives in <deptHome>/provider-homes/copilot. */
-  deptHome: string;
+  /** Forewright home: the isolated Copilot home lives in <forewrightHome>/provider-homes/copilot. */
+  forewrightHome: string;
   /** Directory for per-run temp files (mcp config). */
   runsDir?: string;
   /** Only the project policy may enable this. */
@@ -89,8 +89,8 @@ export interface CopilotAdapterOptions {
   baseEnv?: NodeJS.ProcessEnv;
 }
 
-export function isolatedCopilotHome(deptHome: string): string {
-  const dir = path.join(deptHome, "provider-homes", "copilot");
+export function isolatedCopilotHome(forewrightHome: string): string {
+  const dir = path.join(forewrightHome, "provider-homes", "copilot");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
@@ -146,7 +146,7 @@ export class CopilotAdapter implements ProviderAdapter {
     }
     health.binaryPath = bin;
     try {
-      const home = isolatedCopilotHome(this.opts.deptHome);
+      const home = isolatedCopilotHome(this.opts.forewrightHome);
       const { env } = childEnv(this.baseEnv, { COPILOT_HOME: home, COPILOT_AUTO_UPDATE: "false" }, { allowApiBilling: this.opts.allowApiBilling ?? false });
       const v = await capture(bin, ["--version"], env);
       health.version = /\d+\.\d+\.\d+\S*/.exec(v.stdout)?.[0]?.replace(/\.$/, "") ?? null;
@@ -174,7 +174,7 @@ export class CopilotAdapter implements ProviderAdapter {
         throw new ProviderError(`Refusing to pass ${k} to Copilot: a custom model provider bypasses the Copilot subscription and needs API billing enabled`, { name: k });
       }
     }
-    const home = isolatedCopilotHome(this.opts.deptHome);
+    const home = isolatedCopilotHome(this.opts.forewrightHome);
     // MCP server env (the agent token) goes only into the 0600 config file, never into
     // Copilot's own environment (its shell tool would inherit it) and never into argv.
     const { env, secrets } = childEnv(
@@ -187,7 +187,7 @@ export class CopilotAdapter implements ProviderAdapter {
     let runDir: string | null = null;
     const mcpSecrets: string[] = [];
     if (req.mcpServers && req.mcpServers.length > 0) {
-      runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "dept-copilot-run-"));
+      runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "forewright-copilot-run-"));
       fs.chmodSync(runDir, 0o700);
       mcpFile = path.join(runDir, "mcp.json");
       const servers: Record<string, unknown> = {};
@@ -413,7 +413,7 @@ export class CopilotJsonParser implements EngineParser {
     }
     if (this.denied.length > 0) {
       const list = this.denied.map((d) => `- ${d}`).join("\n");
-      const note = `[dept note: ${this.denied.length} tool action(s) were denied by the permission profile and did not run]\n${list}`;
+      const note = `[forewright note: ${this.denied.length} tool action(s) were denied by the permission profile and did not run]\n${list}`;
       this.finalText = this.finalText ? `${this.finalText}\n\n${note}` : note;
     }
     const outcome = decideOutcome({

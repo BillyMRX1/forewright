@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { truncate } from "../core/safety.js";
 import { GitError } from "./errors.js";
 
-const IDENTITY = ["-c", "user.name=dept", "-c", "user.email=dept@localhost", "-c", "commit.gpgsign=false"];
+const IDENTITY = ["-c", "user.name=forewright", "-c", "user.email=forewright@localhost", "-c", "commit.gpgsign=false"];
 
 export interface GitResult {
   code: number;

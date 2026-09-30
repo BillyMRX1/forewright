@@ -9,7 +9,7 @@ import { DaemonLockError } from "./errors.js";
 import { FakeAdapter } from "../providers/fake.js";
 import { RpcClient } from "./client.js";
 import { startDaemon } from "./daemon.js";
-import type { DeptEvent } from "../core/store.js";
+import type { ForewrightEvent } from "../core/store.js";
 import { addTask, call, gitIn, hire, isCto, isWork, poke, rule, seedPrd, settle, sleep, startHarness, taskOf, toolResults, waitFor, ctoRequests, workRequests } from "./test-harness.js";
 
 test("reconnect: a client that disconnected gets exactly the events it missed, once, then live events", async () => {
@@ -17,10 +17,10 @@ test("reconnect: a client that disconnected gets exactly the events it missed, o
   try {
     const sock = socketPathFor(h.home);
     const token = RpcClient.tokenFrom(path.join(h.home, "client.token"));
-    const seen1: DeptEvent[] = [];
+    const seen1: ForewrightEvent[] = [];
     const a = await RpcClient.connect(sock, token);
     a.onNotification((n) => {
-      if (n.method === "event") seen1.push((n.params as { event: DeptEvent }).event);
+      if (n.method === "event") seen1.push((n.params as { event: ForewrightEvent }).event);
     });
     const sub = await a.request("subscribe", { projectId: h.projectId, sinceSeq: 0 });
     await h.client.request("cto.send", { projectId: h.projectId, body: "before disconnect" });
@@ -35,9 +35,9 @@ test("reconnect: a client that disconnected gets exactly the events it missed, o
     await settle(h);
 
     const b = await RpcClient.connect(sock, token);
-    const replayed: DeptEvent[] = [];
+    const replayed: ForewrightEvent[] = [];
     b.onNotification((n) => {
-      if (n.method === "event") replayed.push((n.params as { event: DeptEvent }).event);
+      if (n.method === "event") replayed.push((n.params as { event: ForewrightEvent }).event);
     });
     const resub = await b.request("subscribe", { projectId: h.projectId, sinceSeq: lastSeen });
     const expected = h.rt.store.recentEvents(lastSeen, 100_000).filter((e) => e.seq <= resub.lastSeq);
@@ -64,8 +64,8 @@ test("single instance: a second daemon on the same home refuses to start; a stal
   const h = await startHarness();
   const home = h.home;
   try {
-    await assert.rejects(() => startDaemon({ deptHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true }), DaemonLockError);
-    const pidFile = path.join(home, "dept.pid");
+    await assert.rejects(() => startDaemon({ forewrightHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true }), DaemonLockError);
+    const pidFile = path.join(home, "forewright.pid");
     const rec = JSON.parse(readFileSync(pidFile, "utf8")) as { pid: number; startedAt: string };
     assert.equal(rec.pid, process.pid);
     assert.ok(rec.startedAt.length > 5, "the OS start time is recorded");
@@ -79,7 +79,7 @@ test("single instance: a second daemon on the same home refuses to start; a stal
     await new Promise<void>((r) => stale.listen(socketPathFor(home), r));
     await new Promise<void>((r) => stale.close(() => r()));
     writeFileSync(socketPathFor(home), "");
-    const again = await startDaemon({ deptHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true });
+    const again = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true });
     const c = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     assert.equal((await c.request("providers.health", {})).providers.length, 1);
     c.close();
@@ -87,7 +87,7 @@ test("single instance: a second daemon on the same home refuses to start; a stal
 
     // a pid that is alive but whose start time differs is not "our" daemon: also stale
     writeFileSync(pidFile, JSON.stringify({ pid: process.pid, startedAt: "Mon Jan  1 00:00:00 2001" }));
-    const third = await startDaemon({ deptHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true });
+    const third = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true });
     await third.close();
   } finally {
     await h.close().catch(() => {});
@@ -127,7 +127,7 @@ test("non-git project: the first code task creates a git_init decision and tasks
   }
 });
 
-test("non-git project: approving git_init runs git init and an initial commit, keeps .dept out of it, and unblocks the tasks", async () => {
+test("non-git project: approving git_init runs git init and an initial commit, keeps .forewright out of it, and unblocks the tasks", async () => {
   const adapter = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", writeFiles: { "made.txt": "made\n" } })] });
   const h = await startHarness({ adapter, git: false });
   try {
@@ -137,10 +137,10 @@ test("non-git project: approving git_init runs git init and an initial commit, k
     const decision = await waitFor(() => h.rt.store.listDecisions({ status: "open" }).find((d) => d.kind === "git_init"), "the decision");
     await h.client.request("decisions.resolve", { projectId: h.projectId, decisionId: decision.id, option: "init" });
     assert.equal(gitIn(h.repo, "log", "--format=%s"), "Initial commit");
-    assert.equal(gitIn(h.repo, "ls-files"), "README.md", ".dept/ is not committed");
+    assert.equal(gitIn(h.repo, "ls-files"), "README.md", ".forewright/ is not committed");
     await waitFor(() => taskOf(h, "T-1").state === "review", "the task to run after git was initialized");
     assert.equal(taskOf(h, "T-1").blockReason, null);
-    assert.equal(execFileSync("git", ["rev-parse", "--verify", "dept/integration"], { cwd: h.repo, encoding: "utf8" }).trim().length, 40);
+    assert.equal(execFileSync("git", ["rev-parse", "--verify", "forewright/integration"], { cwd: h.repo, encoding: "utf8" }).trim().length, 40);
     assert.equal(h.rt.store.getProject().isGit, true);
   } finally {
     await h.close();

@@ -63,12 +63,12 @@ export interface WorkerPromptInput {
 
 export function workerSystemPrompt(): string {
   return [
-    "You are a member of a small software team coordinated by dept. Work only inside the current directory (your task workspace, a git worktree).",
+    "You are a member of a small software team coordinated by forewright. Work only inside the current directory (your task workspace, a git worktree).",
     "Rules:",
     "- Edit files and run local commands only inside the current directory. Never push, publish, deploy or touch other folders.",
     "- When you are done, commit your work with git (plain commit message), then call the submit_work tool with a short summary. Submitting is a statement, not acceptance: an independent review and integration checks follow.",
     "- If you are blocked or a decision is needed, call send_message to the CTO. Do not guess about scope.",
-    "- Use the PORT and DEPT_TASK_TMP environment variables for any server or scratch files.",
+    "- Use the PORT and FOREWRIGHT_TASK_TMP environment variables for any server or scratch files.",
     `- ${UNTRUSTED_NOTE}`,
   ].join("\n");
 }

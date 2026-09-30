@@ -6,18 +6,18 @@ import { AntigravityAdapter } from "./antigravity.js";
 import { baseRequest, tmpDir } from "./test-helpers.js";
 
 // Real Antigravity call: one tiny prompt that also proves a command on the worker allowlist runs.
-//   DEPT_LIVE=1 node --test dist/providers/live-antigravity.test.js
-const live = process.env["DEPT_LIVE"] === "1";
-const skip = live ? false : "live provider test skipped: set DEPT_LIVE=1 to run it";
+//   FOREWRIGHT_LIVE=1 node --test dist/providers/live-antigravity.test.js
+const live = process.env["FOREWRIGHT_LIVE"] === "1";
+const skip = live ? false : "live provider test skipped: set FOREWRIGHT_LIVE=1 to run it";
 
 test("live antigravity: a tiny worker run edits a file, runs an allowed command and succeeds", { skip, timeout: 240_000 }, async () => {
-  const deptHome = tmpDir("dept-live-home-");
-  const adapter = new AntigravityAdapter({ deptHome, runsDir: deptHome });
+  const forewrightHome = tmpDir("forewright-live-home-");
+  const adapter = new AntigravityAdapter({ forewrightHome, runsDir: forewrightHome });
   const health = await adapter.probe();
   assert.equal(health.authenticated, true, JSON.stringify(health.problems));
   assert.equal(health.authMethod, "subscription");
   assert.ok(health.models.length > 0);
-  const cwd = tmpDir("dept-live-cwd-");
+  const cwd = tmpDir("forewright-live-cwd-");
   const out = await adapter.start(baseRequest({
     cwd, permission: "workspace_write", timeoutMs: 200_000, model: "gemini-3.8-flash-low",
     prompt: "Create a file named note.txt containing exactly the word hi. Then run the shell command `echo LIVE_OK` and reply with its exact output and nothing else.",

@@ -4,14 +4,14 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { ClientError, DeptClient } from "./client.js";
+import { ClientError, ForewrightClient } from "./client.js";
 
 let dir: string;
 let server: net.Server;
 let conns: net.Socket[];
 let subscribes: Array<{ projectId: string; sinceSeq: number }>;
 let hellos: number;
-let clients: DeptClient[];
+let clients: ForewrightClient[];
 
 function startServer(sock: string): Promise<void> {
   return new Promise((resolve) => {
@@ -51,7 +51,7 @@ function startServer(sock: string): Promise<void> {
 }
 
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "dept-test-"));
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "forewright-test-"));
   conns = [];
   subscribes = [];
   hellos = 0;
@@ -65,8 +65,8 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-const mk = (opts: ConstructorParameters<typeof DeptClient>[0] = {}) => {
-  const c = new DeptClient({ socketPath: path.join(dir, "s.sock"), tokenPath: path.join(dir, "client.token"), backoffStartMs: 20, backoffMaxMs: 80, ...opts });
+const mk = (opts: ConstructorParameters<typeof ForewrightClient>[0] = {}) => {
+  const c = new ForewrightClient({ socketPath: path.join(dir, "s.sock"), tokenPath: path.join(dir, "client.token"), backoffStartMs: 20, backoffMaxMs: 80, ...opts });
   clients.push(c);
   return c;
 };
@@ -79,7 +79,7 @@ async function until(cond: () => boolean, ms = 3000): Promise<void> {
   }
 }
 
-describe("DeptClient", () => {
+describe("ForewrightClient", () => {
   it("performs hello and request/response", async () => {
     await startServer(path.join(dir, "s.sock"));
     const c = mk();

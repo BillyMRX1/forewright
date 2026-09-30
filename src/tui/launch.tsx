@@ -1,9 +1,9 @@
-// Entry used by `dept` (wired in src/cli/main.ts): start the service if needed,
+// Entry used by `forewright` (wired in src/cli/main.ts): start the service if needed,
 // open or create the project for a folder, then show the interface.
 
 import { render } from "ink";
-import { DeptError } from "../core/errors.js";
-import { DeptClient, ensureDaemon } from "./client.js";
+import { ForewrightError } from "../core/errors.js";
+import { ForewrightClient, ensureDaemon } from "./client.js";
 import { App } from "./app.js";
 import { Welcome } from "./welcome.js";
 import type { ProjectOpenResult } from "../runtime/protocol.js";
@@ -31,12 +31,12 @@ async function askToCreate(root: string, isGit: boolean): Promise<boolean> {
 
 export async function launchTui({ cwd }: { cwd: string }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new DeptError("not_interactive", "dept needs an interactive terminal. Use `dept serve` to run the service without a screen.");
+    throw new ForewrightError("not_interactive", "Forewright needs an interactive terminal. Use `forewright serve` to run the service without a screen.");
   }
   const started = await ensureDaemon();
   if (started.message) process.stdout.write(`${started.message}\n`);
 
-  const client = new DeptClient();
+  const client = new ForewrightClient();
   await client.connect();
   try {
     let open: ProjectOpenResult = await client.call("projects.open", { cwd });
@@ -48,7 +48,7 @@ export async function launchTui({ cwd }: { cwd: string }): Promise<void> {
       }
       open = await client.call("projects.init", { cwd });
     }
-    if (open.status !== "found") throw new DeptError("project_open_failed", "The dept service could not open this folder as a project.", { cwd });
+    if (open.status !== "found") throw new ForewrightError("project_open_failed", "The Forewright service could not open this folder as a project.", { cwd });
     if (open.moved) process.stdout.write(`Project folder moved: ${open.moved.from} -> ${open.moved.to}. Updated.\n`);
 
     process.stdout.write(ALT_ON);
@@ -59,7 +59,7 @@ export async function launchTui({ cwd }: { cwd: string }): Promise<void> {
     } finally {
       process.stdout.write(ALT_OFF);
     }
-    process.stdout.write(quit ? "Closed the dept screen. The dept service keeps running in the background.\n" : "The dept service keeps running in the background.\n");
+    process.stdout.write(quit ? "Closed the Forewright screen. The Forewright service keeps running in the background.\n" : "The Forewright service keeps running in the background.\n");
   } finally {
     client.close();
   }

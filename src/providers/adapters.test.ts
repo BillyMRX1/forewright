@@ -94,14 +94,14 @@ test("claude: mcp servers go through a 0600 temp file that is deleted after the 
   const script = fs.readFileSync(bin, "utf8").replace("exit 0", `f=$(grep -A1 -- '--mcp-config' '${argvFile}' | tail -1); ls -l "$f" > '${dir}/mode.txt'; cp "$f" '${dir}/mcp-copy.json'; env > '${dir}/env.txt'; exit 0`);
   fs.writeFileSync(bin, script, { mode: 0o755 });
   await claudeAdapter(dir, bin).start(
-    baseRequest({ cwd: dir, mcpServers: [{ name: "dept", command: "node", args: ["bridge.js"], env: { DEPT_TOKEN: "tok-123456789" } }] }),
+    baseRequest({ cwd: dir, mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } }] }),
     () => {},
   ).done;
   const argv = argvOf(argvFile);
   const mcpPath = argv[argv.indexOf("--mcp-config") + 1] as string;
   assert.ok(argv.includes("--strict-mcp-config"));
   assert.match(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"), /^-rw-------/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), { mcpServers: { dept: { command: "node", args: ["bridge.js"], env: { DEPT_TOKEN: "tok-123456789" } } } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } } } });
   assert.equal(fs.existsSync(mcpPath), false);
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
   assert.ok(!env.includes("ANTHROPIC_API_KEY"));
@@ -119,7 +119,7 @@ test("claude: prompt is delivered on stdin", async () => {
 // ---------------------------------------------------------------- codex
 
 function codexAdapter(dir: string, bin: string, home: string) {
-  return new CodexAdapter({ deptHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV, realHome: home });
+  return new CodexAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV, realHome: home });
 }
 
 test("codex: success end to end needs turn.completed, exit 0 and a non-empty last message", async () => {
@@ -168,7 +168,7 @@ test("codex: resume form, mcp via -c with secrets in env not argv, CODEX_HOME is
   await codexAdapter(dir, bin, home).start(
     baseRequest({
       cwd: dir, resumeSessionId: "th-9", systemPrompt: "SYS",
-      mcpServers: [{ name: "dept", command: "node", args: ["/b/bridge.js", "--x"], env: { DEPT_TOKEN: "tok-123456789" } }],
+      mcpServers: [{ name: "forewright", command: "node", args: ["/b/bridge.js", "--x"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } }],
     }),
     () => {},
   ).done;
@@ -176,15 +176,15 @@ test("codex: resume form, mcp via -c with secrets in env not argv, CODEX_HOME is
   assert.deepEqual(argv.slice(0, 2), ["exec", "resume"]);
   assert.ok(!argv.includes("-s") && !argv.includes("-C"));
   assert.ok(argv.includes('sandbox_mode="read-only"'));
-  assert.ok(argv.includes('mcp_servers.dept.command="node"'));
-  assert.ok(argv.includes('mcp_servers.dept.args=["/b/bridge.js", "--x"]'));
-  assert.ok(argv.includes('mcp_servers.dept.env_vars=["DEPT_TOKEN"]'));
-  assert.ok(argv.includes('mcp_servers.dept.default_tools_approval_mode="approve"'));
+  assert.ok(argv.includes('mcp_servers.forewright.command="node"'));
+  assert.ok(argv.includes('mcp_servers.forewright.args=["/b/bridge.js", "--x"]'));
+  assert.ok(argv.includes('mcp_servers.forewright.env_vars=["FOREWRIGHT_TOKEN"]'));
+  assert.ok(argv.includes('mcp_servers.forewright.default_tools_approval_mode="approve"'));
   assert.ok(!argv.join(" ").includes("tok-123456789"), "secret must not appear in argv");
   // the argv file is newline-separated, so the multi-line prompt spans three entries
   assert.deepEqual(argv.slice(-5), ["--", "th-9", "SYS", "", baseRequest().prompt]);
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
-  assert.ok(env.includes("DEPT_TOKEN=tok-123456789"));
+  assert.ok(env.includes("FOREWRIGHT_TOKEN=tok-123456789"));
   assert.ok(env.includes(`CODEX_HOME=${path.join(dir, "provider-homes", "codex")}`));
   assert.ok(!env.includes("ANTHROPIC_API_KEY"));
 });
@@ -218,7 +218,7 @@ test("isolatedCodexHome links auth.json (never copies), owns config.toml, and re
 test("claude: every permission profile allows the tools of supplied MCP servers", async () => {
   const { permissionArgs } = await import("./claude.js");
   for (const p of ["read_only", "workspace_write", "coordinator"] as PermissionProfile[]) {
-    assert.ok(permissionArgs(p, ["dept"]).includes("mcp__dept__*"), p);
-    assert.ok(!permissionArgs(p).includes("mcp__dept__*"), p);
+    assert.ok(permissionArgs(p, ["forewright"]).includes("mcp__forewright__*"), p);
+    assert.ok(!permissionArgs(p).includes("mcp__forewright__*"), p);
   }
 });

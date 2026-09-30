@@ -1,7 +1,7 @@
-// Every failure the core raises is a DeptError with a stable code, a plain
+// Every failure the core raises is a ForewrightError with a stable code, a plain
 // language message, and technical specifics in `details`.
 
-export class DeptError extends Error {
+export class ForewrightError extends Error {
   readonly code: string;
   readonly details?: Record<string, unknown>;
   constructor(code: string, message: string, details?: Record<string, unknown>) {
@@ -12,31 +12,31 @@ export class DeptError extends Error {
   }
 }
 
-export class NotFoundError extends DeptError {
+export class NotFoundError extends ForewrightError {
   constructor(what: string, details?: Record<string, unknown>) {
     super("not_found", `${what} was not found.`, details);
   }
 }
 
-export class InvalidTransitionError extends DeptError {
+export class InvalidTransitionError extends ForewrightError {
   constructor(from: string, to: string, details?: Record<string, unknown>) {
     super("invalid_transition", `A task cannot move from ${from} to ${to}.`, { from, to, ...details });
   }
 }
 
-export class DependencyCycleError extends DeptError {
+export class DependencyCycleError extends ForewrightError {
   constructor(path: string[]) {
     super("dependency_cycle", `These tasks depend on each other in a loop: ${path.join(" -> ")}.`, { path });
   }
 }
 
-export class LeaseConflictError extends DeptError {
+export class LeaseConflictError extends ForewrightError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("lease_conflict", message, details);
   }
 }
 
-export class StaleGenerationError extends DeptError {
+export class StaleGenerationError extends ForewrightError {
   constructor(taskId: string, given: number, current: number) {
     super("stale_generation", "This result came from an older attempt at the task and was rejected.", {
       taskId,
@@ -46,19 +46,19 @@ export class StaleGenerationError extends DeptError {
   }
 }
 
-export class PolicyDeniedError extends DeptError {
+export class PolicyDeniedError extends ForewrightError {
   constructor(reason: string, details?: Record<string, unknown>) {
     super("policy_denied", reason, details);
   }
 }
 
-export class StaleApprovalError extends DeptError {
+export class StaleApprovalError extends ForewrightError {
   constructor(reason: string, details?: Record<string, unknown>) {
     super("stale_approval", reason, details);
   }
 }
 
-export class DuplicateProjectIdError extends DeptError {
+export class DuplicateProjectIdError extends ForewrightError {
   constructor(projectId: string, knownPath: string, otherPath: string) {
     super(
       "duplicate_project_id",
@@ -68,13 +68,13 @@ export class DuplicateProjectIdError extends DeptError {
   }
 }
 
-export class ValidationError extends DeptError {
+export class ValidationError extends ForewrightError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("validation", message, details);
   }
 }
 
-export class MigrationError extends DeptError {
+export class MigrationError extends ForewrightError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("migration", message, details);
   }

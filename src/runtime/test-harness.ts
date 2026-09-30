@@ -10,7 +10,7 @@ import { FakeAdapter, type FakeRule, type FakeScript } from "../providers/fake.j
 import { RpcClient } from "./client.js";
 import { type Daemon, startDaemon } from "./daemon.js";
 import type { ProjectRuntime } from "./project-runtime.js";
-import type { DeptEvent } from "../core/store.js";
+import type { ForewrightEvent } from "../core/store.js";
 import type { Agent, RequirementDoc, Task } from "../core/store.js";
 import type { AgentRole, PermissionProfile } from "../core/types.js";
 import { readFileSync } from "node:fs";
@@ -21,7 +21,7 @@ export function gitIn(cwd: string, ...args: string[]): string {
 }
 
 export function makeRepo(opts: { git?: boolean } = {}): string {
-  const dir = tempDir("dept-repo-");
+  const dir = tempDir("forewright-repo-");
   if (opts.git !== false) {
     gitIn(dir, "init", "-q", "-b", "main");
     writeFileSync(path.join(dir, "README.md"), "# demo\n");
@@ -54,12 +54,12 @@ export interface HarnessOptions {
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
-  const home = opts.home ?? tempDir("dept-home-");
+  const home = opts.home ?? tempDir("forewright-home-");
   const repo = opts.repo ?? makeRepo(opts.git === undefined ? {} : { git: opts.git });
   const adapter = opts.adapter ?? new FakeAdapter();
   const adapters = new Map<EngineId, ProviderAdapter>([["fake", adapter]]);
   const daemon = await startDaemon({
-    deptHome: home,
+    forewrightHome: home,
     adapters,
     testMode: true,
     defaultCtoEngine: "fake",
@@ -107,7 +107,7 @@ export function rule(match: FakeRule["match"], script: FakeRule["script"]): Fake
 export const call = (name: string, args: Record<string, unknown>) => ({ name, args });
 
 /** All events of a type from the project's event table. */
-export function eventsOf(h: Harness, type: string): DeptEvent[] {
+export function eventsOf(h: Harness, type: string): ForewrightEvent[] {
   return h.rt.store.recentEvents(0, 100_000).filter((e) => e.type === type);
 }
 
@@ -201,7 +201,7 @@ export function toolResults(h: Harness, runId: string): LoggedToolResult[] {
   return out;
 }
 
-export const tokenOf = (req: RunRequest): string => req.mcpServers![0]!.env["DEPT_AGENT_TOKEN"]!;
+export const tokenOf = (req: RunRequest): string => req.mcpServers![0]!.env["FOREWRIGHT_AGENT_TOKEN"]!;
 
 /** The process group is gone: signalling it reports ESRCH (polled briefly, zombies are reaped asynchronously). */
 export async function assertGroupGone(pgid: number): Promise<void> {

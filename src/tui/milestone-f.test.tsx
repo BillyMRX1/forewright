@@ -10,7 +10,7 @@ import type { ToastKind } from "./toasts.js";
 const open: Harness[] = [];
 afterEach(() => {
   for (const h of open.splice(0)) h.unmount();
-  delete process.env["DEPT_ASCII"];
+  delete process.env["FOREWRIGHT_ASCII"];
 });
 
 async function mount(cols: number, rows: number, initialView = 0, api = new FakeClient(), toastMs?: Partial<Record<ToastKind, number>>) {
@@ -71,8 +71,8 @@ describe("agent strip", () => {
     assert.match(l[7]!, /and 4 more/);
   });
 
-  it("uses ASCII status symbols when DEPT_ASCII=1", async () => {
-    process.env["DEPT_ASCII"] = "1";
+  it("uses ASCII status symbols when FOREWRIGHT_ASCII=1", async () => {
+    process.env["FOREWRIGHT_ASCII"] = "1";
     const { h } = await mount(100, 30, 2);
     const l = lines(h);
     assert.match(l[3]!, /^! Ada/);

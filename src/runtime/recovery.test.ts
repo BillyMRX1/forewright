@@ -35,7 +35,7 @@ test("restart reconciliation: an orphaned owned run is terminated, marked uncert
     assert.equal(isOwnedAlive(proc), true, "the orphan is still alive after the crash");
 
     const adapter2 = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true })] });
-    second = await startDaemon({ deptHome: home, adapters: new Map([["fake", adapter2]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
+    second = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", adapter2]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
     const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     await client.request("projects.open", { cwd: repo });
     const rt2 = second.runtimes.get(h.projectId)!;
@@ -82,7 +82,7 @@ test("a run record that points at an alive process that is not ours is never sig
     store.markRunStarted(run.id, gen, { pid: bystander.pid!, pgid: bystander.pid!, processStartedAt: "Mon Jan  1 00:00:00 2001" });
     store.db.close();
 
-    second = await startDaemon({ deptHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
+    second = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
     const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     await client.request("projects.open", { cwd: repo });
     const rt2 = second.runtimes.get(h.projectId)!;

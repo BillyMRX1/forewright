@@ -342,12 +342,12 @@ describe("errors", () => {
 });
 
 describe("view frames at 100x30", () => {
-  it("renders each view (set DEPT_TUI_FRAMES=1 to print them)", async () => {
+  it("renders each view (set FOREWRIGHT_TUI_FRAMES=1 to print them)", async () => {
     for (let v = 0; v < 8; v++) {
       const { h } = await mount(100, 30, v);
       const f = h.frame();
       assert.ok(f.trim().length > 0);
-      if (process.env["DEPT_TUI_FRAMES"]) console.log(`\n===== ${VIEW_NAMES[v]} (100x30) =====\n${f}`);
+      if (process.env["FOREWRIGHT_TUI_FRAMES"]) console.log(`\n===== ${VIEW_NAMES[v]} (100x30) =====\n${f}`);
       h.unmount();
       open.pop();
     }

@@ -22,7 +22,7 @@ export const looksLikeSessionLoss = (text: string): boolean =>
 export function nameOfSender(rt: ProjectRuntime): (kind: Message["senderKind"], id: string | null) => string {
   return (kind, id) => {
     if (kind === "human") return "Billy";
-    if (kind === "system") return "dept";
+    if (kind === "system") return "forewright";
     try {
       return id ? rt.store.getAgent(id).name : "an agent";
     } catch {
@@ -107,7 +107,7 @@ export function startWork(rt: ProjectRuntime, task: Task, agent: Agent): void {
       instructions: readInstructionFiles([rt.root, ws.worktreePath], agent.engine),
     });
 
-    const tmp = path.join(ws.worktreePath, ".dept-tmp");
+    const tmp = path.join(ws.worktreePath, ".forewright-tmp");
     mkdirSync(tmp, { recursive: true });
     const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId).at(-1);
     const canResume = adapterFor(rt, agent).capabilities.resume && prior !== undefined && prior.engine === agent.engine && !(prior.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
@@ -122,11 +122,11 @@ export function startWork(rt: ProjectRuntime, task: Task, agent: Agent): void {
       scope: { kind: "work", taskId: task.id },
       env: {
         PORT: String(taskPort(task.shortId)),
-        DEPT_TASK_TMP: tmp,
+        FOREWRIGHT_TASK_TMP: tmp,
         GIT_AUTHOR_NAME: agent.name,
-        GIT_AUTHOR_EMAIL: "agent@dept.local",
+        GIT_AUTHOR_EMAIL: "agent@forewright.local",
         GIT_COMMITTER_NAME: agent.name,
-        GIT_COMMITTER_EMAIL: "agent@dept.local",
+        GIT_COMMITTER_EMAIL: "agent@forewright.local",
       },
       ...(canResume && prior?.providerSessionId ? { resumeSessionId: prior.providerSessionId } : {}),
       onOutcome: (a, outcome) => handleWorkOutcome(rt, a, outcome),
@@ -216,7 +216,7 @@ async function finishWork(rt: ProjectRuntime, a: ActiveRun): Promise<void> {
   }
 
   mkdirSync(logsDir(rt.projectId), { recursive: true });
-  const extraEnv = { PORT: String(taskPort(task.shortId)), DEPT_TASK_TMP: path.join(wt, ".dept-tmp") };
+  const extraEnv = { PORT: String(taskPort(task.shortId)), FOREWRIGHT_TASK_TMP: path.join(wt, ".forewright-tmp") };
   let n = 0;
   for (const command of task.verifyCommands) {
     n++;
