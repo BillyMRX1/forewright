@@ -109,7 +109,7 @@ test("directory links are symlinks where allowed", () => {
   const link = path.join(dir, "private", "state");
   const r = new LinkManager().linkDir(target, link);
   assert.ok(r.mode === "symlink" || r.mode === "junction");
-  assert.equal(fs.realpathSync(link), fs.realpathSync(target));
+  assert.equal(fs.realpathSync.native(link), fs.realpathSync.native(target));
 });
 
 for (const [name, ops] of [["symlink", real], ["hard link", noDevMode]] as const) {

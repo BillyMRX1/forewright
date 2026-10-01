@@ -32,7 +32,7 @@ test("restart reconciliation: an orphaned owned run is terminated, marked uncert
 
     h.daemon.crash(); // the child keeps running, its pipes belong to nobody
     h.client.close();
-    assert.equal(isOwnedAlive(proc), true, "the orphan is still alive after the crash");
+    assert.equal(await isOwnedAlive(proc), true, "the orphan is still alive after the crash");
 
     const adapter2 = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true })] });
     second = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", adapter2]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
@@ -40,7 +40,7 @@ test("restart reconciliation: an orphaned owned run is terminated, marked uncert
     await client.request("projects.open", { cwd: repo });
     const rt2 = second.runtimes.get(h.projectId)!;
 
-    assert.equal(isOwnedAlive(proc), false, "the orphan was terminated");
+    assert.equal(await isOwnedAlive(proc), false, "the orphan was terminated");
     await assertGroupGone(proc.pgid);
     const old = rt2.store.getRun(active.run.id);
     assert.equal(old.state, "uncertain");

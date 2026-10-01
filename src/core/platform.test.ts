@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { childEnv } from "../providers/process.js";
-import { envGet, isPipePath, splitHomeDrive, windowsPipeName, WINDOWS_ENV_NAMES } from "./platform.js";
+import { envGet, isPipePath, samePathString, splitHomeDrive, windowsPipeName, WINDOWS_ENV_NAMES } from "./platform.js";
 
 test("environment names are case-insensitive on Windows only", () => {
   assert.equal(envGet({ Path: "C:\\bin" }, "PATH", "win32"), "C:\\bin");
@@ -60,4 +60,10 @@ test("on Windows an API key is passed only with API billing enabled, and is a se
 test("on POSIX no Windows variable is passed", () => {
   const { env } = childEnv({ PATH: "/bin", SystemRoot: "/x", USERPROFILE: "/y", HOME: "/h" }, {}, { allowApiBilling: false, platform: "linux" });
   assert.deepEqual(Object.keys(env).sort(), ["HOME", "PATH", "TERM"]);
+});
+
+test("path strings compare case-insensitively on Windows only", () => {
+  assert.equal(samePathString("C:\\Users\\Me\\Repo", "c:\\users\\me\\repo", "win32"), true);
+  assert.equal(samePathString("/a/Repo", "/a/repo", "linux"), false);
+  assert.equal(samePathString("/a/repo", "/a/repo", "darwin"), true);
 });

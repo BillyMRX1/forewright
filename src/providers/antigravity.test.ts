@@ -142,7 +142,7 @@ test("antigravity: private home has linked (not copied) auth, shared state, fore
   // the credential is linked (symlink, or a hard link on Windows without Developer Mode), never a copy; the run's own view is recorded
   assert.equal(typeof JSON.parse(fs.readFileSync(path.join(dir, "linkkind.txt"), "utf8")).lstatLink, "boolean");
   const settings = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8")) as ReturnType<typeof agySettings>;
-  const docs = path.join(fs.realpathSync(dir), path.basename(path.dirname(runHome)), "home", ".gemini", "antigravity-cli", "mcp");
+  const docs = path.join(fs.realpathSync.native(dir), path.basename(path.dirname(runHome)), "home", ".gemini", "antigravity-cli", "mcp");
   assert.equal(settings.permissions.allow.length, 2);
   assert.equal(settings.permissions.allow[0], "mcp(forewright/*)");
   assert.equal(settings.permissions.allow[1], `read_file(${docs})`, "only the MCP tool docs directory is readable outside the workspace");
@@ -368,7 +368,7 @@ test("antigravity: capabilities are honest about system prompt, instruction file
   void exitOk;
 });
 
-test("antigravity: the private home links the real login keychain folder so macOS never shows Keychain Not Found", () => {
+test("antigravity: the private home links the real login keychain folder so macOS never shows Keychain Not Found", { skip: process.platform === "darwin" ? false : "the keychain link exists only on macOS" }, () => {
   const real = fakeRealHome();
   fs.mkdirSync(path.join(real, "Library", "Keychains"), { recursive: true });
   const parent = tmpDir();

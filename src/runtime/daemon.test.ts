@@ -60,7 +60,7 @@ test("reconnect: a client that disconnected gets exactly the events it missed, o
   }
 });
 
-test("single instance: a second daemon on the same home refuses to start; a stale lock and stale socket are taken over", async () => {
+test("single instance: a second daemon on the same home refuses to start; a stale lock (and, on POSIX, a stale socket file) is taken over", async () => {
   const h = await startHarness();
   const home = h.home;
   try {
@@ -75,10 +75,13 @@ test("single instance: a second daemon on the same home refuses to start; a stal
 
     // a crashed daemon: the pid is dead, and a stale socket file is left behind
     writeFileSync(pidFile, JSON.stringify({ pid: 999_999, startedAt: "Mon Jan  1 00:00:00 2001" }));
-    const stale = net.createServer();
-    await new Promise<void>((r) => stale.listen(socketPathFor(home), r));
-    await new Promise<void>((r) => stale.close(() => r()));
-    writeFileSync(socketPathFor(home), "");
+    if (process.platform !== "win32") {
+      // A unix socket leaves a file behind. A Windows named pipe vanishes with its process, so there is nothing stale to take over there.
+      const stale = net.createServer();
+      await new Promise<void>((r) => stale.listen(socketPathFor(home), r));
+      await new Promise<void>((r) => stale.close(() => r()));
+      writeFileSync(socketPathFor(home), "");
+    }
     const again = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true });
     const c = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
     assert.equal((await c.request("providers.health", {})).providers.length, 1);

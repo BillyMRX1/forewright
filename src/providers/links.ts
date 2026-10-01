@@ -233,7 +233,7 @@ export class LinkManager {
     const realMtime = real ? fs.statSync(target).mtimeMs : -Infinity;
     if (privMtime > realMtime) {
       // If the real file is itself a symlink (a managed dotfile), replace what it points at, not the symlink.
-      const dest = real ? fs.realpathSync(target) : target;
+      const dest = real ? fs.realpathSync.native(target) : target;
       const tmp = path.join(path.dirname(dest), `.${path.basename(dest)}.forewright-${randomBytes(6).toString("hex")}.tmp`);
       try {
         fs.writeFileSync(tmp, fs.readFileSync(linkPath), { mode: Number(priv.mode & 0o777n) || 0o600, flag: "wx" });

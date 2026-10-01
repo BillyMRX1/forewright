@@ -8,7 +8,7 @@ import type { EngineParser, ExitInfo } from "./runner.js";
 import { makeEmitter } from "./runner.js";
 
 export function tmpDir(prefix = "forewright-test-"): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 export function fixture(name: string): string[] {

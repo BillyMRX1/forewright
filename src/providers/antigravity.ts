@@ -196,7 +196,7 @@ function buildAgyHome(opts: AgyHomeOptions & { links: LinkManager }): PreparedHo
     // agy documents each MCP tool as a file in <home>/.gemini/antigravity-cli/mcp and the model reads it
     // with its file viewer before calling the tool. That directory is outside the workspace, so without
     // this rule the read is refused and the run does nothing (proven live). Only that directory is opened.
-    const mcpDocs = path.join(fs.realpathSync(cli), "mcp");
+    const mcpDocs = path.join(fs.realpathSync.native(cli), "mcp");
     const perms = opts.settings.permissions;
     settings["permissions"] = { ...perms, allow: [...perms.allow, `read_file(${mcpDocs})`] };
     settings["trustedWorkspaces"] = [...opts.settings.trustedWorkspaces, mcpDocs];
@@ -405,7 +405,7 @@ export class AntigravityAdapter implements ProviderAdapter {
       // agy's tool descriptions live in the private home, outside the workspace, and non-workspace reads
       // are refused even with a read_file rule. Adding just that directory to the workspace lets the model
       // read them (proven live). It holds only generated tool docs, never credentials.
-      const docs = path.join(fs.realpathSync(path.join(prepared.home, ".gemini", "antigravity-cli")), "mcp");
+      const docs = path.join(fs.realpathSync.native(path.join(prepared.home, ".gemini", "antigravity-cli")), "mcp");
       fs.mkdirSync(docs, { recursive: true, mode: 0o700 });
       args = ["--add-dir", docs, ...args];
     }
@@ -428,7 +428,7 @@ export class AntigravityAdapter implements ProviderAdapter {
 /** macOS temp dirs are symlinks (/var to /private/var) and agy reports real paths, so rules use real paths. */
 function realDir(dir: string): string {
   try {
-    return fs.realpathSync(dir);
+    return fs.realpathSync.native(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return dir; // the spawn will report the missing directory
     throw err;

@@ -57,12 +57,12 @@ test("fake: hang until cancelled resolves stopped and leaves no process behind",
   for (let i = 0; i < 100 && !h.process; i++) await new Promise((r) => setTimeout(r, 20));
   assert.ok(h.process);
   const proc = h.process;
-  assert.equal(isOwnedAlive(proc), true);
+  assert.equal(await isOwnedAlive(proc), true);
   await new Promise((r) => setTimeout(r, 200));
   await h.cancel("test stop", 200);
   const out = await h.done;
   assert.equal(out.state, "stopped");
-  assert.equal(isOwnedAlive(proc), false);
+  assert.equal(await isOwnedAlive(proc), false);
   assert.equal(treeGone(proc), true, "the whole tree is gone");
 });
 

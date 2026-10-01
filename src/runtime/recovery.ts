@@ -28,7 +28,7 @@ export async function reconcileOnOpen(rt: ProjectRuntime): Promise<void> {
         : null;
     let reason = RESTART_MESSAGE;
     let terminated = false;
-    if (proc && isOwnedAlive(proc)) {
+    if (proc && (await isOwnedAlive(proc))) {
       // We lost its pipes when the previous daemon died, so its result can never be read.
       await terminateGroup(proc, 2000);
       terminated = true;

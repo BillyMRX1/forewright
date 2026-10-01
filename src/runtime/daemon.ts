@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Clock, systemClock } from "../core/clock.js";
 import { DuplicateProjectIdError, NotFoundError } from "../core/errors.js";
+import { samePathString } from "../core/platform.js";
 import { initProject, openProject, readRegistry, resolveProject } from "../core/identity.js";
 import { ensureDir, socketPathFor } from "../core/paths.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
@@ -40,13 +41,13 @@ export function defaultBridgeEntry(): string {
   return fileURLToPath(new URL("../cli/main.js", import.meta.url));
 }
 
-function lockAlive(rec: LockRecord): boolean {
+async function lockAlive(rec: LockRecord): Promise<boolean> {
   try {
     process.kill(rec.pid, 0);
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM" ? processStartTime(rec.pid) === rec.startedAt : false;
+    return (err as NodeJS.ErrnoException).code === "EPERM" ? (await processStartTime(rec.pid)) === rec.startedAt : false;
   }
-  return processStartTime(rec.pid) === rec.startedAt; // pid reuse changes the start time
+  return (await processStartTime(rec.pid)) === rec.startedAt; // pid reuse changes the start time
 }
 
 export class Daemon {
@@ -124,7 +125,7 @@ export class Daemon {
 
   private async ensureRuntime(projectId: string, root: string, name: string, moved: { from: string; to: string } | null): Promise<ProjectRuntime> {
     const existing = this.runtimes.get(projectId);
-    if (existing && existing.root === root) return existing;
+    if (existing && samePathString(existing.root, root)) return existing;
     if (existing) {
       await existing.shutdown(); // the folder moved: reopen against the new path
       this.runtimes.delete(projectId);
@@ -208,9 +209,9 @@ export class Daemon {
   }
 }
 
-function acquireLock(home: string): string {
+async function acquireLock(home: string): Promise<string> {
   const file = path.join(home, "forewright.pid");
-  const mine: LockRecord = { pid: process.pid, startedAt: processStartTime(process.pid) };
+  const mine: LockRecord = { pid: process.pid, startedAt: await processStartTime(process.pid) };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(file, JSON.stringify(mine), { flag: "wx", mode: 0o600 });
@@ -224,7 +225,7 @@ function acquireLock(home: string): string {
     } catch {
       existing = null; // unreadable lock file: treat as stale
     }
-    if (existing && lockAlive(existing)) {
+    if (existing && (await lockAlive(existing))) {
       throw new DaemonLockError(`Another Forewright service is already running (pid ${existing.pid}). Stop it first, or use it.`, { pid: existing.pid, file });
     }
     unlinkSync(file); // stale lock from a crashed service: take over
@@ -244,7 +245,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // paths.ts reads FOREWRIGHT_HOME lazily, so the daemon's home has to be the process's home.
   process.env["FOREWRIGHT_HOME"] = opts.forewrightHome;
   ensureDir(opts.forewrightHome);
-  const pidFile = acquireLock(opts.forewrightHome);
+  const pidFile = await acquireLock(opts.forewrightHome);
   try {
     const token = ensureToken(opts.forewrightHome);
     const daemon = new Daemon(opts, token, pidFile);

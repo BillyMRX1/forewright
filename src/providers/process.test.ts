@@ -2,7 +2,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
-import { childEnv, defaultTreeBackend, isOwnedAlive, LineSplitter, processStartTime, spawnOwned, startTimeCommand, taskkillArgs, terminateGroup, windowsTreeBackend, type TreeBackend } from "./process.js";
+import { childEnv, defaultTreeBackend, isOwnedAlive, LineSplitter, processStartTime, readStartTime, spawnOwned, startTimeCommand, taskkillArgs, terminateGroup, windowsTreeBackend, type TreeBackend } from "./process.js";
 import { systemEnv } from "./test-helpers.js";
 import { EnvPolicyError } from "./errors.js";
 
@@ -44,7 +44,7 @@ async function waitDead(pid: number, ms = 5000): Promise<void> {
 test("terminateGroup ends a whole tree (child and grandchild) and leaves nothing alive", async () => {
   const { p, grandchild } = await spawnTree(true);
   assert.ok(grandchild > 0);
-  assert.equal(isOwnedAlive(p.owned), true);
+  assert.equal(await isOwnedAlive(p.owned), true);
   const result = await terminateGroup(p.owned, 300);
   // On POSIX a SIGTERM-ignoring tree is escalated to SIGKILL. On Windows the polite taskkill usually cannot end a console process, so it escalates too.
   assert.equal(result.terminated, true);
@@ -53,7 +53,7 @@ test("terminateGroup ends a whole tree (child and grandchild) and leaves nothing
   assert.equal(alive(p.owned.pid), false, "the child is really gone");
   await waitDead(grandchild);
   assert.equal(alive(grandchild), false, "the grandchild is really gone");
-  assert.equal(isOwnedAlive(p.owned), false);
+  assert.equal(await isOwnedAlive(p.owned), false);
 });
 
 test("terminateGroup without escalation when the tree exits on the polite request", { skip: process.platform === "win32" ? "taskkill without /F cannot end a console process, so Windows always escalates" : false }, async () => {
@@ -118,9 +118,9 @@ test("taskkillArgs refuses anything that is not a pid", () => {
 test("isOwnedAlive is false when the recorded start time differs (pid reuse)", async () => {
   const p = await spawnOwned(NODE, ["-e", "setInterval(() => {}, 1000)"], { cwd: CWD, env: ENV, stdin: "ignore" });
   try {
-    assert.equal(isOwnedAlive(p.owned), true);
-    assert.equal(isOwnedAlive({ ...p.owned, startedAt: "Mon Jan  1 00:00:00 2001" }), false);
-    if (process.platform !== "win32") assert.equal(isOwnedAlive({ ...p.owned, pgid: p.owned.pgid + 1 }), false);
+    assert.equal(await isOwnedAlive(p.owned), true);
+    assert.equal(await isOwnedAlive({ ...p.owned, startedAt: "Mon Jan  1 00:00:00 2001" }), false);
+    if (process.platform !== "win32") assert.equal(await isOwnedAlive({ ...p.owned, pgid: p.owned.pgid + 1 }), false);
   } finally {
     await terminateGroup(p.owned, 1000);
     await p.exited;
@@ -133,23 +133,55 @@ test("process start time: the command is `ps` on POSIX and PowerShell with an IS
   const win = startTimeCommand(42, "win32", { SystemRoot: "C:\\Windows" });
   assert.equal(win.bin, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
   assert.deepEqual(win.args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
-  assert.equal(win.args[3], "(Get-Process -Id 42).StartTime.ToUniversalTime().ToString('o')");
+  assert.equal(win.args[3], `(Get-CimInstance Win32_Process -Filter "ProcessId=42").CreationDate.ToUniversalTime().ToString('o')`);
   assert.ok(!win.bin.toLowerCase().includes("wmic") && !win.args.join(" ").toLowerCase().includes("wmic"));
   assert.throws(() => startTimeCommand(0, "win32"), /Not a process id/);
   assert.throws(() => startTimeCommand(Number("1; calc"), "win32"), /Not a process id/);
 });
 
-test("processStartTime returns the reader's output, or empty when the pid does not exist", () => {
-  assert.equal(processStartTime(9, { platform: "win32", run: () => "2026-10-01T10:20:30.1234567Z\r\n" }), "2026-10-01T10:20:30.1234567Z");
-  assert.equal(processStartTime(9, { platform: "win32", run: () => { throw new Error("Cannot find a process with the process identifier 9"); } }), "");
+test("processStartTime returns the reader's output, or empty (with the reason kept) when the pid does not exist", async () => {
+  assert.equal(await processStartTime(9, { platform: "win32", run: async () => ({ stdout: "2026-10-01T10:20:30.1234567Z\r\n", stderr: "" }) }), "2026-10-01T10:20:30.1234567Z");
+  const gone = await readStartTime(9, { platform: "win32", run: async () => { throw Object.assign(new Error("exit 1"), { stderr: "You cannot call a method on a null-valued expression." }); } });
+  assert.equal(gone.time, "");
+  assert.match(gone.error, /exit 1 \| You cannot call a method/);
+});
+
+test("reading a start time never blocks the event loop (timers keep firing while the reader runs)", async () => {
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 10);
+  const slow = async () => { await new Promise((r) => setTimeout(r, 200)); return { stdout: "t", stderr: "" }; };
+  assert.equal(await processStartTime(9, { platform: "win32", run: slow }), "t");
+  clearInterval(timer);
+  assert.ok(ticks >= 5, `the loop kept running (${ticks} ticks)`);
+});
+
+test("spawnOwned: a child that exited before the (slow) start-time read finished is recorded as exited-before-probe", async () => {
+  const p = await spawnOwned(NODE, ["-e", "0"], {
+    cwd: CWD, env: ENV, stdin: "ignore",
+    readStartTime: async () => { await new Promise((r) => setTimeout(r, 400)); return { time: "", error: "gone" }; },
+  });
+  assert.equal(p.owned.startedAt, "exited-before-probe");
+  await p.exited;
+});
+
+test("spawnOwned: a live child whose start time cannot be read fails with the reader's error text", async () => {
+  let spawnedPid = 0;
+  await assert.rejects(
+    spawnOwned(NODE, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: CWD, env: ENV, stdin: "ignore",
+      readStartTime: async (pid) => { spawnedPid = pid; return { time: "", error: "Get-CimInstance : Access denied" }; },
+    }),
+    /Could not read the OS start time of pid \d+: Get-CimInstance : Access denied/,
+  );
+  try { process.kill(spawnedPid); } catch { /* already gone */ }
 });
 
 test("isOwnedAlive compares start time on Windows and has no group to compare", async () => {
   const p = await spawnOwned(NODE, ["-e", "setInterval(() => {}, 1000)"], { cwd: CWD, env: ENV, stdin: "ignore" });
   try {
-    const win = { platform: "win32" as const, startTime: () => p.owned.startedAt, pgidOf: () => { throw new Error("must not ask for a group on Windows"); } };
-    assert.equal(isOwnedAlive(p.owned, win), true);
-    assert.equal(isOwnedAlive(p.owned, { ...win, startTime: () => "other" }), false);
+    const win = { platform: "win32" as const, startTime: async () => p.owned.startedAt, pgidOf: async (): Promise<string> => { throw new Error("must not ask for a group on Windows"); } };
+    assert.equal(await isOwnedAlive(p.owned, win), true);
+    assert.equal(await isOwnedAlive(p.owned, { ...win, startTime: async () => "other" }), false);
   } finally {
     await terminateGroup(p.owned, 1000);
     await p.exited;

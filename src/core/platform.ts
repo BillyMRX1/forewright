@@ -59,3 +59,7 @@ export function splitHomeDrive(home: string): { drive: string; rest: string } {
   const drive = /^[A-Za-z]:/.test(root) ? root.slice(0, 2) : "";
   return { drive, rest: home.slice(drive.length) };
 }
+
+/** Windows file names ignore case; everything else compares exactly. Both paths should already be canonical (see realpathSync.native). */
+export const samePathString = (a: string, b: string, platform: Platform = process.platform): boolean =>
+  isWindows(platform) ? a.toLowerCase() === b.toLowerCase() : a === b;

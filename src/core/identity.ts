@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { Clock } from "./clock.js";
 import { DuplicateProjectIdError, ValidationError } from "./errors.js";
+import { samePathString } from "./platform.js";
 import { forewrightHome, ensureDir, ensureHome, registryPath } from "./paths.js";
 
 const MARKER_DIR = ".forewright";
@@ -30,7 +31,8 @@ function git(cwd: string, args: string[]): string | null {
   }
 }
 
-const real = (p: string) => realpathSync(p);
+/** Canonical path: `.native` also expands Windows 8.3 short names (RUNNER~1), so one folder has one spelling. */
+const real = (p: string) => realpathSync.native(p);
 
 function markerPath(root: string): string {
   return path.join(root, MARKER_DIR, MARKER_FILE);
@@ -98,14 +100,14 @@ export function resolveProject(cwd: string): ResolveResult {
     if (commonRaw !== null) {
       const common = real(path.resolve(start, commonRaw));
       const candidate = path.dirname(common);
-      if (path.basename(common) === ".git" && candidate !== top) {
+      if (path.basename(common) === ".git" && !samePathString(candidate, top)) {
         mainRoot = candidate;
         worktreeOf = candidate;
       }
     }
     const fromMain = readMarker(mainRoot);
     if (fromMain) return { status: "found", projectId: fromMain.id, root: mainRoot, isGit, ...(worktreeOf ? { worktreeOf } : {}) };
-    if (mainRoot !== top) {
+    if (!samePathString(mainRoot, top)) {
       const fromTop = readMarker(top);
       if (fromTop) return { status: "found", projectId: fromTop.id, root: top, isGit };
     }
@@ -114,7 +116,7 @@ export function resolveProject(cwd: string): ResolveResult {
   const home = realpathOrNull(homedir());
   let dir = start;
   for (;;) {
-    if (dir === home || dir === path.parse(dir).root) break;
+    if ((home !== null && samePathString(dir, home)) || dir === path.parse(dir).root) break;
     const m = readMarker(dir);
     if (m) return { status: "found", projectId: m.id, root: dir, isGit };
     dir = path.dirname(dir);
@@ -193,7 +195,7 @@ export function openProject(cwd: string, clock: Clock): OpenResult {
   const reg = readRegistry();
   const known = reg[res.projectId];
   let moved: { from: string; to: string } | undefined;
-  if (known && known.root !== res.root) {
+  if (known && !samePathString(known.root, res.root)) {
     const knownMarker = existsSync(known.root) ? readMarker(known.root) : null;
     if (knownMarker && knownMarker.id === res.projectId) {
       throw new DuplicateProjectIdError(res.projectId, known.root, res.root);

@@ -53,7 +53,7 @@ test("pause: running work continues, nothing new starts; resume starts it", asyn
     const status = await h.client.request("control.pauseAll", { projectId: h.projectId });
     assert.equal(status.paused, true);
     assert.equal(h.rt.store.getRun(active.run.id).state, "running", "the running run continues");
-    assert.equal(isOwnedAlive(active.process!), true);
+    assert.equal(await isOwnedAlive(active.process!), true);
     addTask(h, { title: "Second", assignee: hire(h, "Wes") });
     poke(h);
     await sleep(300);

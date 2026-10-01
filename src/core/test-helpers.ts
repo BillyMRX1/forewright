@@ -7,7 +7,7 @@ import { type Db, openAndMigrate } from "./db.js";
 import { Store } from "./store.js";
 
 export function tempDir(prefix = "forewright-test-"): string {
-  return realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
+  return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 
 export interface TestEnv {
