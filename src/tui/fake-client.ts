@@ -189,6 +189,8 @@ export class FakeClient implements ClientApi {
   readonly drafts = new Map<string, string>();
   readonly data = baseData();
   paused = false;
+  /** When false, the latest PRD revision is already approved (nothing to approve). */
+  proposedPrd = true;
   /** When true, the runtime reports no active runs. */
   noRuns = false;
   /** Decisions returned by state.inbox as open. Tests may push more. */
@@ -276,7 +278,7 @@ export class FakeClient implements ClientApi {
             ],
           };
         case "state.prd":
-          return { doc: d.doc(2, "proposed", "# Tip calculator\nCompute tips.\nRound to cents."), approved: d.doc(1, "approved", "# Tip calculator\nCompute tips."), all: [] };
+          return { doc: d.doc(2, this.proposedPrd ? "proposed" : "approved", "# Tip calculator\nCompute tips.\nRound to cents."), approved: d.doc(1, "approved", "# Tip calculator\nCompute tips."), all: [] };
         case "state.evidence":
           return { task: d.tasks.find((t) => t.id === p["taskId"])!, verifications: p["taskId"] === "t4" ? [d.verification] : [], artifacts: [], runs: [] };
         case "evidence.diff":

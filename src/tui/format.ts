@@ -3,10 +3,13 @@
 import os from "node:os";
 import type { BlockReason, RunState, TaskState } from "../core/types.js";
 import { sanitizeTerminal } from "../core/safety.js";
-import { TASK_STATE_COLOR } from "./theme.js";
+import { TASK_STATE_COLOR, sym } from "./theme.js";
 
-export const VIEW_NAMES = ["Overview", "CTO", "Tasks", "Chat", "Inbox", "Team", "Evidence", "Settings"] as const;
-export const VIEW_SHORT = ["Ovw", "CTO", "Tsk", "Cht", "Inb", "Tea", "Evd", "Set"] as const;
+/** Navigation order: the CTO conversation is home, then the overview and the rest. */
+export const VIEW_NAMES = ["CTO", "Overview", "Tasks", "Inbox", "Team", "Chat", "Evidence", "Settings"] as const;
+export const VIEW_SHORT = ["CTO", "Ovw", "Tsk", "Inb", "Tea", "Cht", "Evd", "Set"] as const;
+/** View indexes, matching VIEW_NAMES. */
+export const VIEW = { cto: 0, overview: 1, tasks: 2, inbox: 3, team: 4, chat: 5, evidence: 6, settings: 7 } as const;
 
 /** Clean untrusted text for one-line display: sanitized, tabs to spaces, newlines to spaces. */
 export function oneLine(text: string): string {
@@ -17,8 +20,10 @@ export function clip(text: string, width: number): string {
   if (width <= 0) return "";
   const chars = [...text];
   if (chars.length <= width) return text;
-  if (width === 1) return "~";
-  return `${chars.slice(0, width - 1).join("")}~`;
+  const mark = sym().ellipsis;
+  const markLen = [...mark].length;
+  if (width <= markLen) return mark.slice(0, width);
+  return `${chars.slice(0, width - markLen).join("")}${mark}`;
 }
 
 /** Pads or clips to exactly `width` characters. */
@@ -152,10 +157,17 @@ export function windowed(length: number, selected: number, height: number): { st
   return { start, end: start + h };
 }
 
-export function progressBar(done: number, total: number, width: number): string {
-  if (total <= 0) return "-".repeat(width);
-  const filled = Math.round((done / total) * width);
-  return "#".repeat(filled) + "-".repeat(width - filled);
+/** Progress bar halves: `full` is drawn in the accent color, `empty` dim. */
+export function progressBar(done: number, total: number, width: number): { full: string; empty: string } {
+  const s = sym();
+  const w = Math.max(0, width);
+  const filled = total <= 0 ? 0 : Math.max(0, Math.min(w, Math.round((done / total) * w)));
+  return { full: s.barFull.repeat(filled), empty: s.barEmpty.repeat(w - filled) };
+}
+
+/** First letter upper-cased, for engine names. */
+export function titleCase(text: string): string {
+  return text.length === 0 ? text : text[0]!.toUpperCase() + text.slice(1);
 }
 
 export interface DiffLine {

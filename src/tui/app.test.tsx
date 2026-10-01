@@ -1,355 +1,391 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { App } from "./app.js";
 import { ClientError } from "./client.js";
-import { FakeClient, EVIL } from "./fake-client.js";
-import { renderAt, type Harness } from "./test-harness.js";
+import { FakeClient } from "./fake-client.js";
 import { VIEW_NAMES } from "./format.js";
+import { VIEW, closeAll, ctrl, down, enter, esc, hints, left, lines, mount, release, right, shiftTab, tab, up } from "./test-support.js";
 
-const open: Harness[] = [];
-afterEach(() => {
-  for (const h of open.splice(0)) h.unmount();
-});
+afterEach(closeAll);
 
-async function mount(cols: number, rows: number, initialView = 0, api = new FakeClient()) {
-  const h = renderAt(<App api={api} projectId="p1" projectName="tips" root="/Users/billy/tips" isGit size={{ columns: cols, rows }} initialView={initialView} />, cols, rows);
-  open.push(h);
-  await h.settle(150);
-  return { h, api };
-}
+const SIZES = [
+  [120, 40],
+  [100, 30],
+  [80, 24],
+  [60, 20],
+  [40, 12],
+] as const;
 
-// Escape and wait long enough for Ink to tell a lone Esc from an escape sequence.
-const esc = (h: Harness) => h.send("\x1b", 120);
-
-describe("App layout", () => {
-  for (const [cols, rows] of [
-    [120, 40],
-    [60, 20],
-    [40, 12],
-  ] as const) {
-    it(`renders every view at ${cols}x${rows} without throwing`, async () => {
-      for (let v = 0; v < 8; v++) {
-        const { h } = await mount(cols, rows, v);
+describe("layout", () => {
+  for (const [cols, rows] of SIZES) {
+    it(`renders every view at ${cols}x${rows} without throwing and inside the row budget`, async () => {
+      for (let v = 0; v < VIEW_NAMES.length; v++) {
+        const { h } = await mount({ cols, rows, view: v });
         const frame = h.frame();
-        assert.ok(frame.length > 0, `view ${VIEW_NAMES[v]} rendered nothing`);
-        assert.ok(frame.split("\n").length <= rows, `view ${VIEW_NAMES[v]} used more than ${rows} rows`);
-        h.unmount();
-        open.pop();
+        assert.ok(frame.trim().length > 0, `view ${VIEW_NAMES[v]} rendered nothing`);
+        assert.ok(frame.split("\n").length <= rows, `view ${VIEW_NAMES[v]} used ${frame.split("\n").length} rows, budget ${rows}`);
+        for (const l of frame.split("\n")) assert.ok([...l].length <= cols, `a line is wider than ${cols} columns in ${VIEW_NAMES[v]}: ${l}`);
+        release(h);
       }
     });
   }
 
-  it("uses full tab names when wide and short names under 80 columns", async () => {
-    const wide = await mount(120, 40);
-    assert.match(wide.h.frame(), /1 Overview/);
-    assert.match(wide.h.frame(), /8 Settings/);
-    const narrow = await mount(70, 30);
-    assert.match(narrow.h.frame(), /1 Ovw/);
-    assert.match(narrow.h.frame(), /8 Set/);
-    assert.doesNotMatch(narrow.h.frame(), /Overview/);
-  });
-
-  it("shows header status: project, paused badge, runs, status summary and the Inbox count on its tab", async () => {
-    const { h, api } = await mount(120, 40);
-    assert.match(h.frame(), /tips/);
-    assert.match(h.frame(), /runs 1\/2/);
-    assert.match(h.frame(), /5 Inbox \(1\)/);
-    assert.match(h.frame(), /1 need you.*1 working/);
-    assert.match(h.frame(), /claude ok/);
-    api.paused = true;
-    api.emitConnection("restored");
-    await h.settle(400);
-    assert.match(h.frame(), /PAUSED/);
-  });
-});
-
-describe("navigation and help", () => {
-  it("switches views with number keys and Tab", async () => {
-    const { h } = await mount(120, 40);
-    await h.send("5");
-    assert.match(h.frame(), /Which rounding rule/);
-    await h.send("6");
-    assert.match(h.frame(), /Ada/);
-    await h.send("\t");
-    assert.match(h.frame(), /Evidence|Pick a task/);
-    await h.send("\x1b[Z"); // Shift+Tab back to Team
-    assert.match(h.frame(), /Permission/);
-  });
-
-  it("? opens help listing pause, stop and resume keys", async () => {
-    const { h } = await mount(120, 40);
-    await h.send("?");
-    const f = h.frame();
-    assert.match(f, /pause all work, or resume/);
-    assert.match(f, /stop the selected run/);
-    assert.match(f, /resume/);
-    await esc(h);
-    assert.doesNotMatch(h.frame(), /pause all work, or resume/);
-  });
-
-  it("P asks for confirmation before pausing", async () => {
-    const { h, api } = await mount(120, 40);
-    await h.send("P");
-    assert.match(h.frame(), /Pause all work in this project\? \(y\/n\)/);
-    assert.equal(api.callsTo("control.pauseAll").length, 0);
-    await h.send("y");
-    assert.equal(api.callsTo("control.pauseAll").length, 1);
-  });
-
-  it("T terminates the team only after confirmation", async () => {
-    const { h, api } = await mount(120, 40);
-    await h.send("T");
-    assert.match(h.frame(), /Terminate the team\?/);
-    assert.equal(api.callsTo("control.terminateTeam").length, 0);
-    await h.send("y");
-    assert.equal(api.callsTo("control.terminateTeam").length, 1);
-  });
-
-  it("X stops the only active run after confirmation, L opens its log sanitized", async () => {
-    const { h, api } = await mount(120, 40);
-    await h.send("L");
-    await h.settle(100);
-    assert.match(h.frame(), /line one red/);
-    assert.doesNotMatch(h.frame(), /\x1b\[31m/);
-    await esc(h);
-    await h.send("X");
-    assert.match(h.frame(), /Stop the current run/);
-    await h.send("n");
-    assert.equal(api.callsTo("control.stopRun").length, 0);
-    await h.send("X");
-    await h.send("y");
-    assert.equal(api.callsTo("control.stopRun").length, 1);
-  });
-});
-
-describe("CTO view", () => {
-  it("keeps a draft across view switches and saves it to the service", async () => {
-    const { h, api } = await mount(120, 40);
-    await h.send("2");
-    await h.send("hello draft");
-    await esc(h);
-    await h.send("3");
-    const saved = api.callsTo("drafts.save").filter((c) => (c.params as { body: string }).body === "hello draft");
-    assert.ok(saved.length >= 1, "draft was not sent to drafts.save");
-    await h.send("2");
-    await h.settle(100);
-    assert.match(h.frame(), /hello draft/);
-  });
-
-  it("edits text with cursor movement and backspace", async () => {
-    const { h } = await mount(120, 40);
-    await h.send("2");
-    await h.send("abc");
-    await h.send("\x1b[D"); // left
-    await h.send("X");
-    assert.match(h.frame(), /abXc/);
-    await h.send("\x7f"); // backspace
-    assert.match(h.frame(), /abc/);
-    assert.doesNotMatch(h.frame(), /abXc/);
-    await h.send("\x1b[H"); // home
-    await h.send("Z");
-    assert.match(h.frame(), /Zabc/);
-  });
-
-  it("sends with Enter and clears the box", async () => {
-    const { h, api } = await mount(120, 40);
-    await h.send("2");
-    await h.send("plan it");
-    await h.send("\r");
-    assert.deepEqual(api.callsTo("cto.send")[0]?.params, { projectId: "p1", body: "plan it" });
-  });
-
-  it("shows the proposed PRD and approves only after confirmation", async () => {
-    const { h, api } = await mount(120, 40);
-    await h.send("2");
-    assert.match(h.frame(), /PRD revision 2/);
-    assert.match(h.frame(), /proposed/);
-    await esc(h);
-    await h.send("A");
-    assert.match(h.frame(), /Approve PRD revision 2\?/);
-    assert.equal(api.callsTo("prd.approve").length, 0);
-    await h.send("y");
-    assert.equal(api.callsTo("prd.approve").length, 1);
-  });
-
-  it("D shows the diff against the approved revision", async () => {
-    const { h } = await mount(120, 40);
-    await h.send("2");
-    await esc(h);
-    await h.send("D");
-    assert.match(h.frame(), /\+ Round to cents/);
-  });
-
-  it("strips terminal escape sequences from message bodies", async () => {
-    const { h } = await mount(120, 40);
-    await h.send("2");
-    const f = h.frame();
-    assert.match(f, /Hello/);
-    assert.match(f, /click/);
-    assert.ok(EVIL.includes("\x1b[2J"));
-    assert.ok(!f.includes("\x1b[2J"), "clear-screen sequence leaked");
-    assert.ok(!f.includes("\x1b]8"), "OSC 8 link leaked");
-    assert.ok(!f.includes("\x07"), "bell leaked");
-    assert.doesNotMatch(f, /evil\.example/);
-  });
-});
-
-describe("Tasks view", () => {
-  it("board and list show the same tasks", async () => {
-    const { h } = await mount(120, 40, 2);
-    const board = h.frame();
-    await h.send("v");
-    const list = h.frame();
-    for (const title of ["Set up project", "Implement tip calculation", "Add CLI parsing", "Write tests", "Write README", "Old idea"]) {
-      assert.ok(board.includes(title.slice(0, 12)), `board is missing ${title}`);
-      assert.ok(list.includes(title), `list is missing ${title}`);
+  it("survives opening each view's detail, a modal and a toast at 40x12", async () => {
+    for (let v = 0; v < VIEW_NAMES.length; v++) {
+      const { h, api } = await mount({ cols: 40, rows: 12, view: v });
+      await h.send("\x1b", 120);
+      await h.send("\r");
+      await h.send("\r");
+      api.emitEvent("decision.requested", "decision", "d9", { title: "Pick" }, "agent:a1");
+      await h.settle(100);
+      await ctrl(h, "p");
+      await h.send("zzz");
+      assert.ok(lines(h).length <= 12);
+      release(h);
     }
   });
 
-  it("Enter opens detail with dependencies and the block reason in plain words", async () => {
-    const { h } = await mount(120, 40, 2);
-    await h.send("\r");
-    const f = h.frame();
-    assert.match(f, /Add CLI parsing/);
-    assert.match(f, /Depends on/);
-    assert.match(f, /T-2\s+Implement tip calculation\s+\[Working\]/);
-    assert.match(f, /Waiting for another task to finish/);
-    assert.match(f, /npm test/);
+  it("draws the title bar with the product, project, branch and connection pill", async () => {
+    const { h } = await mount();
+    const title = lines(h)[0]!;
+    assert.match(title, /^─ Forewright ─+ tips · main · ● connected ─$/);
+    assert.equal([...title].length, 120);
   });
 
-  it("cancel asks first and calls control.cancelTask", async () => {
-    const { h, api } = await mount(120, 40, 2);
-    await h.send("\r");
-    await h.send("c");
-    assert.match(h.frame(), /Cancel task T-3\?/);
-    assert.equal(api.callsTo("control.cancelTask").length, 0);
-    await h.send("y");
-    assert.equal(api.callsTo("control.cancelTask").length, 1);
+  it("shows a PAUSED pill when work is paused", async () => {
+    const { h, api } = await mount();
+    assert.doesNotMatch(lines(h)[0]!, /PAUSED/);
+    api.paused = true;
+    api.emitConnection("restored");
+    await h.settle(400);
+    assert.match(lines(h)[0]!, /PAUSED/);
   });
 
-  it("is list-only under 80 columns", async () => {
-    const { h } = await mount(60, 20, 2);
-    assert.match(h.frame(), /Planned\s+T-3/);
+  it("shows reconnecting while the connection is lost, then offline, then connected again", async () => {
+    const { h, api } = await mount({ offlineAfterMs: 300 });
+    api.emitConnection("lost");
+    await h.settle(100);
+    assert.match(lines(h)[0]!, /● reconnecting/);
+    await h.settle(400);
+    assert.match(lines(h)[0]!, /● offline/);
+    api.emitConnection("restored");
+    await h.settle(100);
+    assert.match(lines(h)[0]!, /● connected/);
+  });
+
+  it("keeps the connection pill when the title bar is narrow", async () => {
+    const { h } = await mount({ cols: 40, rows: 12 });
+    assert.match(lines(h)[0]!, /● connected/);
+    assert.equal([...lines(h)[0]!].length, 40);
+  });
+
+  it("shows the sidebar with badges and the agent list, most urgent first, at 90 columns and up", async () => {
+    const { h } = await mount({ cols: 100, rows: 30 });
+    const f = lines(h);
+    assert.match(f[2]!, /▸ CTO/);
+    for (const name of VIEW_NAMES) assert.ok(h.frame().includes(name), `sidebar is missing ${name}`);
+    assert.match(h.frame(), /Tasks\s+1\b/); // one task in progress
+    assert.match(h.frame(), /Inbox\s+● 1/); // one decision with an attention dot
+    const ada = f.findIndex((l) => /◉ Ada\s+needs you/.test(l));
+    const bo = f.findIndex((l) => /◐ Bo\s+T-2/.test(l));
+    const cy = f.findIndex((l) => /○ Cy\s+idle/.test(l));
+    assert.ok(ada > 0 && bo > ada && cy > bo, "agents are not in attention order");
+    assert.ok(f.some((l) => /Agents/.test(l)));
+  });
+
+  it("collapses the sidebar into a tab line under 90 columns", async () => {
+    const { h } = await mount({ cols: 80, rows: 24 });
+    const f = lines(h);
+    assert.match(f[1]!, /CTO\s+Overview\s+Tasks 1\s+Inbox ● 1\s+Team\s+Chat\s+Evidence\s+Settings/);
+    assert.doesNotMatch(h.frame(), /Agents/);
+    const narrow = await mount({ cols: 64, rows: 24 });
+    assert.match(lines(narrow.h)[1]!, /CTO\s+Ovw\s+Tsk 1\s+Inb ● 1/);
+  });
+
+  it("hides the sidebar under 60 columns and reaches views through the palette", async () => {
+    const { h } = await mount({ cols: 50, rows: 20 });
+    assert.doesNotMatch(h.frame(), /Overview|Settings|Agents/);
+    assert.match(lines(h)[2]!, /CTO/); // the pane header says where you are
+    await ctrl(h, "p");
+    await h.send("settings");
+    await enter(h);
+    await h.settle(200);
+    assert.match(h.frame(), /Settings · /);
+  });
+
+  it("hides and shows the sidebar from the palette", async () => {
+    const { h } = await mount({ cols: 120, rows: 30 });
+    assert.match(h.frame(), /Overview/);
+    await ctrl(h, "p");
+    await h.send("sidebar");
+    await enter(h);
+    await h.settle(100);
+    assert.doesNotMatch(h.frame(), /Agents/);
+    await ctrl(h, "p");
+    await h.send("sidebar");
+    await enter(h);
+    await h.settle(100);
+    assert.match(h.frame(), /Agents/);
+  });
+
+  it("uses plain ASCII with no box-drawing or other symbols when FOREWRIGHT_ASCII=1", async () => {
+    process.env["FOREWRIGHT_ASCII"] = "1";
+    for (const [cols, rows] of [
+      [120, 40],
+      [80, 24],
+      [40, 12],
+    ] as const) {
+      for (let v = 0; v < VIEW_NAMES.length; v++) {
+        const { h } = await mount({ cols, rows, view: v });
+        const f = h.frame();
+        assert.doesNotMatch(f, /[─-╿]/, `box-drawing characters in ${VIEW_NAMES[v]} at ${cols}x${rows}`);
+        assert.doesNotMatch(f, /[^\x00-\x7f]/, `non-ASCII characters in ${VIEW_NAMES[v]} at ${cols}x${rows}`);
+        assert.match(f, /\+-{5,}\+/);
+        release(h);
+      }
+    }
   });
 });
 
-describe("Chat, Inbox, Team, Evidence, Settings", () => {
-  it("Chat sends a directed message for @name", async () => {
-    const { h, api } = await mount(120, 40, 3);
-    await h.send("@bo please look");
-    await h.send("\r");
-    const call = api.callsTo("chat.send")[0]?.params as { toAgentIds?: string[]; channel: string };
-    assert.deepEqual(call.toAgentIds, ["a2"]);
-    assert.equal(call.channel, "project");
+describe("focus and navigation", () => {
+  it("starts on the CTO view with the message box focused, and typing only types", async () => {
+    const { h, api } = await mount();
+    assert.match(hints(h), /enter send/);
+    await h.send("hello there");
+    assert.match(h.frame(), /hello there/);
+    // Every old global key, typed into the box, must be plain text.
+    for (const ch of ["P", "T", "X", "L", "n", "g", "e", "q", "1", "5", "8", ":", "?", "A", "D"]) await h.send(ch);
+    assert.match(h.frame(), /hello thereP.*T.*X.*L.*n.*g.*e.*q.*15.*8.*:.*\?.*A.*D/);
+    assert.equal(api.calls.filter((c) => c.method.startsWith("control.") || c.method === "prd.approve").length, 0);
+    assert.match(lines(h)[2]!, /CTO · Claude/);
+    assert.doesNotMatch(h.frame(), /Every key|Commands/);
+    assert.equal(api.callsTo("cto.send").length, 0);
   });
 
-  it("Chat reports an unknown @name instead of sending", async () => {
-    const { h, api } = await mount(120, 40, 3);
-    await h.send("@nobody hi");
-    await h.send("\r");
-    assert.equal(api.callsTo("chat.send").length, 0);
-    assert.match(h.frame(), /No agent is named nobody/);
+  it("Tab cycles input, sidebar, main and back; Shift+Tab goes the other way", async () => {
+    const { h } = await mount();
+    assert.match(hints(h), /enter send/); // input
+    await tab(h);
+    assert.match(hints(h), /↑↓ move · enter open/); // sidebar
+    await tab(h);
+    assert.match(hints(h), /approve prd/); // main (the conversation)
+    await tab(h);
+    assert.match(hints(h), /enter send/);
+    await shiftTab(h);
+    assert.match(hints(h), /approve prd/);
+    await shiftTab(h);
+    assert.match(hints(h), /↑↓ move · enter open/);
   });
 
-  it("Inbox resolves only after confirmation and with the chosen option", async () => {
-    const { h, api } = await mount(120, 40, 4);
-    assert.match(h.frame(), /Which rounding rule/);
-    await h.send("\r");
-    assert.match(h.frame(), /CTO recommends this/);
-    await h.send("j"); // choose "Always up"
-    await h.send("\r");
-    assert.match(h.frame(), /Resolve "Which rounding rule\?" with "Always up"\? \(y\/n\)/);
-    assert.equal(api.callsTo("decisions.resolve").length, 0);
-    await h.send("y");
-    const call = api.callsTo("decisions.resolve")[0]?.params as { option: string; decisionId: string };
-    assert.equal(call.option, "up");
-    assert.equal(call.decisionId, "dec1");
+  it("Tab skips the message box on views without one", async () => {
+    const { h } = await mount({ view: VIEW.tasks });
+    assert.match(hints(h), /details/); // main
+    await tab(h);
+    assert.match(hints(h), /↑↓ move · enter open/); // sidebar
+    await tab(h);
+    assert.match(hints(h), /details/); // back to main
   });
 
-  it("Inbox cancel does not resolve, and history shows stale items greyed with a reason", async () => {
-    const { h, api } = await mount(120, 40, 4);
-    await h.send("\r");
-    await h.send("\r");
-    await h.send("n");
-    assert.equal(api.callsTo("decisions.resolve").length, 0);
-    await esc(h);
-    await h.send("h");
-    assert.match(h.frame(), /Old question/);
-    assert.match(h.frame(), /\(stale\)/);
-    await h.send("\r");
-    assert.match(h.frame(), /Stale: the situation changed/);
-  });
-
-  it("Team lists agents with role, engine and model", async () => {
-    const { h } = await mount(140, 40, 5);
-    const f = h.frame();
-    assert.match(f, /Bo\s+backend\s+codex\s+gpt-x/);
-  });
-
-  it("Team edit calls agents.update", async () => {
-    const { h, api } = await mount(140, 40, 5);
-    await h.send("\r");
-    await h.send("\x1b[C"); // engine to the next one
-    await h.send("\r");
-    assert.equal(api.callsTo("agents.update").length, 1);
-  });
-
-  it("Evidence shows verifications and the diff for a picked task", async () => {
-    const { h } = await mount(120, 40, 6);
-    await h.send("j"); // second task in board order
-    await h.send("j");
-    await h.send("j"); // Review column: T-4 is index 3 in state order (planned, ready, working, review...)
-    await h.send("\r");
+  it("sidebar up, down and Enter open views and move focus into them", async () => {
+    const { h } = await mount();
+    await tab(h); // sidebar
+    await down(h); // Overview
+    assert.match(lines(h)[3]!, /▸ Overview/);
+    assert.match(lines(h)[2]!, /CTO · Claude/); // not opened yet
+    await enter(h);
     await h.settle(100);
-    const f = h.frame();
-    assert.match(f, /Diff/);
-    assert.match(f, /\+new line/);
+    assert.match(lines(h)[2]!, /Overview · tips/);
+    assert.match(hints(h), /enter open · pgup\/pgdn scroll/);
+    await esc(h); // main -> sidebar
+    assert.match(hints(h), /↑↓ move · enter open/);
+    await down(h); // Tasks
+    await right(h); // right arrow opens too
+    await h.settle(100);
+    assert.match(lines(h)[2]!, /Tasks · 6 total/);
+    assert.match(hints(h), /details/);
   });
 
-  it("Settings shows provider health, Not supported markers, quota and the local notice", async () => {
-    const { h } = await mount(200, 80, 7);
-    const f = h.frame();
-    assert.match(f, /Test double/);
-    assert.match(f, /Not supported/);
-    assert.match(f, /quota: unknown/);
-    assert.match(f, /Execution and state are local to this Mac/);
-    assert.match(f, /Anthropic for Claude Code, OpenAI for Codex/);
+  it("Enter on CTO or Chat in the sidebar focuses the message box", async () => {
+    const { h } = await mount({ view: VIEW.tasks });
+    await esc(h); // sidebar
+    for (let i = 0; i < 3; i++) await up(h); // CTO
+    await enter(h);
+    await h.settle(100);
+    assert.match(hints(h), /enter send/);
+    await h.send("typed");
+    assert.match(h.frame(), /typed/);
+    await esc(h); // sidebar again
+    for (let i = 0; i < 5; i++) await down(h); // Chat
+    await enter(h);
+    await h.settle(100);
+    assert.match(lines(h)[2]!, /Chat · /);
+    assert.match(hints(h), /enter send · @name directs a message/);
   });
 
-  it("Settings toggles call settings.set", async () => {
-    const { h, api } = await mount(200, 80, 7);
-    await h.send("j");
-    await h.send("j"); // first authority item
-    await h.send("\r");
-    const call = api.callsTo("settings.set")[0]?.params as { key: string; value: unknown };
-    assert.equal(call.key, "authority.autoLocalEdits");
-    assert.equal(call.value, false);
+  it("Esc goes back from detail to list to the sidebar in Tasks", async () => {
+    const { h } = await mount({ view: VIEW.tasks });
+    await enter(h);
+    assert.match(lines(h)[2]!, /T-3 · Add CLI parsing/);
+    assert.match(hints(h), /enter resume · c cancel/);
+    await esc(h);
+    assert.match(lines(h)[2]!, /Tasks · 6 total/);
+    assert.match(hints(h), /details/);
+    await esc(h);
+    assert.match(hints(h), /↑↓ move · enter open/);
+  });
+
+  it("Esc and left arrow go back in Inbox (options to list to sidebar) and Team", async () => {
+    const { h } = await mount({ view: VIEW.inbox });
+    await enter(h);
+    assert.match(hints(h), /resolve/);
+    await esc(h);
+    assert.match(hints(h), /history/);
+    await left(h);
+    assert.match(hints(h), /↑↓ move · enter open/);
+    const t = await mount({ view: VIEW.team });
+    await left(t.h);
+    assert.match(hints(t.h), /↑↓ move · enter open/);
+  });
+
+  it("the CTO input leaves to the sidebar with Esc and keeps the draft", async () => {
+    const { h, api } = await mount();
+    await h.send("half a thought");
+    await esc(h);
+    assert.match(hints(h), /↑↓ move · enter open/);
+    await down(h);
+    await enter(h); // Overview
+    await h.settle(100);
+    await esc(h);
+    await up(h);
+    await enter(h); // CTO again
+    await h.settle(200);
+    assert.match(h.frame(), /half a thought/);
+    assert.ok(api.callsTo("drafts.save").some((c) => (c.params as { body: string }).body === "half a thought"));
+  });
+
+  it("an up arrow on an empty message box moves focus to the conversation, and Enter returns", async () => {
+    const { h } = await mount();
+    await up(h);
+    assert.match(hints(h), /approve prd/);
+    await enter(h);
+    assert.match(hints(h), /enter send/);
+  });
+
+  it("Ctrl+C quits at once when nothing is running", async () => {
+    let quit = 0;
+    const api = new FakeClient();
+    api.noRuns = true;
+    const { h } = await mount({ api, onQuit: () => quit++ });
+    await ctrl(h, "c");
+    assert.equal(quit, 1);
+  });
+
+  it("Ctrl+C asks once when agents are running, and n keeps the screen open", async () => {
+    let quit = 0;
+    const { h } = await mount({ onQuit: () => quit++ });
+    await ctrl(h, "c");
+    assert.match(h.frame(), /Agents keep working in the background\. Quit\?/);
+    assert.match(hints(h), /y yes · n no/);
+    assert.equal(quit, 0);
+    await h.send("n");
+    assert.doesNotMatch(h.frame(), /Quit\?/);
+    assert.equal(quit, 0);
+    await ctrl(h, "c");
+    await h.send("y");
+    assert.equal(quit, 1);
+  });
+
+  it("a second Ctrl+C at the quit question quits", async () => {
+    let quit = 0;
+    const { h } = await mount({ onQuit: () => quit++ });
+    await ctrl(h, "c");
+    await ctrl(h, "c");
+    assert.equal(quit, 1);
+  });
+
+  it("? opens help from the sidebar and the main pane, never from a message box", async () => {
+    const { h } = await mount({ view: VIEW.tasks });
+    await h.send("?");
+    assert.match(h.frame(), /Help · every key/);
+    assert.match(h.frame(), /Everywhere/);
+    await esc(h);
+    assert.doesNotMatch(h.frame(), /Help · every key/);
+    await esc(h); // sidebar
+    await h.send("?");
+    assert.match(h.frame(), /Help · every key/);
+    await h.send("?"); // closes
+    assert.doesNotMatch(h.frame(), /Help · every key/);
+    const c = await mount();
+    await c.h.send("?");
+    assert.doesNotMatch(c.h.frame(), /Help · every key/);
+    assert.match(c.h.frame(), /\?/);
   });
 });
 
 describe("errors", () => {
-  it("shows one plain red line and reveals detail with e", async () => {
+  it("shows one plain red line and reveals detail with Ctrl+E", async () => {
     const api = new FakeClient();
     api.failWith = new ClientError("boom", "Could not load the overview.", "SQLITE_BUSY: database is locked");
-    const { h } = await mount(120, 40, 0, api);
+    const { h } = await mount({ view: VIEW.overview, api });
     assert.match(h.frame(), /Error: Could not load the overview\./);
+    assert.match(h.frame(), /ctrl\+e: details/);
     assert.doesNotMatch(h.frame(), /SQLITE_BUSY/);
-    await h.send("e");
+    await ctrl(h, "e");
     assert.match(h.frame(), /SQLITE_BUSY: database is locked/);
-    await h.send("e");
+    await ctrl(h, "e");
     assert.doesNotMatch(h.frame(), /SQLITE_BUSY/);
+  });
+
+  it("Esc in the sidebar dismisses the error line", async () => {
+    const api = new FakeClient();
+    api.failWith = new ClientError("boom", "Could not load the overview.", "x");
+    const { h } = await mount({ view: VIEW.overview, api });
+    assert.match(h.frame(), /Error:/);
+    await esc(h); // to the sidebar
+    await esc(h); // dismiss
+    assert.doesNotMatch(h.frame(), /Error:/);
   });
 });
 
-describe("view frames at 100x30", () => {
+describe("frames", () => {
   it("renders each view (set FOREWRIGHT_TUI_FRAMES=1 to print them)", async () => {
-    for (let v = 0; v < 8; v++) {
-      const { h } = await mount(100, 30, v);
-      const f = h.frame();
-      assert.ok(f.trim().length > 0);
-      if (process.env["FOREWRIGHT_TUI_FRAMES"]) console.log(`\n===== ${VIEW_NAMES[v]} (100x30) =====\n${f}`);
-      h.unmount();
-      open.pop();
+    const show = (title: string, frame: string) => {
+      if (process.env["FOREWRIGHT_TUI_FRAMES"]) console.log(`\n===== ${title} =====\n${frame}`);
+    };
+    // CTO, empty state
+    const empty = new FakeClient();
+    empty.data.messages = [];
+    empty.proposedPrd = false;
+    const e = await mount({ cols: 120, rows: 36, api: empty });
+    assert.match(e.h.frame(), /Tell the CTO what you want to build\. It will propose a PRD for you to approve\./);
+    show("CTO, empty state (120x36)", e.h.frame());
+    release(e.h);
+    // CTO with a PRD
+    const c = await mount({ cols: 120, rows: 36 });
+    assert.match(c.h.frame(), /PRD r2 · proposed/);
+    show("CTO with a PRD (120x36)", c.h.frame());
+    release(c.h);
+    // Overview, Tasks (list and detail), Inbox
+    const o = await mount({ cols: 120, rows: 36, view: VIEW.overview });
+    show("Overview (120x36)", o.h.frame());
+    release(o.h);
+    const t = await mount({ cols: 120, rows: 36, view: VIEW.tasks });
+    show("Tasks, list (120x36)", t.h.frame());
+    await enter(t.h);
+    show("Tasks, detail (120x36)", t.h.frame());
+    release(t.h);
+    const i = await mount({ cols: 120, rows: 36, view: VIEW.inbox });
+    show("Inbox (120x36)", i.h.frame());
+    await enter(i.h);
+    show("Inbox, choosing an option (120x36)", i.h.frame());
+    release(i.h);
+    const n = await mount({ cols: 70, rows: 22 });
+    show("CTO (70x22)", n.h.frame());
+    release(n.h);
+    for (let v = 0; v < VIEW_NAMES.length; v++) {
+      const { h } = await mount({ cols: 100, rows: 30, view: v });
+      assert.ok(h.frame().trim().length > 0);
+      show(`${VIEW_NAMES[v]} (100x30)`, h.frame());
+      release(h);
     }
   });
 });

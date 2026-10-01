@@ -1,64 +1,75 @@
 import { useRef, useState } from "react";
-import { Box, Text } from "ink";
-import { SafeText, ScrollLines, TextInput, type DLine } from "../components.js";
-import { useCtx, useDraft, useJump, useKeys, useLoad } from "../context.js";
-import { clockTime, diffLines, oneLine, wrapText } from "../format.js";
+import { Box } from "ink";
+import { Chip, PaneHeader, ScrollLines, boxLines, useSpinner, type DLine } from "../components.js";
+import { ComposeBox, composeHeight } from "../compose.js";
+import { useCtx, useDraft, useHintScope, useKeys, useLoad } from "../context.js";
+import { clip, clockTime, oneLine, titleCase, wrapText } from "../format.js";
+import { markdownLines, plainInline } from "../markdown.js";
 import type { Agent, Message, RequirementDoc } from "../../core/store-types.js";
-import { palette } from "../theme.js";
+import { palette, sym } from "../theme.js";
 
-export function senderLabel(m: Message, agents: Agent[]): { label: string; color: string } {
-  if (m.senderKind === "human") return { label: "Billy", color: palette.accent };
-  if (m.senderKind === "system") return { label: "system", color: palette.muted };
+const EXAMPLES = ["Build a small command line tip calculator", "Add tests and a README to this project", "Review this codebase and propose a plan to improve it"];
+
+export function senderLabel(m: Message, agents: Agent[]): { label: string; color: string; you: boolean } {
+  if (m.senderKind === "human") return { label: "You", color: palette.accent, you: true };
+  if (m.senderKind === "system") return { label: "System", color: palette.muted, you: false };
   const a = agents.find((x) => x.id === m.senderId);
-  return { label: a?.name ?? "agent", color: palette.done };
+  return { label: a ? (a.role === "cto" ? "CTO" : a.name) : "Agent", color: palette.done, you: false };
 }
 
-export function messageLines(messages: Message[], agents: Agent[], width: number): DLine[] {
+/** Conversation as message blocks: a header line (who and when), the wrapped text, a blank line. `after` can add lines below a message. */
+export function messageLines(messages: Message[], agents: Agent[], width: number, after?: (m: Message, index: number) => DLine[] | null): DLine[] {
   const lines: DLine[] = [];
-  for (const m of messages) {
+  messages.forEach((m, i) => {
     const s = senderLabel(m, agents);
-    lines.push({ text: `${s.label}  ${clockTime(m.createdAt)}`, color: s.color, bold: true });
-    for (const l of wrapText(m.body, Math.max(10, width - 2))) lines.push({ text: `  ${l}` });
+    const time = clockTime(m.createdAt);
+    lines.push({ text: `${s.label} ${sym().dot} ${time}`, segs: [{ text: s.label, bold: true, ...(s.you ? { color: palette.accent } : {}) }, { text: ` ${sym().dot} ${time}`, dim: true }] });
+    lines.push(...markdownLines(m.body, Math.max(10, width)));
     lines.push({ text: "" });
-  }
+    const extra = after?.(m, i);
+    if (extra) lines.push(...extra, { text: "" });
+  });
   return lines;
 }
 
-function prdPanelLines(doc: RequirementDoc | null, width: number): DLine[] {
-  if (!doc) return [{ text: "No PRD yet.", dim: true }, { text: "Describe what you want to build and the CTO will draft one.", dim: true }];
-  const lines: DLine[] = [{ text: `PRD revision ${doc.revision}`, bold: true, color: palette.accent }];
-  lines.push({ text: `Status: ${doc.status}`, color: doc.status === "proposed" ? palette.attention : doc.status === "approved" ? palette.done : palette.muted, bold: doc.status === "proposed" });
-  lines.push({ text: oneLine(doc.title), bold: true });
-  if (doc.summaryOfChange) for (const l of wrapText(`Change: ${doc.summaryOfChange}`, width)) lines.push({ text: l });
-  lines.push({ text: "" });
-  for (const r of doc.requirements) for (const l of wrapText(`${r.key} ${r.text}`, width)) lines.push({ text: l });
-  if (doc.status === "proposed") lines.push({ text: "", }, { text: "Press A to approve, D to read it.", color: palette.attention });
-  return lines;
+/** The PRD as a card inside the conversation. */
+export function prdCard(doc: RequirementDoc, width: number): DLine[] {
+  const color = doc.status === "proposed" ? palette.attention : doc.status === "approved" ? palette.done : palette.muted;
+  const inner = Math.max(10, Math.min(width, 72) - 4);
+  const body: DLine[] = [{ text: oneLine(doc.title), bold: true }];
+  for (const r of doc.requirements.slice(0, 3)) body.push({ text: clip(`${r.key} ${plainInline(oneLine(r.text))}`, inner) });
+  if (doc.requirements.length > 3) body.push({ text: `and ${doc.requirements.length - 3} more requirement${doc.requirements.length - 3 === 1 ? "" : "s"}`, dim: true });
+  body.push({ text: doc.status === "proposed" ? `/approve to start ${sym().dot} /prd to read` : `${doc.status} ${sym().dot} /prd to read`, dim: true });
+  return boxLines([{ text: `PRD r${doc.revision}`, bold: true }, { text: ` ${sym().dot} ${doc.status}`, color }], body, Math.min(width, 72), color);
 }
 
 export function CtoView() {
   const ctx = useCtx();
   const { api, projectId } = ctx;
-  const [focus, setFocus] = useState(true);
-  const [full, setFull] = useState(false);
+  const w = ctx.bodyWidth;
+  const h = ctx.bodyHeight;
   const sending = useRef(false);
-  useJump(1, (j) => {
-    if (j.blurInput) setFocus(false);
-  });
+  const [exIdx, setExIdx] = useState(0);
   const draft = useDraft("cto", "compose");
   const msgs = useLoad(() => api.call("state.messages", { projectId, channel: "cto", limit: 200 }));
   const team = useLoad(() => api.call("state.team", { projectId }));
   const prd = useLoad(() => api.call("state.prd", { projectId }));
   const doc = prd.data?.doc ?? null;
-  const wide = ctx.cols >= 100;
-  const panelW = wide ? 38 : 0;
-  const convW = ctx.cols - panelW - (wide ? 1 : 0);
-  const inputRows = ctx.bodyHeight >= 12 ? 3 : 1;
-  const convH = Math.max(1, ctx.bodyHeight - 1 - inputRows);
+  const agents = team.data?.agents ?? [];
+  const cto = agents.find((a) => a.role === "cto") ?? null;
+  const thinking = ctx.runtime?.ctoBusy === true;
+  const spinner = useSpinner(thinking);
+  const typing = ctx.focus === "input";
+  const empty = msgs.loaded && (msgs.data?.messages.length ?? 0) === 0;
+  useHintScope(typing ? null : "cto");
 
-  const send = async () => {
-    const body = draft.value.trim();
-    if (body.length === 0 || sending.current) return;
+  const compact = h < 9;
+  const maxRows = h >= 14 ? 3 : 1;
+  const compH = composeHeight(draft.value, w, maxRows, compact, typing, h);
+  const convH = Math.max(1, h - 1 - compH);
+
+  const send = async (body: string) => {
+    if (sending.current) return;
     sending.current = true;
     try {
       await api.call("cto.send", { projectId, body });
@@ -71,58 +82,50 @@ export function CtoView() {
   };
 
   useKeys((input, key) => {
-    if (full) {
-      if (key.escape || input === "D") setFull(false);
-      return;
+    if (key.escape || key.leftArrow) return ctx.back();
+    if (empty) {
+      if (key.upArrow) return setExIdx((i) => Math.max(0, i - 1));
+      if (key.downArrow) return setExIdx((i) => Math.min(EXAMPLES.length - 1, i + 1));
+      if (key.return) {
+        draft.setValue(EXAMPLES[exIdx]!);
+        return ctx.setFocus("input");
+      }
     }
-    if (focus) return;
-    if (input === "i" || key.return) return setFocus(true);
-    if (input === "A") {
-      if (doc?.status === "proposed") {
-        ask(doc);
-      } else ctx.fail({ plain: "There is no proposed PRD revision to approve.", detail: null });
-    } else if (input === "D") {
-      if (doc) setFull(true);
-      else ctx.fail({ plain: "There is no PRD to show yet.", detail: null });
-    }
+    if (key.return || input === "i") return ctx.setFocus("input");
+    if (input === "a") return ctx.run("approve");
+    if (input === "d") return ctx.run("prd");
   });
-  const ask = (d: RequirementDoc) =>
-    ctx.ask(`Approve PRD revision ${d.revision}? The CTO will plan tasks from it. (y/n)`, async () => {
-      const res = await api.call("prd.approve", { projectId, revision: d.revision });
-      ctx.notify(`Approved revision ${res.doc.revision}. ${res.affectedTaskIds.length} task(s) affected.`);
-    });
 
-  if (full && doc) {
-    const approved = prd.data?.approved ?? null;
-    const lines: DLine[] = [{ text: `PRD revision ${doc.revision} (${doc.status})${approved && approved.revision !== doc.revision ? ` compared with approved revision ${approved.revision}` : ""}`, bold: true, color: palette.accent }, { text: "Esc or D closes. PgUp/PgDn/arrows scroll.", dim: true }];
-    if (approved && approved.revision !== doc.revision) {
-      for (const d of diffLines(approved.body, doc.body)) lines.push({ text: `${d.kind === "add" ? "+ " : d.kind === "del" ? "- " : "  "}${d.text}`, color: d.kind === "add" ? palette.done : d.kind === "del" ? palette.error : undefined });
-    } else for (const l of wrapText(doc.body, ctx.cols - 2)) lines.push({ text: l });
-    return <ScrollLines lines={lines} height={ctx.bodyHeight} arrows />;
+  const conv: DLine[] = [];
+  if (empty) {
+    conv.push(...boxLines([{ text: "Welcome", bold: true }], [...wrapText("Tell the CTO what you want to build. It will propose a PRD for you to approve.", Math.max(10, Math.min(w, 84) - 4)).map((text) => ({ text }))], Math.min(w, 84), palette.accent));
+    conv.push({ text: "" }, { text: "Try one of these", dim: true });
+    EXAMPLES.forEach((ex, i) => {
+      const on = i === exIdx;
+      const text = `${on ? sym().pointer : " "} ${ex}`;
+      conv.push(on ? (ctx.focus === "main" ? { text, bar: true } : { text, color: palette.accent, bold: true }) : { text });
+    });
+  } else {
+    // The PRD card goes under the last CTO message at or before the revision's creation time.
+    let cardAt = -1;
+    const list = msgs.data?.messages ?? [];
+    if (doc) {
+      list.forEach((m, i) => {
+        if (m.senderKind === "agent" && m.createdAt <= doc.createdAt) cardAt = i;
+      });
+      if (cardAt < 0) cardAt = list.length - 1;
+    }
+    conv.push(...messageLines(list, agents, w, (_m, i) => (doc && i === cardAt ? prdCard(doc, w) : null)));
   }
 
-  const conv = messageLines(msgs.data?.messages ?? [], team.data?.agents ?? [], convW);
-  if (conv.length === 0 && msgs.loaded) conv.push({ text: "No messages yet. Tell the CTO what you want to build.", dim: true });
-  const thinking = ctx.runtime?.ctoBusy === true;
+  const proposed = doc?.status === "proposed";
+  const pill = thinking ? <Chip text={`${spinner} thinking${sym().ellipsis}`} color={palette.accent} /> : proposed ? <Chip text={`${sym().bullet} PRD to approve`} color={palette.attention} bold /> : undefined;
 
   return (
-    <Box flexDirection="column" height={ctx.bodyHeight}>
-      <Box height={convH}>
-        <Box width={convW} flexDirection="column">
-          <ScrollLines lines={conv} height={convH} anchor="bottom" active />
-        </Box>
-        {wide ? (
-          <Box width={panelW + 1} paddingLeft={1} flexDirection="column">
-            <ScrollLines lines={prdPanelLines(doc, panelW - 2)} height={convH} />
-          </Box>
-        ) : null}
-      </Box>
-      <Box height={1}>
-        <SafeText dimColor>{`${"-".repeat(3)} message the CTO ${focus ? "(Enter sends, Ctrl+J newline, Esc leaves)" : "(i to type)"}`}</SafeText>
-        {thinking ? <Text color={palette.attention}>{"  CTO is thinking..."}</Text> : null}
-        {!wide && doc?.status === "proposed" ? <Text color={palette.attention}>{"  PRD proposed: A approve, D read"}</Text> : null}
-      </Box>
-      <TextInput value={draft.value} onChange={draft.setValue} onSubmit={() => void send()} onEscape={() => setFocus(false)} focus={focus} multiline width={ctx.cols} maxRows={inputRows} placeholder="Type a message to the CTO" />
+    <Box flexDirection="column" height={h} width={w}>
+      <PaneHeader title="CTO" {...(cto ? { context: titleCase(cto.engine) } : {})} pill={pill} width={w} />
+      <ScrollLines lines={conv} height={convH} width={w} anchor="bottom" arrows={!empty} zones={["main", "input"]} />
+      <ComposeBox value={draft.value} onChange={draft.setValue} onClear={draft.clear} onSend={(t) => void send(t)} scope="cto.input" placeholder={`Message the CTO${sym().ellipsis}`} width={w} maxRows={maxRows} compact={compact} paneHeight={h} onUp={() => ctx.setFocus("main")} />
     </Box>
   );
 }

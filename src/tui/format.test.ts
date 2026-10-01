@@ -14,8 +14,16 @@ describe("format helpers", () => {
   });
 
   it("clips with a marker", () => {
-    assert.equal(clip("abcdef", 4), "abc~");
+    assert.equal(clip("abcdef", 4), "abc…");
     assert.equal(clip("abc", 4), "abc");
+    const before = process.env["FOREWRIGHT_ASCII"];
+    process.env["FOREWRIGHT_ASCII"] = "1";
+    try {
+      assert.equal(clip("abcdefgh", 6), "abc...", "the ASCII marker is three characters and still fits the width");
+    } finally {
+      if (before === undefined) delete process.env["FOREWRIGHT_ASCII"];
+      else process.env["FOREWRIGHT_ASCII"] = before;
+    }
   });
 
   it("formats relative time and durations", () => {

@@ -28,30 +28,40 @@ forewright
 
 1. `forewright` starts the background service if it is not running and tells you where its log is.
 2. If the folder has no workspace yet, a welcome screen shows the resolved root and whether it is a git repository. Press `y` to create one. This adds a small `.forewright` marker folder (excluded from git through `.git/info/exclude`, never your `.gitignore`) and stores all state under the data directory below.
-3. Open the CTO view (`2`) and describe what you want. The CTO proposes a PRD. Press `Esc` to leave the text box, then `D` to read it and `A` to approve it.
-4. After approval the CTO plans tasks and hires agents. Watch progress in Overview (`1`) and Tasks (`3`). Decisions that need you appear in the Inbox (`5`).
+3. The CTO view opens with the message box focused. Just type what you want and press `Enter`. The CTO proposes a PRD, shown as a card in the conversation. Type `/approve` to approve it (you are asked first) or `/prd` to read it in full.
+4. After approval the CTO plans tasks and hires agents. The sidebar lists the views (CTO, Overview, Tasks, Inbox, Team, Chat, Evidence, Settings) and every agent, most urgent first. Move with the arrow keys and press `Enter` to open a view. Decisions that need you appear in the Inbox with a dot.
 
 Starting `forewright` from a subfolder or a linked git worktree opens the same project. Moving the project folder keeps its identity, because the identity lives in the marker file.
 
 ## Keys
 
-| Key | Action |
-|---|---|
-| `1` to `8`, `Tab`, `Shift+Tab` | Switch view: Overview, CTO, Tasks, Chat, Inbox, Team, Evidence, Settings |
-| `n` | Jump to the next thing that needs you: open decisions, then a proposed PRD, then blocked tasks. Press again to cycle |
-| `g` | Jump to the item the notice at the bottom is about |
-| `Ctrl+K` or `:` | Command palette: type to filter views, tasks, agents and open decisions, `Enter` jumps, `Esc` closes |
-| `?` | Help listing every key |
-| `P` | Pause all work, or resume when paused (asks first) |
-| `X` | Stop the selected run, or the only active run (asks first) |
-| `L` | Raw log of the selected run |
-| `e` | Show or hide technical details of the last error |
-| `Esc` | Leave a text box, close an overlay, dismiss the error |
-| `q` | Quit the screen. The service keeps running |
+The screen has three focus zones: the sidebar, the main pane and the message box (in CTO and Chat). The focused zone has a bright border. `Tab` and `Shift+Tab` move between them. The bottom line always lists the keys of the zone you are in.
 
-The agent strip under the tab bar shows each agent with a status symbol (needs you, blocked, done, working, idle), most urgent first; it shrinks on short terminals and hides under 14 rows. The header counts agents by status and the Inbox tab shows the number of open decisions. Notices stay 8 seconds when they need you, 5 when something finished and 4 otherwise. Set `FOREWRIGHT_ASCII=1` for plain symbols and `FOREWRIGHT_BELL=1` for a terminal bell on needs-you notices. Team and task details show the last lines of the run's live output. In the Inbox, `a` adds a note to a decision.
+| Where | Key | Action |
+|---|---|---|
+| Anywhere | `Tab`, `Shift+Tab` | Move focus between sidebar, main pane and message box |
+| Anywhere | `Ctrl+P` (or `Ctrl+K`) | Command palette: every view, command, task, agent and open decision. `Enter` runs, `Esc` closes |
+| Anywhere | `Ctrl+N` | Jump to the next thing that needs you: open decisions, then a proposed PRD, then blocked tasks. Press again to cycle |
+| Anywhere | `Ctrl+G` | Jump to the item the notice (bottom right) is about |
+| Anywhere | `Ctrl+E` | Show or hide technical details of the last error |
+| Anywhere | `Ctrl+C` | Quit the screen. While agents are running it asks first; the service keeps running either way |
+| Not in a message box | `?` | Help listing every key and command |
+| Sidebar | `Up`, `Down`, `Enter` or `Right` | Move through the views, open one (focus moves into it) |
+| Sidebar | `Esc` | Dismiss the error line or the notice |
+| Main pane | `Up`, `Down`, `Enter` | Move through lists and open the chosen item or run its main action (destructive actions ask first) |
+| Main pane | `Esc` or `Left` | Go back: details to list, list to sidebar |
+| Main pane | `PgUp`, `PgDn` | Scroll long content |
+| Message box | `Enter` | Send |
+| Message box | `Shift+Enter` or `Ctrl+J` | New line |
+| Message box | `Up` on an empty box | Move to the conversation so you can scroll it |
+| Message box | `Esc` | Leave for the sidebar. The draft is kept |
+| Message box | `/` | Slash commands (below). Suggestions appear as you type; `Up`/`Down` choose, `Tab` or `Enter` completes |
 
-Global keys are ignored while a text box has focus. Press `Esc` first. View keys (approve a PRD, cancel a task, reassign, resolve a decision, edit an agent) are listed in the footer and in `?`. Text you type in compose boxes is saved as a draft and comes back after you switch views or restart.
+Single letters only act where no text box has focus, and they are listed on the bottom line: in Tasks (`v` board or list, `l` log; in task details `Enter` resume, `c` cancel, `a` reassign, `l` log, `x` stop run), in the CTO conversation (`a` approve the PRD, `d` read it), in the Inbox (`h` history; choosing an option: `Enter` resolve, `a` add a note), in Team (`l` log).
+
+Slash commands, in the CTO or Chat message box: `/approve`, `/prd`, `/pause`, `/resume`, `/stop`, `/inbox`, `/tasks`, `/team`, `/settings`, `/help`, plus `/overview`, `/chat`, `/evidence`, `/log` and `/terminate`. Anything with more words than a command name (for example a path) is sent as an ordinary message.
+
+The sidebar shows the views with badges (tasks being worked on, a dot and the count of decisions waiting for you) and below them the agents with a status symbol (needs you, blocked, done, working, idle), most urgent first. Under 90 columns the sidebar turns into a tab line; under 60 columns it is hidden and views are reached through the palette (`Ctrl+P`). The title bar shows the project, the git branch and the connection (connected, reconnecting, offline) and a PAUSED pill. Notices appear as a small card at the bottom right of the main pane (on small terminals they replace the bottom line) and stay 8 seconds when they need you, 5 when something finished and 4 otherwise. Set `FOREWRIGHT_ASCII=1` for plain symbols and borders and `FOREWRIGHT_BELL=1` for a terminal bell on needs-you notices. Team and task details show the last lines of the run's live output. Text you type in message boxes is saved as a draft and comes back after you switch views or restart.
 
 What the controls do:
 

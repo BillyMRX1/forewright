@@ -1,20 +1,23 @@
-// Root component: header, tabs, footer, global keys, and the modal overlays.
+// Root component: title bar, sidebar, main pane, hint line, focus model, global keys and overlays.
 
+import { execFile } from "node:child_process";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import type { ClientApi } from "./client.js";
-import { Ctx, type AppCtx, type JumpTarget, type Selection } from "./context.js";
-import { SafeText, ScrollLines } from "./components.js";
-import { VIEW_NAMES, VIEW_SHORT, abbreviatePath, clip, wrapText } from "./format.js";
+import { Ctx, needTarget, type AppCtx, type JumpTarget, type Selection, type Zone } from "./context.js";
+import { SafeText } from "./components.js";
+import { VIEW, VIEW_NAMES, wrapText } from "./format.js";
 import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
-import type { Decision, ForewrightEvent, Task } from "../core/store-types.js";
+import type { Decision, ForewrightEvent, RequirementDoc, Task } from "../core/store-types.js";
 import { TASK_STATES } from "../core/types.js";
-import { countStatuses, deriveAttention, needsYouItems, nextNeedItem, summarize, SUMMARY_SEPARATOR, type UnseenDone } from "./attention.js";
-import { AgentStrip, stripHeight } from "./agent-strip.js";
-import { Palette } from "./palette.js";
-import { footerHints, helpLines } from "./keys.js";
+import { deriveAttention, needsYouItems, nextNeedItem, type UnseenDone } from "./attention.js";
+import { Sidebar, TabLine, TitleBar, ToastCard, type ConnView } from "./chrome.js";
+import { Palette, type PaletteEntry } from "./palette.js";
+import { ConfirmCard, HelpModal, PrdViewer } from "./modals.js";
+import { footerHints } from "./keys.js";
+import { viewOfAction, type ActionId } from "./commands.js";
 import { DEFAULT_TOAST_MS, currentToast, enqueueToast, removeToast, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
-import { palette as colors, statusColor, statusGlyph } from "./theme.js";
+import { borderStyle, palette as colors } from "./theme.js";
 import { OverviewView } from "./views/overview.js";
 import { CtoView } from "./views/cto.js";
 import { TasksView } from "./views/tasks.js";
@@ -37,6 +40,10 @@ export interface AppProps {
   toastMs?: Partial<Record<ToastKind, number>>;
   /** Called when the user quits, after the UI has been asked to exit. */
   onQuit?: () => void;
+  /** Git branch to show. When left out, it is read from the project folder. */
+  branch?: string | null;
+  /** How long the connection may stay lost before the title bar says offline instead of reconnecting. */
+  offlineAfterMs?: number;
 }
 
 interface ErrorInfo {
@@ -53,9 +60,13 @@ interface Snapshot {
 
 const EMPTY_SNAPSHOT: Snapshot = { agents: [], tasks: [], decisions: [], proposedPrd: false };
 
-function tabLabel(i: number, short: boolean, inbox: number): string {
-  const badge = i === 4 && inbox > 0 ? (short ? `(${inbox})` : ` (${inbox})`) : "";
-  return ` ${i + 1} ${short ? VIEW_SHORT[i] : VIEW_NAMES[i]}${badge} `;
+/** CTO and Chat have a message box. */
+function viewHasInput(view: number): boolean {
+  return view === VIEW.cto || view === VIEW.chat;
+}
+
+function defaultZone(view: number): Zone {
+  return viewHasInput(view) ? "input" : "main";
 }
 
 function str(v: unknown, fallback: string): string {
@@ -74,14 +85,24 @@ function toErrorInfo(err: unknown): ErrorInfo {
   return { plain: "Something went wrong.", detail: String(err) };
 }
 
-function providerSummary(providers: ProviderStatus[]): string {
-  return providers
-    .map((p) => {
-      const h = p.health;
-      const state = h.isTestDouble ? "test double" : h.binaryPath === null ? "missing" : h.authenticated === true ? "ok" : h.authenticated === false ? "login needed" : "unknown";
-      return `${h.engine} ${state}`;
-    })
-    .join("  ");
+/** The current git branch of the project folder. Cosmetic, so a folder git cannot read simply shows no branch. */
+function useBranch(root: string, isGit: boolean, override: string | null | undefined): string | null {
+  const [branch, setBranch] = useState<string | null>(override ?? null);
+  useEffect(() => {
+    if (override !== undefined) {
+      setBranch(override);
+      return;
+    }
+    if (!isGit) return;
+    let cancelled = false;
+    execFile("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 3000 }, (err, out) => {
+      if (!cancelled && !err && out.trim().length > 0) setBranch(out.trim());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [root, isGit, override]);
+  return branch;
 }
 
 export function App(props: AppProps) {
@@ -90,24 +111,37 @@ export function App(props: AppProps) {
   const win = useWindowSize();
   const cols = Math.max(20, props.size?.columns ?? (win.columns || 80));
   const rows = Math.max(6, props.size?.rows ?? (win.rows || 24));
+  const initial = props.initialView ?? VIEW.cto;
 
-  const [view, setView] = useState(props.initialView ?? 0);
+  const [view, setView] = useState(initial);
+  const [cursor, setCursor] = useState(initial);
+  const [rawFocus, setFocus] = useState<Zone>(defaultZone(initial));
+  const [hintScope, setHintScopeState] = useState("cto.input");
+  const setHintScope = useCallback((scope: string | null) => {
+    if (scope !== null) setHintScopeState(scope);
+  }, []);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [tick, setTick] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
-  const [inboxCount, setInboxCount] = useState(0);
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   const [unseen, setUnseen] = useState<UnseenDone[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
-  const [conn, setConn] = useState<"ok" | "lost">("ok");
+  const [conn, setConn] = useState<ConnView>("connected");
   const [error, setError] = useState<ErrorInfo | null>(null);
   const [errorOpen, setErrorOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [help, setHelp] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [prdOpen, setPrdOpen] = useState(false);
   const [logRun, setLogRun] = useState<string | null>(null);
   const [jump, setJump] = useState<JumpTarget | null>(null);
-  const [confirm, setConfirm] = useState<{ text: string; onYes: () => Promise<void> | void } | null>(null);
+  const [confirm, setConfirm] = useState<{ text: string; onYes: () => Promise<void> | void; quit?: boolean } | null>(null);
   const inputCount = useRef(0);
+  const [inputClaims, setInputClaims] = useState(0);
+  const tabCaptured = useRef(false);
+  const setTabCaptured = useCallback((v: boolean) => {
+    tabCaptured.current = v;
+  }, []);
   const selection = useRef<Selection>({ taskId: null, runId: null });
   const runtimeRef = useRef<RuntimeStatus | null>(null);
   runtimeRef.current = runtime;
@@ -119,6 +153,7 @@ export function App(props: AppProps) {
   const jumpNonce = useRef(0);
   const lastNeed = useRef<string | null>(null);
   const toastMs = { ...DEFAULT_TOAST_MS, ...props.toastMs };
+  const branch = useBranch(props.root, props.isGit, props.branch);
 
   const fail = useCallback((err: unknown) => {
     setError(toErrorInfo(err));
@@ -220,7 +255,7 @@ export function App(props: AppProps) {
       if (pid === projectId) setRuntime(status);
     });
     const offConn = api.onConnection((state) => {
-      setConn(state === "lost" ? "lost" : "ok");
+      setConn(state === "lost" ? "reconnecting" : "connected");
       if (state === "restored") bump();
     });
     return () => {
@@ -231,6 +266,13 @@ export function App(props: AppProps) {
       offConn();
     };
   }, [api, projectId, fail]);
+
+  // A connection that stays lost is offline, not just reconnecting.
+  useEffect(() => {
+    if (conn !== "reconnecting") return;
+    const t = setTimeout(() => setConn((c) => (c === "reconnecting" ? "offline" : c)), props.offlineAfterMs ?? 10_000);
+    return () => clearTimeout(t);
+  }, [conn, props.offlineAfterMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -244,7 +286,6 @@ export function App(props: AppProps) {
       ([rt, inbox, team, board, prd]) => {
         if (cancelled) return;
         setRuntime(rt);
-        setInboxCount(inbox.open.length);
         const tasks = TASK_STATES.flatMap((st) => board.board[st]);
         setSnap({ agents: team.agents, tasks, decisions: inbox.open, proposedPrd: prd.doc?.status === "proposed" });
         // Finished work is "unseen" only if it finished after this client started.
@@ -286,33 +327,80 @@ export function App(props: AppProps) {
       cancelled = true;
       clearInterval(t);
     };
-  }, [api, fail, conn]);
+  }, [api, fail, conn === "connected"]);
+
+  // ---- layout
+  const sidebarMode: "full" | "tabs" | "none" = sidebarHidden ? "none" : cols >= 90 ? "full" : cols >= 60 ? "tabs" : "none";
+  const sidebarW = cols >= 120 ? 26 : 24;
+  const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 6).slice(0, 3) : [];
+  const errorRows = error ? 1 + detailLines.length : 0;
+  const contentH = Math.max(3, rows - 2 - errorRows);
+  const paneOuterW = sidebarMode === "full" ? cols - sidebarW : cols;
+  const paneOuterH = sidebarMode === "tabs" ? contentH - 1 : contentH;
+  const bodyWidth = Math.max(8, paneOuterW - 4);
+  const bodyHeight = Math.max(1, paneOuterH - 2);
+
+  // ---- focus
+  const focus: Zone = rawFocus === "sidebar" && sidebarMode === "none" ? "main" : rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
+  const modal = help || confirm !== null || logRun !== null || paletteOpen || prdOpen;
 
   const ask = useCallback((text: string, onYes: () => Promise<void> | void) => setConfirm({ text, onYes }), []);
   const claimInput = useCallback(() => {
     inputCount.current += 1;
+    setInputClaims(inputCount.current);
     return () => {
       inputCount.current -= 1;
+      setInputClaims(inputCount.current);
     };
   }, []);
   const setSelection = useCallback((sel: Partial<Selection>) => {
     selection.current = { ...selection.current, ...sel };
   }, []);
-  const goto = useCallback((i: number) => {
-    setJump(null);
-    setView(((i % VIEW_NAMES.length) + VIEW_NAMES.length) % VIEW_NAMES.length);
+  const openView = useCallback((i: number, zone?: Zone) => {
+    const v = ((i % VIEW_NAMES.length) + VIEW_NAMES.length) % VIEW_NAMES.length;
+    setView(v);
+    setCursor(v);
+    setFocus(zone ?? defaultZone(v));
   }, []);
-  const jumpTo = useCallback((target: Omit<JumpTarget, "nonce">) => {
-    jumpNonce.current += 1;
-    setJump({ ...target, nonce: jumpNonce.current });
-    setView(target.view);
-  }, []);
+  const goto = useCallback(
+    (i: number, zone?: Zone) => {
+      setJump(null);
+      openView(i, zone);
+    },
+    [openView],
+  );
+  const jumpTo = useCallback(
+    (target: Omit<JumpTarget, "nonce">) => {
+      jumpNonce.current += 1;
+      setJump({ ...target, nonce: jumpNonce.current });
+      openView(target.view, target.focus ?? (target.blurInput ? "main" : undefined));
+    },
+    [openView],
+  );
   const markSeen = useCallback((sel: { taskId?: string; agentId?: string }) => {
     setUnseen((u) => {
       const next = u.filter((x) => x.taskId !== sel.taskId && (sel.agentId === undefined || x.agentId !== sel.agentId));
       return next.length === u.length ? u : next;
     });
   }, []);
+  // The sidebar cursor follows the open view whenever the sidebar is not the focus.
+  useEffect(() => {
+    if (focus !== "sidebar") setCursor(view);
+  }, [focus, view]);
+
+  const dismissNotices = () => {
+    setError(null);
+    if (shownId !== null) setToasts((q) => removeToast(q, shownId));
+  };
+  const back = useCallback(() => {
+    if (sidebarMode !== "none") {
+      setCursor(view);
+      setFocus("sidebar");
+    } else {
+      setError(null);
+      setToasts((q) => (q.length > 0 ? removeToast(q, currentToast(q)!.id) : q));
+    }
+  }, [sidebarMode, view]);
 
   const attention = useMemo(
     () => deriveAttention({ agents: snap.agents, tasks: snap.tasks, decisions: snap.decisions, runtime, proposedPrd: snap.proposedPrd, unseenDone: unseen }),
@@ -320,21 +408,13 @@ export function App(props: AppProps) {
   );
   const needs = useMemo(() => needsYouItems({ tasks: snap.tasks, decisions: snap.decisions, proposedPrd: snap.proposedPrd }), [snap]);
 
-  const jumpToTarget = (target: ToastTarget) => {
-    if (target.kind === "decision") jumpTo({ view: 4, decisionId: target.decisionId });
-    else if (target.kind === "task") jumpTo({ view: 2, taskId: target.taskId });
-    else jumpTo({ view: 1 });
+  const toastTarget = (target: ToastTarget): Omit<JumpTarget, "nonce"> => {
+    if (target.kind === "decision") return { view: VIEW.inbox, decisionId: target.decisionId, focus: "main" };
+    if (target.kind === "task") return { view: VIEW.tasks, taskId: target.taskId, focus: "main" };
+    return { view: VIEW.cto };
   };
 
-  // ---- layout budget
-  const headerRows = rows < 24 ? 1 : 2;
-  // Overview already lists every agent in its "Now" section, so the strip is not repeated there.
-  const stripRows = view === 0 ? 0 : stripHeight(rows, attention.length);
-  const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 2).slice(0, 3) : [];
-  const errorRows = error ? 1 + detailLines.length : 0;
-  const bodyHeight = Math.max(1, rows - headerRows - 1 - stripRows - 1 - errorRows - (confirm ? 1 : 0));
-  const modal = help || confirm !== null || logRun !== null || paletteOpen;
-
+  // ---- actions
   const resolveRun = async (): Promise<string | null> => {
     const rt = runtimeRef.current;
     const active = rt?.activeRuns ?? [];
@@ -345,7 +425,7 @@ export function App(props: AppProps) {
       if (a) return a.runId;
       const detail = await api.call("state.task", { projectId, taskId: sel.taskId });
       const latest = [...detail.runs].sort((x, y) => y.createdAt.localeCompare(x.createdAt))[0];
-      if (latest) return latest.id;
+      return latest ? latest.id : null;
     }
     if (active.length === 1) return active[0]!.runId;
     return null;
@@ -356,25 +436,118 @@ export function App(props: AppProps) {
     const active = runtimeRef.current?.activeRuns ?? [];
     const target = (sel.runId ? active.find((r) => r.runId === sel.runId) : undefined) ?? (sel.taskId ? active.find((r) => r.taskId === sel.taskId) : undefined) ?? (active.length === 1 ? active[0] : undefined);
     if (!target) {
-      fail({ plain: active.length === 0 ? "No run is active right now." : "Several runs are active. Select a task in Tasks first, then press X.", detail: null });
+      fail({ plain: active.length === 0 ? "No run is active right now." : "Several runs are active. Open a task in Tasks first, then stop its run.", detail: null });
       return;
     }
-    ask(`Stop the current run (${target.runId.slice(0, 8)})? (y/n)`, async () => {
+    ask(`Stop the current run (${target.runId.slice(0, 8)})?`, async () => {
       await api.call("control.stopRun", { projectId, runId: target.runId });
       notify("Run stopped.");
     });
   };
 
+  const approve = (doc: RequirementDoc) =>
+    ask(`Approve PRD revision ${doc.revision}? The CTO will plan tasks from it.`, async () => {
+      const res = await api.call("prd.approve", { projectId, revision: doc.revision });
+      setPrdOpen(false);
+      notify(`Approved revision ${res.doc.revision}. ${res.affectedTaskIds.length} task(s) affected.`);
+    });
+
   const goNextNeed = () => {
     const item = nextNeedItem(needs, lastNeed.current);
     if (!item) return notify("Nothing needs you right now.");
     lastNeed.current = item.key;
-    if (item.kind === "decision") jumpTo({ view: 4, decisionId: item.decisionId });
-    else if (item.kind === "prd") jumpTo({ view: 1, blurInput: true });
-    else jumpTo({ view: 2, taskId: item.taskId });
+    jumpTo(needTarget(item));
+  };
+
+  const quit = () => {
+    const doQuit = () => {
+      exit();
+      props.onQuit?.();
+    };
+    if ((runtimeRef.current?.activeRuns.length ?? 0) > 0) setConfirm({ text: "Agents keep working in the background. Quit?", onYes: doQuit, quit: true });
+    else doQuit();
+  };
+
+  const runAction = (id: ActionId) => {
+    const v = viewOfAction(id);
+    if (v !== null) return goto(v);
+    switch (id) {
+      case "approve":
+        api.call("state.prd", { projectId }).then((r) => {
+          if (r.doc?.status === "proposed") approve(r.doc);
+          else fail({ plain: "There is no proposed PRD revision to approve.", detail: null });
+        }, fail);
+        return;
+      case "prd":
+        setPrdOpen(true);
+        return;
+      case "pause":
+      case "resume": {
+        const paused = runtimeRef.current?.paused === true;
+        if (id === "pause" && paused) return notify("Work is already paused. Use /resume to continue.");
+        if (id === "resume" && !paused) return notify("Nothing is paused.");
+        ask(paused ? "Resume all work in this project?" : "Pause all work in this project?", async () => {
+          const status = await api.call(paused ? "control.resume" : "control.pauseAll", { projectId });
+          setRuntime(status);
+          notify(status.paused ? "Paused." : "Resumed.");
+        });
+        return;
+      }
+      case "terminate":
+        ask("Terminate the team? This pauses the project, stops every run and retires all workers except the CTO. Tasks and history are kept.", async () => {
+          const status = await api.call("control.terminateTeam", { projectId });
+          setRuntime(status);
+          notify("Team terminated. The project is paused; use /resume to continue.");
+        });
+        return;
+      case "stop":
+        return stopRun();
+      case "log":
+        resolveRun().then((runId) => {
+          if (runId) setLogRun(runId);
+          else fail({ plain: "No run to show. Open a task with a run first, or wait for a run to start.", detail: null });
+        }, fail);
+        return;
+      case "sidebar":
+        if (cols < 60) return notify("The sidebar is hidden on narrow terminals. Use ctrl+p to switch views.");
+        setSidebarHidden((h) => !h);
+        setFocus((f) => (f === "sidebar" ? "main" : f));
+        return;
+      case "help":
+        setHelp(true);
+        return;
+      case "quit":
+        return quit();
+      case "next":
+        return goNextNeed();
+      default:
+        return;
+    }
+  };
+  const runRef = useRef(runAction);
+  runRef.current = runAction;
+  const run = useCallback((id: ActionId) => runRef.current(id), []);
+
+  const pickEntry = (entry: PaletteEntry) => {
+    setPaletteOpen(false);
+    if (entry.target) jumpTo(entry.target);
+    else if (entry.action) run(entry.action);
+  };
+
+  const cycleFocus = (dir: 1 | -1) => {
+    const zones: Zone[] = [...(sidebarMode !== "none" ? (["sidebar"] as Zone[]) : []), "main", ...(viewHasInput(view) ? (["input"] as Zone[]) : [])];
+    const i = Math.max(0, zones.indexOf(focus));
+    setFocus(zones[(i + dir + zones.length) % zones.length]!);
   };
 
   useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      if (confirm?.quit) {
+        exit();
+        props.onQuit?.();
+      } else quit();
+      return;
+    }
     if (confirm) {
       if (input === "y" || input === "Y") {
         const c = confirm;
@@ -386,60 +559,33 @@ export function App(props: AppProps) {
       return;
     }
     if (help) {
-      if (key.escape || input === "?" || input === "q") setHelp(false);
+      if (key.escape || input === "?") setHelp(false);
       return;
     }
-    if (paletteOpen) return; // the palette owns its keys
-    if (logRun !== null) return; // the log viewer owns its keys
-    if (key.ctrl && input === "k") return setPaletteOpen(true);
-    if (inputCount.current > 0) return;
-    if (key.escape) {
-      setError(null);
-      if (shownId !== null) setToasts((q) => removeToast(q, shownId));
-      return;
-    }
-    if (/^[1-8]$/.test(input)) return goto(Number(input) - 1);
-    if (key.tab) return goto(view + (key.shift ? -1 : 1));
-    if (input === "?") return setHelp(true);
-    if (input === ":") return setPaletteOpen(true);
-    if (input === "n") return goNextNeed();
-    if (input === "g") {
+    if (paletteOpen || logRun !== null || prdOpen) return; // they own their keys
+    if (key.ctrl && (input === "p" || input === "k")) return setPaletteOpen(true);
+    if (key.ctrl && input === "n") return goNextNeed();
+    if (key.ctrl && input === "g") {
       if (shown?.target) {
-        jumpToTarget(shown.target);
+        jumpTo(toastTarget(shown.target));
         setToasts((q) => removeToast(q, shown.id));
       }
       return;
     }
-    if (input === "q") {
-      exit();
-      props.onQuit?.();
+    if (key.ctrl && input === "e") return setErrorOpen((o) => !o);
+    if (key.tab) {
+      if (tabCaptured.current && !key.shift) return;
+      return cycleFocus(key.shift ? -1 : 1);
+    }
+    if (focus === "sidebar") {
+      if (key.upArrow) setCursor((c) => Math.max(0, c - 1));
+      else if (key.downArrow) setCursor((c) => Math.min(VIEW_NAMES.length - 1, c + 1));
+      else if (key.return || key.rightArrow) openView(cursor);
+      else if (key.escape) dismissNotices();
+      else if (input === "?") setHelp(true);
       return;
     }
-    if (input === "e") return setErrorOpen((o) => !o);
-    if (input === "P") {
-      const paused = runtimeRef.current?.paused === true;
-      ask(paused ? "Resume all work in this project? (y/n)" : "Pause all work in this project? (y/n)", async () => {
-        const status = await api.call(paused ? "control.resume" : "control.pauseAll", { projectId });
-        setRuntime(status);
-        notify(status.paused ? "Paused." : "Resumed.");
-      });
-      return;
-    }
-    if (input === "T") {
-      ask("Terminate the team? This pauses the project, stops every run and retires all workers except the CTO. Tasks and history are kept. (y/n)", async () => {
-        const status = await api.call("control.terminateTeam", { projectId });
-        setRuntime(status);
-        notify("Team terminated. The project is paused; press P to resume.");
-      });
-      return;
-    }
-    if (input === "X") return stopRun();
-    if (input === "L") {
-      resolveRun().then((id) => {
-        if (id) setLogRun(id);
-        else fail({ plain: "No run to show. Select a task with a run first, or wait for a run to start.", detail: null });
-      }, fail);
-    }
+    if (focus === "main" && inputCount.current === 0 && input === "?" && !key.ctrl && !key.meta) setHelp(true);
   });
 
   const ctx: AppCtx = useMemo(
@@ -453,7 +599,14 @@ export function App(props: AppProps) {
       cols,
       rows,
       bodyHeight,
-      narrow: cols < 80,
+      bodyWidth,
+      narrow: bodyWidth < 60,
+      focus,
+      setFocus,
+      back,
+      setHintScope,
+      setTabCaptured,
+      run,
       runtime,
       providers,
       modal,
@@ -472,149 +625,103 @@ export function App(props: AppProps) {
       jumpTo,
       markSeen,
     }),
-    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, attention, needs, snap, jump, jumpTo, markSeen],
+    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, bodyWidth, focus, back, setTabCaptured, run, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, attention, needs, snap, jump, jumpTo, markSeen],
   );
-  const overlayCtx = useMemo(() => ({ ...ctx, modal: false }), [ctx]);
+  const overlayCtx = useMemo(() => ({ ...ctx, modal: false, focus: "main" as Zone }), [ctx]);
 
   const viewEl = [
-    <OverviewView key="v0" />,
-    <CtoView key="v1" />,
+    <CtoView key="v0" />,
+    <OverviewView key="v1" />,
     <TasksView key="v2" />,
-    <ChatView key="v3" />,
-    <InboxView key="v4" />,
-    <TeamView key="v5" />,
+    <InboxView key="v3" />,
+    <TeamView key="v4" />,
+    <ChatView key="v5" />,
     <EvidenceView key="v6" />,
     <SettingsView key="v7" />,
   ][view];
 
   const paused = runtime?.paused === true;
-  const runsText = runtime ? `runs ${runtime.activeRuns.length}/${runtime.maxConcurrentWorkers}` : "runs -";
-  const connText = conn === "lost" ? "RECONNECTING" : "connected";
-
-  // Tab bar: full names if they fit, then short names, then a numbers-only fallback.
-  const tabsWidth = (short: boolean) => VIEW_NAMES.reduce((n, _name, i) => n + [...tabLabel(i, short, inboxCount)].length + 1, 0);
-  const tabMode: "full" | "short" | "plain" = tabsWidth(false) <= cols ? "full" : tabsWidth(true) <= cols ? "short" : "plain";
-  const tabText = tabMode === "plain" ? `1 2 3 4 5 6 7 8  ${VIEW_NAMES[view]}${inboxCount > 0 ? `  inbox ${inboxCount}` : ""}` : null;
-
-  // Header summary: counts by status, dropping lower-priority segments as the width shrinks.
-  const pausedWidth = paused ? 8 : 0;
-  const summaryBudget = Math.max(8, cols - pausedWidth - (headerRows === 2 ? 2 : clip(props.projectName, 12).length + 3) - 4);
-  const segments = summarize(countStatuses(attention), summaryBudget);
-  const summaryUsed = segments.reduce((n, s, i) => n + [...s.text].length + 2 + (i > 0 ? SUMMARY_SEPARATOR.length : 0), 0);
-  const afterSummary = Math.max(0, cols - pausedWidth - (headerRows === 2 ? 1 : clip(props.projectName, 12).length + 2) - summaryUsed - 2);
-  const summaryEl = (
-    <>
-      {segments.length === 0 ? <SafeText dimColor>{attention.length > 0 ? "all idle" : ""}</SafeText> : null}
-      {segments.map((s, i) => (
-        <Box key={s.status}>
-          {i > 0 ? <SafeText dimColor>{SUMMARY_SEPARATOR}</SafeText> : null}
-          <Text color={statusColor(s.status)} bold={s.status === "needs_you"}>{`${statusGlyph(s.status)} ${s.text}`}</Text>
-        </Box>
-      ))}
-    </>
-  );
-  const flags = { needs: needs.length, toast: shown?.target != null };
+  const badges = { tasks: snap.tasks.filter((t) => t.state === "working").length, inbox: snap.decisions.length };
+  const cardMode = shown !== null && cols >= 70 && rows >= 20;
+  const scope = confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
+  const typing = focus === "input" || inputClaims > 0;
+  const hintText = footerHints(scope, cols - 4, { needs: needs.length, toast: shown?.target != null, typing });
+  const paneBorder = modal || focus === "main";
+  const showView = !modal;
 
   return (
     <Ctx.Provider value={ctx}>
       <Box flexDirection="column" width={cols} height={rows}>
-        {headerRows === 2 ? (
-          <>
-            <Box height={1}>
-              <Text bold>Forewright </Text>
-              <SafeText bold>{props.projectName}</SafeText>
-              <SafeText dimColor>{`  ${abbreviatePath(props.root, Math.max(10, cols - props.projectName.length - 28))}  ${props.isGit ? "git" : "no git"}  `}</SafeText>
-              <Text color={conn === "lost" ? colors.error : colors.done}>{connText}</Text>
-            </Box>
-            <Box height={1}>
-              {paused ? (
-                <Text inverse color={colors.attention}>
-                  {" PAUSED "}
-                </Text>
+        <TitleBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} />
+        <Box flexDirection="column" width={cols} height={rows - 2} flexShrink={0} overflow="hidden">
+          <Box height={contentH} flexShrink={0} flexDirection={sidebarMode === "tabs" ? "column" : "row"}>
+            {sidebarMode === "full" ? <Sidebar width={sidebarW} height={contentH} cursor={cursor} focused={focus === "sidebar"} badges={badges} attention={attention} ctoBusy={runtime?.ctoBusy === true} /> : null}
+            {sidebarMode === "tabs" ? <TabLine width={cols} cursor={cursor} focused={focus === "sidebar"} badges={badges} /> : null}
+            <Box
+              borderStyle={borderStyle()}
+              borderColor={paneBorder ? colors.accent : colors.muted}
+              {...(paneBorder ? {} : { borderDimColor: true })}
+              paddingX={1}
+              flexDirection="column"
+              width={paneOuterW}
+              height={paneOuterH}
+              flexShrink={0}
+              overflow="hidden"
+            >
+              <Box flexDirection="column" height={bodyHeight} width={bodyWidth} flexShrink={0} display={showView ? "flex" : "none"} overflow="hidden">
+                {viewEl}
+              </Box>
+              {confirm ? <ConfirmCard text={confirm.text} width={bodyWidth} height={bodyHeight} /> : null}
+              {help ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <HelpModal width={bodyWidth} height={bodyHeight} />
+                </Ctx.Provider>
               ) : null}
-              <SafeText>{" "}</SafeText>
-              {summaryEl}
-              {afterSummary >= 10 ? <SafeText dimColor>{clip(`  ${runsText}  ${providerSummary(providers)}`, afterSummary)}</SafeText> : null}
+              {prdOpen ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <PrdViewer onClose={() => setPrdOpen(false)} onApprove={approve} />
+                </Ctx.Provider>
+              ) : null}
+              {logRun !== null ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
+                </Ctx.Provider>
+              ) : null}
+              {paletteOpen ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} />
+                </Ctx.Provider>
+              ) : null}
+              {cardMode && shown ? (
+                <Box position="absolute" bottom={0} right={1}>
+                  <ToastCard toast={shown} width={bodyWidth} />
+                </Box>
+              ) : null}
             </Box>
-          </>
-        ) : (
-          <Box height={1}>
-            <SafeText bold>{clip(props.projectName, 12)}</SafeText>
-            {paused ? <Text color={colors.attention}> PAUSED</Text> : null}
-            <SafeText>{" "}</SafeText>
-            {summaryEl}
-            {afterSummary >= 10 ? <Text color={conn === "lost" ? colors.error : undefined} dimColor={conn !== "lost"}>{clip(`  ${runsText}${conn === "lost" ? " RECONNECTING" : ""}`, afterSummary)}</Text> : conn === "lost" ? <Text color={colors.error}> RECONNECTING</Text> : null}
           </Box>
-        )}
-        <Box height={1}>
-          {tabText !== null ? (
-            <SafeText>{tabText}</SafeText>
-          ) : (
-            VIEW_NAMES.map((name, i) => (
-              <Box key={name} marginRight={1}>
-                <Text inverse={i === view} bold={i === view} color={i === 4 && inboxCount > 0 && i !== view ? colors.attention : undefined}>
-                  {tabLabel(i, tabMode === "short", inboxCount)}
-                </Text>
+          {error ? (
+            <Box flexDirection="column" height={errorRows} flexShrink={0} paddingX={1}>
+              <Box height={1}>
+                <SafeText color={colors.error}>{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (ctrl+e: details)" : ""}`}</SafeText>
               </Box>
-            ))
-          )}
-        </Box>
-        <AgentStrip height={stripRows} />
-        <Box height={bodyHeight} flexDirection="column" overflow="hidden">
-          <Box flexDirection="column" height={bodyHeight} display={help || logRun !== null || paletteOpen ? "none" : "flex"} overflow="hidden">
-            {viewEl}
-          </Box>
-          {help ? (
-            <Ctx.Provider value={overlayCtx}>
-              <ScrollLines lines={helpLines()} height={bodyHeight} arrows />
-            </Ctx.Provider>
-          ) : null}
-          {logRun !== null ? (
-            <Ctx.Provider value={overlayCtx}>
-              <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
-            </Ctx.Provider>
-          ) : null}
-          {paletteOpen ? (
-            <Ctx.Provider value={overlayCtx}>
-              <Palette
-                onClose={() => setPaletteOpen(false)}
-                onPick={(target) => {
-                  setPaletteOpen(false);
-                  jumpTo(target);
-                }}
-              />
-            </Ctx.Provider>
+              {detailLines.map((l, i) => (
+                <Box key={i} height={1}>
+                  <SafeText color={colors.error} dimColor>{`  ${l}`}</SafeText>
+                </Box>
+              ))}
+            </Box>
           ) : null}
         </Box>
-        {error ? (
-          <Box flexDirection="column">
-            <Box height={1}>
-              <SafeText color={colors.error}>{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (e: details)" : ""}`}</SafeText>
-            </Box>
-            {detailLines.map((l, i) => (
-              <Box key={i} height={1}>
-                <SafeText color={colors.error} dimColor>{`  ${l}`}</SafeText>
-              </Box>
-            ))}
-          </Box>
-        ) : null}
-        {confirm ? (
-          <Box height={1}>
-            <SafeText color={colors.attention} bold>
-              {confirm.text}
-            </SafeText>
-          </Box>
-        ) : null}
-        <Box height={1}>
-          {shown ? (
+        <Box height={1} flexShrink={0} paddingX={2}>
+          {shown && !cardMode ? (
             <>
               <SafeText color={shown.kind === "needs_you" ? colors.attention : shown.kind === "error" ? colors.error : shown.kind === "finished" ? colors.done : colors.accent} bold={shown.kind === "needs_you"}>
-                {clip(shown.text, Math.max(10, cols - (shown.target ? 14 : 2)))}
+                {shown.text}
               </SafeText>
-              {shown.target ? <SafeText dimColor>{"  g: go there"}</SafeText> : null}
+              {shown.target ? <Text dimColor>{"  ctrl+g go"}</Text> : null}
             </>
           ) : (
-            <SafeText dimColor>{footerHints(view, cols - 1, flags)}</SafeText>
+            <SafeText dimColor>{hintText}</SafeText>
           )}
         </Box>
       </Box>

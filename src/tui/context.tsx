@@ -6,6 +6,11 @@ import type { ClientApi } from "./client.js";
 import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
 import type { Decision, Task } from "../core/store-types.js";
 import type { AgentAttention, NeedItem } from "./attention.js";
+import type { ActionId } from "./commands.js";
+import { VIEW } from "./format.js";
+
+/** Where the keyboard is: the navigation sidebar, the view in the main pane, or a message box. */
+export type Zone = "sidebar" | "main" | "input";
 
 export interface Selection {
   taskId: string | null;
@@ -18,7 +23,9 @@ export interface JumpTarget {
   decisionId?: string;
   taskId?: string;
   agentId?: string;
-  /** Leave any text box so global keys (like `n`) keep working. */
+  /** Where focus lands. Defaults to the message box in CTO and Chat, the main pane elsewhere. */
+  focus?: Zone;
+  /** Leave any text box so single-letter keys of the view work. Shorthand for focus: "main". */
   blurInput?: boolean;
   nonce: number;
 }
@@ -33,21 +40,35 @@ export interface AppCtx {
   tick: number;
   cols: number;
   rows: number;
+  /** Rows available inside the main pane, for the view and its own header. */
   bodyHeight: number;
+  /** Text columns available inside the main pane. */
+  bodyWidth: number;
+  /** True when the main pane is too narrow for side-by-side layouts. */
   narrow: boolean;
+  focus: Zone;
+  setFocus(zone: Zone): void;
+  /** Leaves the view for the sidebar (or clears the notice when the sidebar is hidden). */
+  back(): void;
+  /** While true, Tab belongs to the message box (it completes a slash command) instead of moving focus. */
+  setTabCaptured(captured: boolean): void;
+  /** Tells the hint line which keys the view offers right now. Null leaves it to someone else. */
+  setHintScope(scope: string | null): void;
+  /** Runs a command, like the palette or a slash command does. */
+  run(action: ActionId): void;
   runtime: RuntimeStatus | null;
   providers: ProviderStatus[];
-  /** True while help, a confirmation, or the log viewer owns the keyboard. */
+  /** True while a modal (help, confirmation, palette, PRD or log viewer) owns the keyboard. */
   modal: boolean;
   fail(err: unknown): void;
   notify(text: string): void;
   ask(prompt: string, onYes: () => Promise<void> | void): void;
   claimInput(): () => void;
   setSelection(sel: Partial<Selection>): void;
-  goto(viewIndex: number): void;
+  goto(viewIndex: number, focus?: Zone): void;
   /** Agents in attention order (needs you first), retired ones hidden. */
   attention: AgentAttention[];
-  /** Things waiting for Billy, in the order the `n` key visits them. */
+  /** Things waiting for Billy, in the order ctrl+n visits them. */
   needs: NeedItem[];
   openDecisions: Decision[];
   teamAgents: TeamMember[];
@@ -56,6 +77,13 @@ export interface AppCtx {
   jumpTo(target: Omit<JumpTarget, "nonce">): void;
   /** Marks finished work as looked at, for one task or every task an agent finished. */
   markSeen(sel: { taskId?: string; agentId?: string }): void;
+}
+
+/** Where an item that needs Billy lives: a decision in the Inbox, the PRD in the CTO view, a blocked task in Tasks. */
+export function needTarget(item: NeedItem): Omit<JumpTarget, "nonce"> {
+  if (item.kind === "decision") return { view: VIEW.inbox, decisionId: item.decisionId, focus: "main" };
+  if (item.kind === "prd") return { view: VIEW.cto, focus: "main" };
+  return { view: VIEW.tasks, taskId: item.taskId, focus: "main" };
 }
 
 export const Ctx = createContext<AppCtx | null>(null);
@@ -80,10 +108,18 @@ export function useJump(view: number, apply: (jump: JumpTarget) => void): void {
   }, [jump, view]);
 }
 
-/** Key handler that is silent while a modal is open. */
+/** Key handler for the main pane: silent while a modal is open or focus is elsewhere. */
 export function useKeys(handler: (input: string, key: Key) => void, active = true): void {
   const ctx = useCtx();
-  useInput(handler, { isActive: active && !ctx.modal });
+  useInput(handler, { isActive: active && !ctx.modal && ctx.focus === "main" });
+}
+
+/** Declares which key table the hint line shows for this view. Pass null while another component owns the hint line. */
+export function useHintScope(scope: string | null): void {
+  const { setHintScope } = useCtx();
+  useEffect(() => {
+    if (scope !== null) setHintScope(scope);
+  }, [scope, setHintScope]);
 }
 
 /** Loads data now and again after every service change. Keeps the previous value while reloading. */

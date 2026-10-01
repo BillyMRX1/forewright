@@ -40,10 +40,10 @@ A task blocked with "Waiting for the provider usage limit to reset" is expected.
 
 ## A run looks stuck
 
-1. Select the task in Tasks and press `L` to read the raw log. Silent for a long time is normal during long tool calls.
-2. Press `X` to stop the run. What happens next follows the retry limits.
+1. Open the task in Tasks and press `l` to read the raw log. Silent for a long time is normal during long tool calls.
+2. In the task details press `x` (or type `/stop` in a message box) to stop the run. What happens next follows the retry limits.
 3. Runs also stop at the run timeout (30 minutes by default, editable in Settings).
-4. `P` pauses everything if you want to inspect calmly.
+4. `/pause` pauses everything if you want to inspect calmly.
 
 ## Recovering worktrees
 
@@ -60,7 +60,7 @@ To take work out of a worktree by hand, commit or copy from it and then `git wor
 
 ## Reading raw logs
 
-- Per-run logs: `projects/<id>/logs/`, or press `L` in the UI. Lines are already redacted for known secret shapes, and the UI strips terminal control sequences before showing them.
+- Per-run logs: `projects/<id>/logs/`, or press `l` on a task or agent in the UI (or use `/log`). Lines are already redacted for known secret shapes, and the UI strips terminal control sequences before showing them.
 - Service log: `daemon.log`.
 - Event history: the `event` table in `projects/<id>/state.db` (`sqlite3` in read-only mode is safe: `sqlite3 -readonly state.db "select seq, type, entity_id from event order by seq desc limit 20"`).
 

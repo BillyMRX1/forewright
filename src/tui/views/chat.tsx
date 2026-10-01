@@ -1,36 +1,43 @@
 import { useRef, useState } from "react";
 import { Box } from "ink";
-import { SafeText, ScrollLines, TextInput } from "../components.js";
-import { useCtx, useDraft, useKeys, useLoad } from "../context.js";
-import { clip, fit, oneLine, windowed } from "../format.js";
+import { ListRow, PaneHeader, ScrollLines } from "../components.js";
+import { ComposeBox, composeHeight } from "../compose.js";
+import { useCtx, useDraft, useHintScope, useKeys, useLoad } from "../context.js";
+import { clip, oneLine, windowed } from "../format.js";
 import { messageLines } from "./cto.js";
-import { palette } from "../theme.js";
+import { borderStyle, palette, sym } from "../theme.js";
 
 export function ChatView() {
   const ctx = useCtx();
   const { api, projectId } = ctx;
+  const w = ctx.bodyWidth;
+  const h = ctx.bodyHeight;
   const [idx, setIdx] = useState(0);
-  const [focus, setFocus] = useState(true);
   const sending = useRef(false);
   const chans = useLoad(() => api.call("state.channels", { projectId }));
   const team = useLoad(() => api.call("state.team", { projectId }));
   const channels = (chans.data?.channels ?? []).filter((c) => c.channel !== "cto");
-  const cur = channels[Math.min(idx, Math.max(0, channels.length - 1))] ?? null;
+  const at = Math.min(idx, Math.max(0, channels.length - 1));
+  const cur = channels[at] ?? null;
   const chanKey = cur ? `${cur.channel}:${cur.taskId ?? ""}:${cur.agentId ?? ""}` : "none";
   const msgs = useLoad(
     () => (cur ? api.call("state.messages", { projectId, channel: cur.channel, ...(cur.taskId ? { taskId: cur.taskId } : {}), ...(cur.agentId ? { agentId: cur.agentId } : {}), limit: 200 }) : Promise.resolve({ messages: [] })),
     [chanKey],
   );
   const draft = useDraft("chat", chanKey);
-  const wide = ctx.cols >= 80;
-  const listW = wide ? Math.min(28, Math.floor(ctx.cols / 3)) : 0;
-  const msgW = ctx.cols - listW - (wide ? 1 : 0);
-  const inputRows = ctx.bodyHeight >= 10 ? 2 : 1;
-  const convH = Math.max(1, ctx.bodyHeight - 1 - inputRows - (wide ? 0 : 1));
+  const typing = ctx.focus === "input";
+  useHintScope(typing ? null : "chat");
 
-  const send = async () => {
-    const text = draft.value.trim();
-    if (!cur || text.length === 0 || sending.current) return;
+  const wide = w >= 64;
+  const listW = wide ? Math.min(28, Math.floor(w / 3)) : 0;
+  const msgW = w - listW - (wide ? 1 : 0);
+  const compact = h < 9;
+  const maxRows = h >= 14 ? 3 : 1;
+  const compH = composeHeight(draft.value, w, maxRows, compact, typing, h);
+  const convH = Math.max(1, h - 1 - compH);
+
+  const send = async (text: string) => {
+    if (!cur || sending.current) return;
     if (cur.channel === "cto") return;
     sending.current = true;
     try {
@@ -57,42 +64,36 @@ export function ChatView() {
   };
 
   useKeys((input, key) => {
-    if (focus) return;
-    if (key.upArrow || input === "k") setIdx((i) => Math.max(0, i - 1));
-    else if (key.downArrow || input === "j") setIdx((i) => Math.min(channels.length - 1, i + 1));
-    else if (input === "i" || key.return) setFocus(true);
+    if (key.escape || key.leftArrow) return ctx.back();
+    if (key.upArrow) setIdx((i) => Math.max(0, i - 1));
+    else if (key.downArrow) setIdx((i) => Math.min(channels.length - 1, i + 1));
+    else if (key.return || input === "i") ctx.setFocus("input");
   });
 
   const lines = messageLines(msgs.data?.messages ?? [], team.data?.agents ?? [], msgW);
   if (lines.length === 0) lines.push({ text: cur ? "No messages in this channel yet." : "No channels yet.", dim: true });
-  const sel = Math.max(0, channels.indexOf(cur as (typeof channels)[number]));
-  const { start, end } = windowed(channels.length, sel, Math.max(1, ctx.bodyHeight));
+  const { start, end } = windowed(channels.length, at, Math.max(1, convH - 2));
+  const mark = (c: (typeof channels)[number]) => (c.channel === "project" ? "#" : c.channel === "task" ? "T" : "@");
 
   return (
-    <Box flexDirection="column" height={ctx.bodyHeight}>
-      {!wide ? (
-        <Box height={1}>
-          <SafeText color={palette.accent} bold>{cur ? `# ${clip(oneLine(cur.label), ctx.cols - 12)} (${sel + 1}/${channels.length})` : "no channels"}</SafeText>
-        </Box>
-      ) : null}
-      <Box height={convH}>
+    <Box flexDirection="column" height={h} width={w}>
+      <PaneHeader title="Chat" context={cur ? `${mark(cur)} ${oneLine(cur.label)}${wide ? "" : ` (${at + 1}/${channels.length})`}` : "no channels"} width={w} />
+      <Box height={convH} flexShrink={0}>
         {wide ? (
-          <Box width={listW + 1} flexDirection="column">
-            {channels.slice(start, end).map((c) => (
-              <Box key={`${c.channel}${c.taskId}${c.agentId}`} height={1}>
-                <SafeText inverse={c === cur} bold={c === cur}>{fit(`${c.channel === "project" ? "#" : c.channel === "task" ? "T" : "@"} ${oneLine(c.label)}`, listW)}</SafeText>
-              </Box>
+          <>
+          <Box borderStyle={borderStyle()} borderColor={ctx.focus === "main" ? palette.accent : palette.muted} {...(ctx.focus === "main" ? {} : { borderDimColor: true })} paddingX={1} width={listW} height={convH} flexDirection="column" flexShrink={0} overflow="hidden">
+            {channels.slice(start, end).map((c, i) => (
+              <ListRow key={`${c.channel}${c.taskId}${c.agentId}`} segs={[{ text: `${mark(c)} ${clip(oneLine(c.label), listW - 8)}` }]} selected={start + i === at} focused={ctx.focus === "main"} width={listW - 4} />
             ))}
           </Box>
+          <Box width={1} flexShrink={0} />
+          </>
         ) : null}
-        <Box width={msgW} flexDirection="column">
-          <ScrollLines lines={lines} height={convH} anchor="bottom" resetKey={chanKey} />
+        <Box width={msgW} flexDirection="column" flexShrink={0}>
+          <ScrollLines lines={lines} height={convH} width={msgW} anchor="bottom" resetKey={chanKey} zones={["main", "input"]} />
         </Box>
       </Box>
-      <Box height={1}>
-        <SafeText dimColor>{focus ? "Enter sends. @name at the start directs a message. Esc, then up/down changes channel." : "up/down channel, i to type"}</SafeText>
-      </Box>
-      <TextInput value={draft.value} onChange={draft.setValue} onSubmit={() => void send()} onEscape={() => setFocus(false)} focus={focus && cur !== null} multiline width={ctx.cols} maxRows={inputRows} placeholder={cur ? `Message ${oneLine(cur.label)}` : ""} />
+      <ComposeBox value={draft.value} onChange={draft.setValue} onClear={draft.clear} onSend={(t) => void send(t)} scope="chat.input" placeholder={cur ? `Message ${oneLine(cur.label)}${sym().ellipsis}` : ""} width={w} maxRows={maxRows} compact={compact} paneHeight={h} onUp={() => ctx.setFocus("main")} />
     </Box>
   );
 }

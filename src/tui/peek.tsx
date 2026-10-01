@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { Box } from "ink";
 import { SafeText } from "./components.js";
+import { asciiMode } from "./theme.js";
+import { plainInline } from "./markdown.js";
 import { useCtx } from "./context.js";
-import { palette } from "./theme.js";
 import { sanitizeTerminal } from "../core/safety.js";
 import type { Run } from "../core/store-types.js";
 import type { RuntimeStatus } from "../runtime/protocol.js";
@@ -26,6 +27,55 @@ export function runIdFor(ctxRuntime: RuntimeStatus | null, taskId: string | null
   return latest ? latest.id : null;
 }
 
+/**
+ * Turns one raw run-log line (JSON written by the service) into a short readable line for the peek, or
+ * null for bookkeeping lines (usage, session ids). The full log viewer still shows the raw lines.
+ */
+export function describeLogLine(raw: string): string | null {
+  let e: { kind?: unknown; text?: unknown; tool?: unknown };
+  try {
+    e = JSON.parse(raw) as typeof e;
+  } catch {
+    return raw.trim() === "" ? null : raw;
+  }
+  const a = asciiMode();
+  const text = typeof e.text === "string" ? e.text.replace(/\s+/g, " ").trim() : "";
+  const tool = typeof e.tool === "string" ? e.tool.replace(/^mcp__(forewright|dept)__|^(forewright|dept)[_.]/, "") : "a tool";
+  // MCP results arrive as {"content":[{"type":"text","text":"..."}]}, often with a JSON message inside.
+  const resultText = (): string => {
+    try {
+      const outer = JSON.parse(text) as { content?: Array<{ text?: unknown }> };
+      const inner = typeof outer.content?.[0]?.text === "string" ? outer.content[0].text : text;
+      try {
+        const msg = (JSON.parse(inner) as { message?: unknown }).message;
+        return typeof msg === "string" ? msg : inner;
+      } catch {
+        return inner;
+      }
+    } catch {
+      return text;
+    }
+  };
+  switch (e.kind) {
+    case "assistant_text":
+      return text ? `${a ? ">" : "›"} ${plainInline(text)}` : null;
+    case "tool_call":
+      return `${a ? "-" : "·"} ${tool}`;
+    case "tool_result":
+      return text ? `  ${a ? "->" : "↳"} ${resultText().replace(/\s+/g, " ")}` : null;
+    case "error":
+      return `${a ? "x" : "✗"} ${text || "error"}`;
+    case "quota_exhausted":
+      return `! usage limit reached${text ? `: ${text}` : ""}`;
+    case "completed":
+      return a ? "ok finished" : "✓ finished";
+    case "diagnostic":
+      return text ? `  ${text}` : null;
+    default:
+      return null;
+  }
+}
+
 export function LogPeek({ runId, height }: { runId: string; height: number }) {
   const ctx = useCtx();
   const { api, projectId, fail } = ctx;
@@ -35,9 +85,9 @@ export function LogPeek({ runId, height }: { runId: string; height: number }) {
     let cancelled = false;
     setLines(null);
     const load = () =>
-      api.call("runs.log", { projectId, runId, tailLines: want }).then(
+      api.call("runs.log", { projectId, runId, tailLines: want * 4 }).then(
         (r) => {
-          if (!cancelled) setLines(r.lines.slice(-want).map((l) => sanitizeTerminal(l)));
+          if (!cancelled) setLines(r.lines.map((l) => describeLogLine(sanitizeTerminal(l))).filter((l): l is string => l !== null).slice(-want));
         },
         (err: unknown) => {
           if (!cancelled) fail(err);
@@ -54,7 +104,7 @@ export function LogPeek({ runId, height }: { runId: string; height: number }) {
   return (
     <Box flexDirection="column" height={height} flexShrink={0} overflow="hidden">
       <Box height={1}>
-        <SafeText bold color={palette.accent}>{`Live output, run ${runId.slice(0, 8)} (L for the full log)`}</SafeText>
+        <SafeText bold>{`Live output, run ${runId.slice(0, 8)} (l for the full log)`}</SafeText>
       </Box>
       {lines === null ? <SafeText dimColor>Loading...</SafeText> : null}
       {lines !== null && shown.length === 0 ? <SafeText dimColor>No output yet.</SafeText> : null}

@@ -54,7 +54,7 @@ export async function launchTui({ cwd }: { cwd: string }): Promise<void> {
     process.stdout.write(ALT_ON);
     let quit = false;
     try {
-      const app = render(<App api={client} projectId={open.projectId} projectName={open.name} root={open.root} isGit={open.isGit} onQuit={() => (quit = true)} />, { exitOnCtrlC: true });
+      const app = render(<App api={client} projectId={open.projectId} projectName={open.name} root={open.root} isGit={open.isGit} onQuit={() => (quit = true)} />, { exitOnCtrlC: false });
       await app.waitUntilExit();
     } finally {
       process.stdout.write(ALT_OFF);

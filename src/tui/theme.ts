@@ -24,6 +24,69 @@ export function asciiMode(): boolean {
   return process.env["TERM"] === "dumb" || process.env["FOREWRIGHT_ASCII"] === "1";
 }
 
+/** Small symbols used across the screen. Plain ASCII when asciiMode() is on. */
+export interface Symbols {
+  /** Separator between hints and metadata. */
+  dot: string;
+  /** Marks the selected row. */
+  pointer: string;
+  /** Prompt in front of an input. */
+  prompt: string;
+  barFull: string;
+  barEmpty: string;
+  ellipsis: string;
+  up: string;
+  down: string;
+  left: string;
+  right: string;
+  /** Connection and presence dot. */
+  bullet: string;
+  spinner: readonly string[];
+  frame: { tl: string; tr: string; bl: string; br: string; h: string; v: string };
+}
+
+const UNICODE_SYMBOLS: Symbols = {
+  dot: "·",
+  pointer: "▸",
+  prompt: "›",
+  barFull: "━",
+  barEmpty: "─",
+  ellipsis: "…",
+  up: "↑",
+  down: "↓",
+  left: "←",
+  right: "→",
+  bullet: "●",
+  spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+  frame: { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" },
+};
+const ASCII_SYMBOLS: Symbols = {
+  dot: "-",
+  pointer: ">",
+  prompt: ">",
+  barFull: "#",
+  barEmpty: "-",
+  ellipsis: "...",
+  up: "up",
+  down: "down",
+  left: "left",
+  right: "right",
+  bullet: "*",
+  spinner: ["|", "/", "-", "\\"],
+  frame: { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" },
+};
+
+export function sym(): Symbols {
+  return asciiMode() ? ASCII_SYMBOLS : UNICODE_SYMBOLS;
+}
+
+const ASCII_BORDER = { topLeft: "+", top: "-", topRight: "+", right: "|", bottomRight: "+", bottom: "-", bottomLeft: "+", left: "|" };
+
+/** Border style for Ink boxes: rounded, or plain ASCII. */
+export function borderStyle(): "round" | typeof ASCII_BORDER {
+  return asciiMode() ? ASCII_BORDER : "round";
+}
+
 const UNICODE_GLYPHS: Record<AgentStatus, string> = {
   needs_you: "◉",
   blocked: "■",
@@ -41,6 +104,13 @@ const ASCII_GLYPHS: Record<AgentStatus, string> = {
 
 export function statusGlyph(status: AgentStatus): string {
   return (asciiMode() ? ASCII_GLYPHS : UNICODE_GLYPHS)[status];
+}
+
+const UNICODE_PILL: Record<AgentStatus, string> = { needs_you: "◉", blocked: "!", done: "✓", working: "●", idle: "○" };
+
+/** Glyph in front of a status pill: "● working", "◉ needs you", "✓ done", "! blocked". */
+export function pillGlyph(status: AgentStatus): string {
+  return (asciiMode() ? ASCII_GLYPHS : UNICODE_PILL)[status];
 }
 
 const STATUS_COLOR: Record<AgentStatus, ThemeColor> = {

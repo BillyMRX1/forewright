@@ -1,19 +1,20 @@
 import { useMemo, useState } from "react";
-import { Box, Text } from "ink";
-import { SafeText, ScrollLines, type DLine } from "../components.js";
-import { useCtx, useKeys, useLoad } from "../context.js";
-import { STATE_COLOR, TASK_STATE_LABEL, ago, clip, oneLine, windowed, wrapText } from "../format.js";
+import { Box } from "ink";
+import { Chip, ListRow, PaneHeader, SafeText, ScrollLines, type DLine } from "../components.js";
+import { useCtx, useHintScope, useKeys, useLoad } from "../context.js";
+import { STATE_COLOR, TASK_STATE_LABEL, ago, clip, fit, oneLine, windowed, wrapText } from "../format.js";
 import { TASK_STATES } from "../../core/types.js";
 import type { Artifact, Task, Verification } from "../../core/store-types.js";
-import { palette } from "../theme.js";
+import { palette, sym } from "../theme.js";
+import { stateChip } from "./tasks.js";
 
 export function evidenceLines(task: Task, verifications: Verification[], artifacts: Artifact[], diff: { diff: string; truncated: boolean; base: string | null; head: string | null } | null, width: number): DLine[] {
   const lines: DLine[] = [{ text: `${task.shortId}  ${oneLine(task.title)}  [${TASK_STATE_LABEL[task.state]}]`, bold: true }];
-  const h = (t: string) => lines.push({ text: "" }, { text: t, bold: true, color: palette.accent });
+  const h = (t: string) => lines.push({ text: "" }, { text: t, bold: true });
   h("Verifications");
   if (verifications.length === 0) lines.push({ text: "  None yet.", dim: true });
   for (const v of verifications.filter((x) => x.kind !== "review")) {
-    lines.push({ text: `  ${v.kind}  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}${v.stale ? "  STALE (task changed since)" : ""}`, color: v.stale ? palette.attention : v.verdict === "pass" ? palette.done : palette.error });
+    lines.push({ text: `  ${v.kind}  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}${v.stale ? "  stale (task changed since)" : ""}`, color: v.stale ? palette.attention : v.verdict === "pass" ? palette.done : palette.error });
     if (v.command) lines.push({ text: `    $ ${oneLine(v.command)}${v.exitCode !== null ? `  (exit ${v.exitCode})` : ""}`, dim: true });
     for (const l of wrapText(v.summary, width - 4)) lines.push({ text: `    ${l}` });
   }
@@ -21,7 +22,7 @@ export function evidenceLines(task: Task, verifications: Verification[], artifac
   const reviews = verifications.filter((x) => x.kind === "review");
   if (reviews.length === 0) lines.push({ text: "  No review yet.", dim: true });
   for (const v of reviews) {
-    lines.push({ text: `  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}  ${ago(v.createdAt)}${v.stale ? "  STALE" : ""}`, color: v.stale ? palette.attention : v.verdict === "pass" ? palette.done : palette.error });
+    lines.push({ text: `  ${v.verdict}  ${v.commitSha ? v.commitSha.slice(0, 7) : "-"}  ${ago(v.createdAt)}${v.stale ? "  stale" : ""}`, color: v.stale ? palette.attention : v.verdict === "pass" ? palette.done : palette.error });
     for (const l of wrapText(v.summary, width - 4)) lines.push({ text: `    ${l}` });
   }
   h("Artifacts");
@@ -42,46 +43,55 @@ export function evidenceLines(task: Task, verifications: Verification[], artifac
 export function EvidenceView() {
   const ctx = useCtx();
   const { api, projectId } = ctx;
+  const w = ctx.bodyWidth;
+  const h = ctx.bodyHeight;
   const board = useLoad(() => api.call("state.tasks", { projectId }));
   const [idx, setIdx] = useState(0);
   const [taskId, setTaskId] = useState<string | null>(null);
   const flat = useMemo(() => (board.data ? TASK_STATES.flatMap((s) => board.data!.board[s]) : []), [board.data]);
   const ev = useLoad(async () => (taskId ? { evidence: await api.call("state.evidence", { projectId, taskId }), diff: await api.call("evidence.diff", { projectId, taskId }) } : null), [taskId]);
+  useHintScope(taskId ? "evidence.detail" : "evidence");
 
-  useKeys((input, key) => {
+  useKeys((_input, key) => {
     if (taskId) {
-      if (key.escape) setTaskId(null);
+      if (key.escape || key.leftArrow) setTaskId(null);
       return;
     }
-    if (key.upArrow || input === "k") setIdx((i) => Math.max(0, i - 1));
-    else if (key.downArrow || input === "j") setIdx((i) => Math.min(flat.length - 1, i + 1));
+    if (key.escape || key.leftArrow) return ctx.back();
+    if (key.upArrow) setIdx((i) => Math.max(0, i - 1));
+    else if (key.downArrow) setIdx((i) => Math.min(flat.length - 1, i + 1));
     else if (key.return && flat[idx]) setTaskId(flat[idx]!.id);
   });
 
   if (!board.data) return <SafeText dimColor>Loading...</SafeText>;
-  if (flat.length === 0) return <SafeText dimColor>No tasks yet, so there is no evidence to show.</SafeText>;
-
-  if (taskId) {
-    if (!ev.data) return <SafeText dimColor>Loading...</SafeText>;
-    const lines = evidenceLines(ev.data.evidence.task, ev.data.evidence.verifications, ev.data.evidence.artifacts, ev.data.diff, ctx.cols - 2);
+  const picked = taskId ? flat.find((t) => t.id === taskId) : null;
+  const header = <PaneHeader title="Evidence" context={picked ? `${picked.shortId} ${oneLine(picked.title)}` : "checks, reviews and diffs"} pill={picked ? <Chip text={`${sym().bullet} ${TASK_STATE_LABEL[picked.state]}`} color={STATE_COLOR[picked.state]} /> : undefined} width={w} />;
+  if (flat.length === 0) {
     return (
-      <Box flexDirection="column" height={ctx.bodyHeight}>
-        <ScrollLines lines={lines} height={ctx.bodyHeight - 1} arrows resetKey={taskId} />
-        <SafeText dimColor>Esc back  up/down PgUp/PgDn scroll  g/G top/bottom</SafeText>
+      <Box flexDirection="column" height={h} width={w}>
+        {header}
+        <SafeText dimColor>No tasks yet, so there is no evidence to show.</SafeText>
       </Box>
     );
   }
-  const h = Math.max(1, ctx.bodyHeight - 1);
-  const { start, end } = windowed(flat.length, idx, h);
+
+  if (taskId) {
+    return (
+      <Box flexDirection="column" height={h} width={w}>
+        {header}
+        {!ev.data ? <SafeText dimColor>Loading...</SafeText> : <ScrollLines lines={evidenceLines(ev.data.evidence.task, ev.data.evidence.verifications, ev.data.evidence.artifacts, ev.data.diff, w - 2)} height={Math.max(1, h - 1)} width={w} arrows resetKey={taskId} />}
+      </Box>
+    );
+  }
+  const { start, end } = windowed(flat.length, idx, Math.max(1, h - 2));
   return (
-    <Box flexDirection="column" height={ctx.bodyHeight}>
+    <Box flexDirection="column" height={h} width={w}>
+      {header}
       {flat.slice(start, end).map((t, i) => (
-        <Box key={t.id} height={1}>
-          <Text inverse={start + i === idx} color={STATE_COLOR[t.state]}>{` ${TASK_STATE_LABEL[t.state].padEnd(9)}`}</Text>
-          <SafeText inverse={start + i === idx}>{clip(` ${t.shortId} ${oneLine(t.title)}`, Math.max(4, ctx.cols - 12))}</SafeText>
-        </Box>
+        <ListRow key={t.id} segs={[stateChip(t.state), { text: fit(t.shortId, 6), dim: true }, { text: clip(oneLine(t.title), Math.max(4, w - 20)) }]} selected={start + i === idx} focused width={w} />
       ))}
-      <SafeText dimColor>Pick a task and press Enter to see its checks, reviews and diff.</SafeText>
+      <Box flexGrow={1} />
+      <SafeText dimColor width={w}>Pick a task and press enter to see its checks, reviews and diff.</SafeText>
     </Box>
   );
 }

@@ -1,39 +1,45 @@
 import { useEffect, useMemo, useState } from "react";
-import { Box, Text } from "ink";
-import { SafeText, ScrollLines, TextInput, type DLine } from "../components.js";
-import { useCtx, useJump, useKeys, useLoad } from "../context.js";
+import { Box } from "ink";
+import { Chip, InputBox, ListRow, PaneHeader, Row, SafeText, ScrollLines, type DLine, type Seg } from "../components.js";
+import { useCtx, useHintScope, useJump, useKeys, useLoad } from "../context.js";
 import { LogPeek, peekHeight, runIdFor } from "../peek.js";
-import { STATE_COLOR, TASK_STATE_LABEL, abbreviatePath, ago, clip, duration, fit, oneLine, plainBlockReason, plainRunState, windowed, wrapText } from "../format.js";
+import { STATE_COLOR, TASK_STATE_LABEL, VIEW, abbreviatePath, clip, duration, fit, oneLine, plainBlockReason, plainRunState, shortAge, windowed, wrapText } from "../format.js";
+import { markdownLines } from "../markdown.js";
 import { TASK_STATES, type TaskState } from "../../core/types.js";
 import type { Task } from "../../core/store-types.js";
 import type { TaskDetail } from "../../runtime/protocol.js";
-import { palette } from "../theme.js";
+import { palette, sym } from "../theme.js";
 
-type Mode = "browse" | "detail" | "pick" | "note";
+type Mode = "list" | "detail" | "pick" | "note";
 
+/** Task details as lines: a bold title per section, plain words under it. */
 export function detailLines(d: TaskDetail, width: number): DLine[] {
   const t = d.task;
   const lines: DLine[] = [];
-  const h = (text: string) => lines.push({ text, bold: true, color: palette.accent });
+  const h = (text: string) => lines.push({ text: "" }, { text, bold: true });
   const para = (text: string, indent = "  ") => {
     for (const l of wrapText(text, width - indent.length)) lines.push({ text: `${indent}${l}` });
   };
-  lines.push({ text: `${t.shortId}  ${oneLine(t.title)}`, bold: true });
-  lines.push({ text: `State: ${TASK_STATE_LABEL[t.state]}   Assignee: ${d.assignee ? `${d.assignee.name} (${d.assignee.role}, ${d.assignee.engine}${d.assignee.model ? `/${d.assignee.model}` : ""})` : "unassigned"}`, color: STATE_COLOR[t.state] });
+  const who = d.assignee ? `${d.assignee.name} (${d.assignee.role}, ${d.assignee.engine}${d.assignee.model ? `/${d.assignee.model}` : ""})` : "unassigned";
+  lines.push({ text: `Assignee: ${who}`, segs: [{ text: "Assignee: ", dim: true }, { text: who }] });
   if (t.blockReason) {
     h("Blocked");
     para(plainBlockReason(t.blockReason, t.blockDetail));
   }
+  // Task text is written by the CTO in Markdown; render it like the conversation, indented under the heading.
+  const md = (text: string) => {
+    for (const l of markdownLines(text, width - 2)) lines.push({ ...l, text: `  ${l.text}`, ...(l.segs ? { segs: [{ text: "  " }, ...l.segs] } : {}) });
+  };
   h("Description");
-  para(t.description || "(none)");
+  md(t.description || "(none)");
   h("Acceptance");
-  para(t.acceptance || "(none)");
+  md(t.acceptance || "(none)");
   h("Verify commands");
   if (t.verifyCommands.length === 0) lines.push({ text: "  (none)", dim: true });
   for (const c of t.verifyCommands) lines.push({ text: `  $ ${oneLine(c)}` });
   h("Depends on");
   if (d.dependencies.length === 0) lines.push({ text: "  (nothing)", dim: true });
-  for (const x of d.dependencies) lines.push({ text: `  ${x.shortId}  ${oneLine(x.title)}  [${TASK_STATE_LABEL[x.state]}]`, color: x.state === "done" ? palette.done : undefined });
+  for (const x of d.dependencies) lines.push({ text: `  ${x.shortId}  ${oneLine(x.title)}  [${TASK_STATE_LABEL[x.state]}]`, ...(x.state === "done" ? { color: palette.done } : {}) });
   h("Linked requirements");
   if (d.requirements.length === 0) lines.push({ text: "  (none)", dim: true });
   for (const r of d.requirements) para(`${r.key}  ${r.text}`);
@@ -42,30 +48,41 @@ export function detailLines(d: TaskDetail, width: number): DLine[] {
   for (const r of d.runs) lines.push({ text: `  ${r.kind}  ${plainRunState(r.state)}  ${r.engine}${r.model ? `/${r.model}` : ""}  ${duration(r.startedAt, r.endedAt)}` });
   h("Evidence");
   if (d.verifications.length === 0) lines.push({ text: "  (no checks or reviews yet)", dim: true });
-  for (const v of d.verifications) lines.push({ text: `  ${v.kind}  ${v.verdict}${v.stale ? " (stale)" : ""}  ${oneLine(v.summary)}`, color: v.verdict === "pass" && !v.stale ? palette.done : v.verdict === "fail" ? palette.error : undefined });
+  for (const v of d.verifications) lines.push({ text: `  ${v.kind}  ${v.verdict}${v.stale ? " (stale)" : ""}  ${oneLine(v.summary)}`, ...(v.verdict === "pass" && !v.stale ? { color: palette.done } : v.verdict === "fail" ? { color: palette.error } : {}) });
   if (t.branch) lines.push({ text: "" }, { text: `Branch ${t.branch}${t.worktreePath ? `  worktree ${abbreviatePath(t.worktreePath, 40)}` : ""}`, dim: true });
   return lines;
+}
+
+/** Colored chip for a task state, like `● Working`. */
+export function stateChip(state: TaskState, withGlyph = true): Seg {
+  return { text: `${withGlyph ? `${sym().bullet} ` : ""}${fit(TASK_STATE_LABEL[state], 10)}`, color: STATE_COLOR[state] };
 }
 
 export function TasksView() {
   const ctx = useCtx();
   const { api, projectId } = ctx;
+  const w = ctx.bodyWidth;
+  const h = ctx.bodyHeight;
   const board = useLoad(() => api.call("state.tasks", { projectId }));
-  const [mode, setMode] = useState<Mode>("browse");
-  const [asBoard, setAsBoard] = useState(true);
+  const [mode, setMode] = useState<Mode>("list");
+  const [asBoard, setAsBoard] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [agentIdx, setAgentIdx] = useState(0);
   const [note, setNote] = useState("");
   const [pickedAgent, setPickedAgent] = useState<string | null>(null);
 
   const flat: Task[] = useMemo(() => (board.data ? TASK_STATES.flatMap((s) => board.data!.board[s]) : []), [board.data]);
-  const boardMode = asBoard && !ctx.narrow;
+  const boardable = w >= 72;
+  const boardMode = asBoard && boardable;
   const selected = flat.find((t) => t.id === selectedId) ?? flat[0] ?? null;
-  const detail = useLoad(() => (selected && mode !== "browse" ? api.call("state.task", { projectId, taskId: selected.id }) : Promise.resolve(null)), [selected?.id, mode === "browse"]);
+  const detail = useLoad(() => (selected && mode !== "list" ? api.call("state.task", { projectId, taskId: selected.id }) : Promise.resolve(null)), [selected?.id, mode === "list"]);
   const team = useLoad(() => api.call("state.team", { projectId }));
   const agents = (team.data?.agents ?? []).filter((a) => a.lifecycle !== "retired");
+  const nameOf = (id: string | null) => (id ? (team.data?.agents.find((a) => a.id === id)?.name ?? "") : "");
+  const finished = selected?.state === "done" || selected?.state === "cancelled";
+  useHintScope(mode === "list" ? "tasks" : mode === "detail" ? (finished ? "tasks.detail.final" : "tasks.detail") : mode === "pick" ? "tasks.pick" : "tasks.note");
 
-  useJump(2, (j) => {
+  useJump(VIEW.tasks, (j) => {
     if (!j.taskId) return;
     setSelectedId(j.taskId);
     setMode("detail");
@@ -77,6 +94,8 @@ export function TasksView() {
   useEffect(() => {
     ctx.setSelection({ taskId: selected?.id ?? null, runId: null });
   }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving the view clears the selection, so /stop and /log elsewhere fall back to the only active run.
+  useEffect(() => () => ctx.setSelection({ taskId: null, runId: null }), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const move = (dCol: number, dRow: number) => {
     if (!board.data || !selected) return;
@@ -113,26 +132,30 @@ export function TasksView() {
   };
 
   useKeys((input, key) => {
-    if (mode === "browse") {
-      if (key.upArrow || input === "k") move(0, -1);
-      else if (key.downArrow || input === "j") move(0, 1);
-      else if (key.leftArrow || input === "h") move(-1, 0);
-      else if (key.rightArrow || input === "l") move(1, 0);
-      else if (input === "v") setAsBoard((b) => !b);
+    if (mode === "list") {
+      if (key.escape || (key.leftArrow && !boardMode)) return ctx.back();
+      if (key.upArrow) move(0, -1);
+      else if (key.downArrow) move(0, 1);
+      else if (key.leftArrow) move(-1, 0);
+      else if (key.rightArrow) move(1, 0);
+      else if (input === "v") {
+        if (boardable) setAsBoard((b) => !b);
+        else ctx.notify("The board needs a wider terminal.");
+      } else if (input === "l") ctx.run("log");
       else if (key.return && selected) setMode("detail");
       return;
     }
     if (mode === "detail") {
-      if (key.escape || key.return) return setMode("browse");
+      if (key.escape || key.leftArrow) return setMode("list");
       if (!selected) return;
       if (input === "c") {
         if (selected.state === "done" || selected.state === "cancelled") return ctx.fail({ plain: `This task is already ${selected.state}.`, detail: null });
-        ctx.ask(`Cancel task ${selected.shortId}? (y/n)`, async () => {
+        ctx.ask(`Cancel task ${selected.shortId}?`, async () => {
           await api.call("control.cancelTask", { projectId, taskId: selected.id });
           ctx.notify("Task cancelled.");
         });
-      } else if (input === "r") {
-        ctx.ask(`Resume task ${selected.shortId}? (y/n)`, async () => {
+      } else if (key.return) {
+        ctx.ask(`Resume task ${selected.shortId}?`, async () => {
           await api.call("control.resumeTask", { projectId, taskId: selected.id });
           ctx.notify("Task resumed.");
         });
@@ -140,13 +163,14 @@ export function TasksView() {
         if (agents.length === 0) return ctx.fail({ plain: "There are no agents to reassign to.", detail: null });
         setAgentIdx(0);
         setMode("pick");
-      }
+      } else if (input === "l") ctx.run("log");
+      else if (input === "x") ctx.run("stop");
       return;
     }
     if (mode === "pick") {
       if (key.escape) return setMode("detail");
-      if (key.upArrow || input === "k") setAgentIdx((i) => Math.max(0, i - 1));
-      else if (key.downArrow || input === "j") setAgentIdx((i) => Math.min(agents.length - 1, i + 1));
+      if (key.upArrow) setAgentIdx((i) => Math.max(0, i - 1));
+      else if (key.downArrow) setAgentIdx((i) => Math.min(agents.length - 1, i + 1));
       else if (key.return) {
         const a = agents[agentIdx];
         if (a) {
@@ -159,78 +183,118 @@ export function TasksView() {
   });
 
   if (!board.data) return <SafeText dimColor>Loading...</SafeText>;
-  if (flat.length === 0) return <SafeText dimColor>No tasks yet. The CTO creates tasks once you approve a scope.</SafeText>;
+  const header = (
+    <PaneHeader
+      title={mode === "list" || !selected ? "Tasks" : selected.shortId}
+      context={mode === "list" || !selected ? `${flat.length} total` : oneLine(selected.title)}
+      pill={mode !== "list" && selected ? <Chip text={`${sym().bullet} ${TASK_STATE_LABEL[selected.state]}`} color={STATE_COLOR[selected.state]} /> : undefined}
+      width={w}
+    />
+  );
+  if (flat.length === 0) {
+    return (
+      <Box flexDirection="column" height={h} width={w}>
+        {header}
+        <SafeText dimColor>No tasks yet. The CTO plans tasks once you approve a PRD.</SafeText>
+      </Box>
+    );
+  }
 
-  if (mode !== "browse" && selected) {
-    const lines = detail.data ? detailLines(detail.data, ctx.cols - 2) : [{ text: "Loading...", dim: true }];
+  if (mode !== "list" && selected) {
     if (mode === "pick" || mode === "note") {
-      const list: DLine[] = [{ text: `Reassign ${selected.shortId} to which agent? (up/down, Enter, Esc)`, bold: true, color: palette.accent }];
-      agents.forEach((a, i) => list.push({ text: `${i === agentIdx ? ">" : " "} ${a.name}  ${a.role}  ${a.engine}${a.model ? `/${a.model}` : ""}`, bold: i === agentIdx }));
-      if (mode === "pick") return <ScrollLines lines={list} height={ctx.bodyHeight} />;
       const target = agents.find((a) => a.id === pickedAgent);
       return (
-        <Box flexDirection="column" height={ctx.bodyHeight}>
-          <SafeText bold color={palette.accent}>{`Handoff note for ${target?.name ?? "the agent"} (Enter sends, Esc back)`}</SafeText>
-          <TextInput value={note} onChange={setNote} onSubmit={(v) => target && void reassign(target.id, v.trim()).catch(ctx.fail)} onEscape={() => setMode("pick")} focus width={ctx.cols} maxRows={Math.max(1, ctx.bodyHeight - 2)} multiline placeholder="What should the new agent know?" />
+        <Box flexDirection="column" height={h} width={w}>
+          {header}
+          {mode === "pick" ? (
+            <>
+              <SafeText bold>{`Reassign ${selected.shortId} to which agent?`}</SafeText>
+              {agents.slice(windowed(agents.length, agentIdx, Math.max(1, h - 3)).start, windowed(agents.length, agentIdx, Math.max(1, h - 3)).end).map((a) => {
+                const i = agents.indexOf(a);
+                return <ListRow key={a.id} segs={[{ text: a.name, bold: true }, { text: `  ${a.role}  ${a.engine}${a.model ? `/${a.model}` : ""}`, dim: true }]} selected={i === agentIdx} focused width={w} />;
+              })}
+            </>
+          ) : (
+            <>
+              <SafeText bold>{`Handoff note for ${target?.name ?? "the agent"}`}</SafeText>
+              <InputBox value={note} onChange={setNote} onSubmit={(v) => target && void reassign(target.id, v.trim()).catch(ctx.fail)} onEscape={() => setMode("pick")} focus={ctx.focus === "main"} placeholder="What should the new agent know?" width={w} maxRows={Math.max(1, h - 5)} compact={h < 8} />
+            </>
+          )}
         </Box>
       );
     }
+    const lines = detail.data ? detailLines(detail.data, w - 2) : [{ text: "Loading...", dim: true }];
     const peekRun = detail.data ? runIdFor(ctx.runtime, selected.id, null, detail.data.runs) : null;
-    const peekH = peekRun ? peekHeight(ctx.bodyHeight, 12) : 0;
+    const peekH = peekRun ? peekHeight(h, 12) : 0;
     return (
-      <Box flexDirection="column" height={ctx.bodyHeight}>
-        <ScrollLines lines={lines} height={Math.max(1, ctx.bodyHeight - 1 - peekH)} arrows resetKey={selected.id} />
-        <SafeText dimColor>Esc back  c cancel task  r resume  a reassign  PgUp/PgDn scroll</SafeText>
+      <Box flexDirection="column" height={h} width={w}>
+        {header}
+        <ScrollLines lines={lines} height={Math.max(1, h - 1 - peekH)} width={w} arrows resetKey={selected.id} />
         {peekRun && peekH > 0 ? <LogPeek runId={peekRun} height={peekH} /> : null}
       </Box>
     );
   }
 
+  const rowsH = Math.max(1, h - 1);
   if (!boardMode) {
-    const h = Math.max(1, ctx.bodyHeight - 1);
     const idx = Math.max(0, flat.findIndex((t) => t.id === selected?.id));
-    const { start, end } = windowed(flat.length, idx, h);
+    const { start, end } = windowed(flat.length, idx, rowsH);
+    const glyph = w >= 50;
+    const showWho = w >= 64;
+    const showAge = w >= 56;
+    const chipW = glyph ? 12 : 2;
+    const fixed = 2 + chipW + 6 + (showWho ? 9 : 0) + (showAge ? 5 : 0);
+    const titleW = Math.max(6, w - fixed);
     return (
-      <Box flexDirection="column" height={ctx.bodyHeight}>
-        {flat.slice(start, end).map((t) => (
-          <Box key={t.id} height={1}>
-            <Text inverse={t.id === selected?.id} color={STATE_COLOR[t.state]}>{` ${fit(TASK_STATE_LABEL[t.state], 9)}`}</Text>
-            <SafeText inverse={t.id === selected?.id}>{` ${t.shortId} ${clip(oneLine(t.title), Math.max(4, ctx.cols - 22))}${t.blockReason ? "  [blocked]" : ""}`}</SafeText>
-          </Box>
-        ))}
-        <SafeText dimColor>{`${idx + 1}/${flat.length}  Enter details${ctx.narrow ? "" : "  v board"}`}</SafeText>
+      <Box flexDirection="column" height={h} width={w}>
+        {header}
+        {flat.slice(start, end).map((t) => {
+          const chip = stateChip(t.state, true);
+          const segs: Seg[] = [
+            glyph ? chip : { text: `${sym().bullet} `, color: STATE_COLOR[t.state] },
+            { text: fit(t.shortId, 6), dim: true },
+            { text: fit(`${t.blockReason ? "! " : ""}${clip(oneLine(t.title), titleW)}`, titleW), ...(t.blockReason ? { color: palette.attention } : {}) },
+            ...(showWho ? [{ text: ` ${fit(clip(nameOf(t.assigneeAgentId), 8), 8)}`, dim: true }] : []),
+            ...(showAge ? [{ text: ` ${shortAge(t.updatedAt).padStart(4)}`, dim: true }] : []),
+          ];
+          return <ListRow key={t.id} segs={segs} selected={t.id === selected?.id} focused width={w} />;
+        })}
       </Box>
     );
   }
 
-  const colW = Math.floor(ctx.cols / TASK_STATES.length);
-  const listH = Math.max(1, ctx.bodyHeight - 2);
+  const colW = Math.floor(w / TASK_STATES.length);
+  const cardRows = Math.max(1, rowsH - 1);
+  const perCol = Math.max(1, Math.floor(cardRows / 3));
   return (
-    <Box flexDirection="column" height={ctx.bodyHeight}>
-      <Box height={1}>
-        {TASK_STATES.map((s: TaskState) => (
-          <Box key={s} width={colW}>
-            <Text bold color={STATE_COLOR[s]}>{fit(`${TASK_STATE_LABEL[s]} ${board.data!.board[s].length}`, colW - 1)}</Text>
-          </Box>
-        ))}
-      </Box>
-      <Box height={listH}>
+    <Box flexDirection="column" height={h} width={w}>
+      {header}
+      <Box height={rowsH} flexShrink={0}>
         {TASK_STATES.map((s: TaskState) => {
           const list = board.data!.board[s];
           const sel = selected?.state === s ? list.findIndex((t) => t.id === selected.id) : 0;
-          const { start, end } = windowed(list.length, sel, listH);
+          const { start, end } = windowed(list.length, sel, perCol);
           return (
-            <Box key={s} width={colW} flexDirection="column">
-              {list.slice(start, end).map((t) => (
-                <Box key={t.id} height={1}>
-                  <SafeText inverse={t.id === selected?.id}>{fit(`${t.blockReason ? "!" : " "}${t.shortId} ${oneLine(t.title)}`, colW - 1)}</SafeText>
-                </Box>
-              ))}
+            <Box key={s} width={colW} flexDirection="column" flexShrink={0} paddingRight={1}>
+              <Box height={1}>
+                <SafeText bold color={STATE_COLOR[s]}>{fit(`${TASK_STATE_LABEL[s]} ${list.length}`, colW - 1)}</SafeText>
+              </Box>
+              {list.slice(start, end).map((t) => {
+                const on = t.id === selected?.id;
+                const textW = colW - 1;
+                const head: DLine = { text: fit(`${t.shortId}${t.blockReason ? " !" : ""}`, textW), ...(on && ctx.focus === "main" ? { bar: true } : on ? { color: palette.accent, bold: true } : { bold: true }) };
+                const body: DLine = { text: fit(oneLine(t.title), textW), ...(on && ctx.focus === "main" ? { bar: true } : on ? { color: palette.accent } : { dim: true }) };
+                return (
+                  <Box key={t.id} flexDirection="column" height={3} flexShrink={0}>
+                    <Row line={head} width={colW - 1} />
+                    <Row line={body} width={colW - 1} />
+                  </Box>
+                );
+              })}
             </Box>
           );
         })}
       </Box>
-      <SafeText dimColor>{selected ? `${selected.shortId} ${oneLine(selected.title)}` : ""}</SafeText>
     </Box>
   );
 }

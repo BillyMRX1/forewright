@@ -20,26 +20,26 @@ export FOREWRIGHT_HOME=/tmp/forewright-demo-home
 ## Steps
 
 1. Run `forewright`. Press `y` on the welcome screen to create the workspace.
-2. Press `2` and paste the brief from `examples/tip-calculator/BRIEF.md`.
-3. Wait for "CTO is thinking" to finish. A PRD revision appears with status `proposed`. Press `Esc`, then `D` to read it, then `A` and `y` to approve.
-4. Press `3`. Tasks appear in Planned and Ready, then move to Working as agents pick them up. Press `Enter` on a task to see its dependencies and acceptance checks.
-5. Press `6` to see the hired agents, their engines and models.
-6. If a decision appears in the Inbox (`5`), choose an option and confirm.
-7. Press `L` on a working task to watch the raw log, then `Esc`.
-8. Press `7` on a finished task to see check results, review notes and the diff.
+2. The CTO view opens with the message box focused. Paste the brief from `examples/tip-calculator/BRIEF.md` and press `Enter`.
+3. Wait for "thinking" to leave the header. A PRD card with status `proposed` appears in the conversation. Type `/prd` and `Enter` to read it, `Esc` to close it, then `/approve`, `Enter` and `y` to approve.
+4. Press `Tab` to focus the sidebar, move to Tasks and press `Enter`. Tasks appear in Planned and Ready, then move to Working as agents pick them up. Press `Enter` on a task to see its dependencies and acceptance checks, `Esc` to go back.
+5. In the sidebar open Team to see the hired agents, their engines and models.
+6. If a decision appears (a dot next to Inbox), open the Inbox, press `Enter` on it, choose an option and confirm.
+7. In Tasks, open a working task and press `l` to watch the raw log, then `Esc`.
+8. In the sidebar open Evidence, pick a finished task and press `Enter` to see check results, review notes and the diff.
 
 ## Restart continuity check
 
-1. While at least one task is Working, press `q`. The screen closes and says the service keeps running.
+1. While at least one task is Working, press `Ctrl+C` and answer `y`. The screen closes and says the service keeps running.
 2. Run `pgrep -fl "serve"` to confirm the service is still up, and run `forewright` again in the same folder. The same project, PRD, tasks and messages are there, and the working task is still progressing.
 3. Stop the service: press `Ctrl+C` if you ran `forewright serve` in the foreground, or `pkill -f "cli/main.js serve"` for the background one. Run `forewright` again. It restarts the service, which reconciles unfinished runs (a run whose process is gone is marked and retried, never silently counted as done).
-4. Type half a message in the CTO box, press `Esc`, `3`, then `q`, run `forewright`, press `2`. The draft is restored.
+4. Type half a message in the CTO box, press `Esc` to go to the sidebar, press `Ctrl+C` (and `y` if asked), run `forewright` again. The draft is restored in the CTO box.
 
 ## Pause, stop, resume
 
-1. Press `P`, then `y`. The header shows PAUSED and no new work starts (runs already in progress finish).
-2. Press `P`, then `y` again to resume.
-3. Select a working task, press `X`, then `y`. The run ends and the task follows the retry limits.
+1. In a message box type `/pause`, press `Enter`, then `y` (or use `Ctrl+P` and pick "Pause all work"). The title bar shows PAUSED and no new work starts (runs already in progress finish).
+2. Type `/resume`, `Enter`, `y` to resume.
+3. Open a working task in Tasks, press `x`, then `y`. The run ends and the task follows the retry limits.
 
 ## Clean up
 
