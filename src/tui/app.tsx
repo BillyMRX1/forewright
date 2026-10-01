@@ -16,7 +16,7 @@ import { Palette, type PaletteEntry } from "./palette.js";
 import { ConfirmCard, HelpModal, PrdViewer } from "./modals.js";
 import { footerHints } from "./keys.js";
 import { viewOfAction, type ActionId } from "./commands.js";
-import { DEFAULT_TOAST_MS, currentToast, enqueueToast, removeToast, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
+import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
 import { borderStyle, palette as colors } from "./theme.js";
 import { OverviewView } from "./views/overview.js";
 import { CtoView } from "./views/cto.js";
@@ -211,10 +211,26 @@ export function App(props: AppProps) {
       }
       case "task.blocked": {
         const reason = p["reason"];
-        if (reason === "dependency" || reason === "human_input") break;
+        // A usage-limit wait is announced by the engine.waiting notice, which also covers the CTO and reviews.
+        if (reason === "dependency" || reason === "human_input" || reason === "quota") break;
         const kind: ToastKind = reason === "exhausted_recovery" ? "needs_you" : reason === "quota" ? "info" : "error";
         const why = reason === "quota" ? "is waiting for the provider limit" : reason === "exhausted_recovery" ? "ran out of retries and needs you" : "is blocked";
         withTask(ev.entityId, (t) => raise(kind, `${t.shortId} ${why}`, { kind: "task", taskId: t.id }));
+        break;
+      }
+      case "engine.fallback":
+      case "engine.restored":
+      case "engine.waiting": {
+        const type = ev.type;
+        const agentId = str(p["agentId"], "");
+        const agentName = snapRef.current.agents.find((a) => a.id === agentId)?.name ?? "An agent";
+        const who = p["role"] === "cto" ? "CTO" : agentName;
+        const taskId = typeof p["taskId"] === "string" ? p["taskId"] : null;
+        if (type === "engine.waiting" && taskId) {
+          withTask(taskId, (t) => raise("info", engineNoticeText(type, p, t.shortId), { kind: "task", taskId: t.id }));
+        } else {
+          raise("info", engineNoticeText(type, p, who), p["role"] === "cto" ? { kind: "cto" } : null);
+        }
         break;
       }
       case "message.posted":

@@ -3,7 +3,7 @@
 // The first request on a connection must be `hello`. Agent tool bridges use
 // `agent.hello` / `agent.tools.*` instead and never see these methods.
 
-import type { ProviderCapabilities, ProviderHealth, TaskState } from "../core/types.js";
+import type { EngineId, ProviderCapabilities, ProviderHealth, TaskState } from "../core/types.js";
 import type {
   Adr,
   Agent,
@@ -19,6 +19,7 @@ import type {
   Verification,
 } from "../core/store-types.js";
 import type { Store } from "../core/store.js";
+import type { FallbackEntryStatus } from "./fallback.js";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -50,7 +51,16 @@ export interface RuntimeStatus {
 }
 
 export type Overview = ReturnType<Store["overview"]>;
-export type TeamMember = ReturnType<Store["teamView"]>[number];
+/** The engine an agent runs on right now (or would run on next), and whether that is a fallback or a wait. */
+export interface EngineUse {
+  engine: EngineId;
+  model: string | null;
+  /** True when this differs from the agent's own engine because of a usage limit. */
+  viaFallback: boolean;
+  /** Set when the agent's engine is waiting for a usage limit and nothing can take over; ISO time. */
+  waitUntil: string | null;
+}
+export type TeamMember = ReturnType<Store["teamView"]>[number] & { engineUse?: EngineUse };
 
 export interface TaskDetail {
   task: Task;
@@ -90,7 +100,7 @@ export interface Methods {
   "state.prd": { params: { projectId: string; revision?: number }; result: { doc: RequirementDoc | null; approved: RequirementDoc | null; all: Array<Pick<RequirementDoc, "revision" | "status" | "title" | "createdAt">> } };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
-  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null } };
+  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
   "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
   "evidence.diff": { params: { projectId: string; taskId: string }; result: { base: string | null; head: string | null; diff: string; truncated: boolean } };
   "runs.log": { params: { projectId: string; runId: string; tailLines?: number }; result: { lines: string[]; path: string } };

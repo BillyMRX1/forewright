@@ -224,3 +224,21 @@ test("an engine older than its minimum version is a warning with 'update <engine
   assert.equal(withMinVersion(adapter, health("copilot", { version: null })).problems.length, 0, "an unknown version is not accused");
   assert.equal(withMinVersion({ engine: "claude" as const }, health("claude")).minVersion, undefined);
 });
+
+test("doctor lists both fallback orders and flags entries that are not ready", () => {
+  const engines: EngineInput[] = [
+    ...good,
+    { health: health("copilot", { authenticated: false, problems: ["Copilot is not logged in."] }), capabilities: caps() },
+  ];
+  const fallback = { status: "ok", project: "demo", cto: [{ engine: "codex" }, { engine: "copilot" }], workers: [{ engine: "opencode" }, { engine: "codex", model: "gpt-x" }] } as const;
+  const text = renderDoctor(input(engines, { fallback: { ...fallback, cto: [...fallback.cto], workers: [...fallback.workers] } }), plain);
+  assert.match(text, /Fallback when a usage limit is reached/);
+  assert.match(text, /CTO:\s+1\. codex  2\. copilot \[not ready: not signed in\]/);
+  assert.match(text, /Workers:\s+1\. opencode  2\. codex \(gpt-x\)/);
+  const json = JSON.parse(renderDoctorJson(input(engines, { fallback: { ...fallback, cto: [...fallback.cto], workers: [...fallback.workers] } }))) as { fallback: { cto: Array<{ engine: string; problem: string | null }> } };
+  assert.equal(json.fallback.cto[0]!.problem, null);
+  assert.equal(json.fallback.cto[1]!.problem, "not signed in");
+  const empty = renderDoctor(input(good, { fallback: { status: "ok", project: "demo", cto: [], workers: [] } }), plain);
+  assert.match(empty, /CTO:\s+none \(waits for the reset\)/);
+  assert.doesNotMatch(renderDoctor(input(good), plain), /Fallback when/);
+});

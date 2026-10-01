@@ -50,6 +50,7 @@ export const SCOPE_TITLES: Array<[KeyScope, string]> = [
   ["evidence.detail", "Evidence, details"],
   ["settings", "Settings"],
   ["settings.edit", "Settings, typing a number"],
+  ["settings.fallback", "Settings, editing a fallback list"],
   ["palette", "Command palette"],
   ["prd", "PRD viewer"],
   ["log", "Log viewer"],
@@ -160,6 +161,14 @@ export const BINDINGS: Binding[] = [
   { id: "settings.change", keys: ["left", "right", "enter", "space"], label: "←→", action: "change", description: "change the chosen value (enter or space does too; numbers open a box)", scope: "settings", footer: true },
   { id: "settings.scroll", keys: ["pgup", "pgdn"], label: "pgup/pgdn", action: "scroll", description: "scroll", scope: "settings" },
   { id: "settings.back", keys: ["esc"], label: "esc", action: "back", description: "back to the sidebar", scope: "settings", footer: true },
+
+  { id: "settings.fallback.select", keys: ["up", "down"], label: "↑↓", action: "entry", description: "choose an engine in the fallback list", scope: "settings.fallback", footer: true },
+  { id: "settings.fallback.engine", keys: ["left", "right"], label: "←→", action: "engine", description: "change the engine of the chosen entry (it keeps its place in the order)", scope: "settings.fallback", footer: true },
+  { id: "settings.fallback.add", keys: ["a"], label: "a", action: "add", description: "add the next engine that is not in the list yet", scope: "settings.fallback", footer: true },
+  { id: "settings.fallback.remove", keys: ["x"], label: "x", action: "remove", description: "remove the chosen engine from the list", scope: "settings.fallback", footer: true },
+  { id: "settings.fallback.move", keys: ["[", "]"], label: "[ ]", action: "move", description: "move the chosen engine up or down: the first usable one in the list is used first", scope: "settings.fallback", footer: true },
+  { id: "settings.fallback.model", keys: ["m"], label: "m", action: "model", description: "choose a model for the chosen engine (or the engine default)", scope: "settings.fallback" },
+  { id: "settings.fallback.done", keys: ["esc", "enter"], label: "esc", action: "done", description: "stop editing the list", scope: "settings.fallback", footer: true },
 
   { id: "settings.edit.save", keys: ["enter"], label: "enter", action: "save", description: "save the number", scope: "settings.edit", footer: true },
   { id: "settings.edit.cancel", keys: ["esc"], label: "esc", action: "cancel", description: "leave without saving", scope: "settings.edit", footer: true },

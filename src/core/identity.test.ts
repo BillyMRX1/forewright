@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { systemClock } from "./clock.js";
@@ -108,7 +108,7 @@ test(".forewright/ is added to .git/info/exclude exactly once", () => {
   const count = () => readFileSync(exclude, "utf8").split("\n").filter((l) => l.trim() === ".forewright/").length;
   assert.equal(count(), 1);
   // A second project init in the same repo (after removing the marker) must not duplicate the line.
-  execFileSync("rm", ["-rf", path.join(root, ".forewright")]);
+  rmSync(path.join(root, ".forewright"), { recursive: true, force: true });
   initProject(root, systemClock);
   assert.equal(count(), 1);
   assert.equal(existsSync(path.join(root, ".gitignore")), false, "the user's .gitignore is never touched");
@@ -120,7 +120,7 @@ test("registry writes are atomic and leave no temp files", () => {
   initProject(root, systemClock);
   openProject(root, systemClock);
   writeFileSync(path.join(home, "probe"), "x");
-  const leftovers = execFileSync("ls", [home], { encoding: "utf8" }).split("\n").filter((f) => f.endsWith(".tmp"));
+  const leftovers = readdirSync(home).filter((f) => f.endsWith(".tmp"));
   assert.deepEqual(leftovers, []);
 });
 

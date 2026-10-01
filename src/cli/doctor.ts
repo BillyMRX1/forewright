@@ -6,6 +6,7 @@ import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, s
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { isWindows } from "../core/platform.js";
+import type { FallbackEntry } from "../core/store-types.js";
 import { LIVE_ENGINES, type EngineId, type ProviderCapabilities, type ProviderHealth } from "../core/types.js";
 import { forewrightHome, socketPath, tokenPath } from "../core/paths.js";
 import { isPipePath } from "../core/platform.js";
@@ -58,12 +59,19 @@ export interface EngineInput {
   capabilities: ProviderCapabilities;
 }
 
+/** The user-ordered fallback lists of the project in the current folder, or why they could not be read. */
+export type FallbackInfo =
+  | { status: "ok"; project: string; cto: FallbackEntry[]; workers: FallbackEntry[] }
+  | { status: "unavailable"; reason: string };
+
 export interface DoctorInput {
   version: string;
   node: string;
   service: ServiceQuery;
   dataFolder: { path: string; writable: boolean };
   engines: EngineInput[];
+  /** Left out by callers that do not look at a project; the section is then not shown. */
+  fallback?: FallbackInfo;
   homeDir: string;
   /** Windows only: whether symbolic links are allowed without admin rights. Left out on other platforms. */
   developerMode?: DeveloperMode;
@@ -239,6 +247,28 @@ function wrapWords(words: string[], width: number): string[] {
 
 // ---------------------------------------------------------------- text renderer
 
+/** Why a fallback entry could not take over today, judged from this machine's probe. Null when it is ready. */
+export function fallbackEntryProblem(input: DoctorInput, entry: FallbackEntry, role: "cto" | "workers"): string | null {
+  const row = summarize(input).rows.find((r) => r.input.health.engine === entry.engine);
+  if (!row) return "not available on this machine";
+  if (row.status === "fail") {
+    const h = row.input.health;
+    return h.binaryPath === null ? "not installed" : h.authenticated === false ? "not signed in" : (h.problems[0] ?? "not usable");
+  }
+  if (role === "cto" && row.input.capabilities.coordinationTools !== "mcp") return "cannot be the CTO (no coordination tools)";
+  return null;
+}
+
+function fallbackWords(input: DoctorInput, list: FallbackEntry[], role: "cto" | "workers"): string {
+  if (list.length === 0) return "none (waits for the reset)";
+  return list
+    .map((e, i) => {
+      const problem = fallbackEntryProblem(input, e, role);
+      return `${i + 1}. ${e.engine}${e.model ? ` (${e.model})` : ""}${problem ? ` [not ready: ${problem}]` : ""}`;
+    })
+    .join("  ");
+}
+
 export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
   const st = makeStyle(opts.color);
   const sum = summarize(input);
@@ -332,6 +362,21 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
   out.push(`  ${pad("Workers:", roleLabel.length + 1)} ${roleList(sum.roles.workers)}`);
   out.push("");
 
+  if (input.fallback) {
+    out.push(st.bold("Fallback when a usage limit is reached"));
+    if (input.fallback.status === "ok") {
+      const f = input.fallback;
+      const anyBad = [...f.cto.map((e) => fallbackEntryProblem(input, e, "cto")), ...f.workers.map((e) => fallbackEntryProblem(input, e, "workers"))].some((x) => x !== null);
+      const color = (words: string, list: FallbackEntry[]): string => (list.length === 0 ? st.dim(words) : words);
+      out.push(`  ${pad("CTO:", roleLabel.length + 1)} ${color(fallbackWords(input, f.cto, "cto"), f.cto)}`);
+      out.push(`  ${pad("Workers:", roleLabel.length + 1)} ${color(fallbackWords(input, f.workers, "workers"), f.workers)}`);
+      out.push(st.dim(`  Project ${f.project}. Change the lists in Settings.${anyBad ? " Entries marked not ready are skipped." : ""}`));
+    } else {
+      out.push(st.dim(`  ${input.fallback.reason}`));
+    }
+    out.push("");
+  }
+
   const paint = sum.ready === sum.total ? st.green : sum.ready > 0 ? st.yellow : st.red;
   const caveats = sum.rows
     .filter((r) => r.status === "warn")
@@ -391,6 +436,18 @@ export function renderDoctorJson(input: DoctorInput): string {
       capabilities: r.input.capabilities,
     })),
     roles: sum.roles,
+    ...(input.fallback
+      ? {
+          fallback:
+            input.fallback.status === "ok"
+              ? {
+                  project: input.fallback.project,
+                  cto: input.fallback.cto.map((e) => ({ ...e, problem: fallbackEntryProblem(input, e, "cto") })),
+                  workers: input.fallback.workers.map((e) => ({ ...e, problem: fallbackEntryProblem(input, e, "workers") })),
+                }
+              : { unavailable: input.fallback.reason },
+        }
+      : {}),
     ready: sum.ready,
     total: sum.total,
   };
@@ -428,6 +485,23 @@ function writable(dir: string): boolean {
   }
 }
 
+/** Reads the fallback lists of the project in this folder from the running service. */
+async function readFallback(service: ServiceQuery): Promise<FallbackInfo> {
+  if (service.state !== "running") return { status: "unavailable", reason: "The background service is not running, so the fallback lists were not read." };
+  let client: RpcClient | null = null;
+  try {
+    client = await RpcClient.connect(socketPath(), RpcClient.tokenFrom(tokenPath()));
+    const open = await client.request("projects.open", { cwd: process.cwd() });
+    if (open.status !== "found") return { status: "unavailable", reason: "This folder is not a Forewright project, so there are no fallback lists to show." };
+    const { settings } = await client.request("state.settings", { projectId: open.projectId });
+    return { status: "ok", project: open.name, cto: settings.fallback.cto, workers: settings.fallback.workers };
+  } catch (err) {
+    return { status: "unavailable", reason: `The fallback lists could not be read: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    client?.close();
+  }
+}
+
 export async function runDoctor(args: string[], opts: { includeFake: boolean }): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(DOCTOR_HELP);
@@ -448,6 +522,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
   const home = forewrightHome();
   const adapters = createAdapters({ forewrightHome: home, includeFake: opts.includeFake });
   const [healths, service] = await Promise.all([probeAll(adapters), queryService()]);
+  const fallback = await readFallback(service);
   if (spinner) process.stdout.write("\r\x1b[2K");
 
   const order: EngineId[] = [...LIVE_ENGINES, "fake"];
@@ -460,6 +535,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
     service,
     dataFolder: { path: home, writable: writable(home) },
     engines,
+    fallback,
     homeDir: homedir(),
     ...(isWindows() ? { developerMode: detectDeveloperMode() } : {}),
   };

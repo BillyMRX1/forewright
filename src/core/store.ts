@@ -35,6 +35,8 @@ import {
   DEFAULT_LIMITS,
   type Decision,
   type DecisionKind,
+  type FallbackEntry,
+  type FallbackSettings,
   type DecisionOption,
   type ForewrightEvent,
   type Limits,
@@ -764,7 +766,7 @@ export class Store {
     tx(this.db, () => {
       if (ev.kind === "session_started" && ev.sessionId) {
         this.run("UPDATE run SET provider_session_id = ? WHERE id = ?", ev.sessionId, runId);
-        this.run("UPDATE agent SET provider_session_id = ? WHERE id = ?", ev.sessionId, run.agentId);
+        this.setAgentSession(run.agentId, run.engine, ev.sessionId);
       }
       // Tool calls are summarized by tool name; their JSON input stays in the raw log.
       const summary = ev.kind === "tool_call" ? (ev.toolName ?? "a tool") : (ev.text ?? ev.toolName ?? ev.kind);
@@ -801,7 +803,7 @@ export class Store {
         outcome.sessionId,
         runId,
       );
-      if (outcome.sessionId) this.run("UPDATE agent SET provider_session_id = ? WHERE id = ?", outcome.sessionId, run.agentId);
+      if (outcome.sessionId) this.setAgentSession(run.agentId, run.engine, outcome.sessionId);
       this.setAgentActivity(run.agentId, `Run ${outcome.state}`, null, outcome.state === "quota_wait" ? "waiting" : "idle");
       this.appendEvent("run.finished", "run", runId, "system", { state: outcome.state, exitCode: outcome.exitCode, signal: outcome.signal, error: outcome.error });
       return this.getRun(runId);
@@ -871,7 +873,7 @@ export class Store {
       permission: r["permission"] as PermissionProfile,
       lifecycle: r["lifecycle"] as AgentLifecycle,
       currentTaskId: (r["current_task_id"] as string | null) ?? null,
-      providerSessionId: (r["provider_session_id"] as string | null) ?? null,
+      providerSessionId: this.getAgentSession(r["id"] as string, r["engine"] as EngineId),
       createdAt: r["created_at"] as string,
       retiredAt: (r["retired_at"] as string | null) ?? null,
       lastEventAt: (r["last_event_at"] as string | null) ?? null,
@@ -1611,7 +1613,11 @@ export class Store {
     for (const k of Object.keys(DEFAULT_LIMITS)) if (stored.has(k)) limits[k] = stored.get(k);
     const authority: Record<string, unknown> = { ...DEFAULT_AUTHORITY };
     for (const k of Object.keys(DEFAULT_AUTHORITY)) if (stored.has(`authority.${k}`)) authority[k] = stored.get(`authority.${k}`);
-    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority };
+    const fallback: FallbackSettings = {
+      cto: (stored.get("fallback.cto") as FallbackEntry[] | undefined) ?? [],
+      workers: (stored.get("fallback.workers") as FallbackEntry[] | undefined) ?? [],
+    };
+    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback };
   }
 
   /** Authority keys are written as `authority.<name>` and only a human may change them. */
@@ -1629,6 +1635,10 @@ export class Store {
             ? typeof value === "number" && value >= 0
             : value === "ask" || value === "auto" || value === "deny";
       if (!ok) throw new ValidationError(`Invalid value for ${key}.`, { key, value });
+    } else if (key === "fallback.cto" || key === "fallback.workers") {
+      // The fallback lists decide which other engines may spend Billy's usage, so only a human writes them.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      value = validateFallbackList(key, value);
     } else if (key === "ctoEngine") {
       if (typeof value !== "string" || ![...LIVE_ENGINES, "fake"].includes(value)) {
         throw new ValidationError(`ctoEngine must be one of ${LIVE_ENGINES.join(", ")}.`, { key, value });
@@ -1735,8 +1745,26 @@ export class Store {
     this.setAgentActivity(agentId, summary, null);
   }
 
-  clearAgentSession(agentId: string): void {
-    this.run("UPDATE agent SET provider_session_id = NULL WHERE id = ?", agentId);
+  /** The provider session an agent holds for one engine. Sessions never cross engines. */
+  getAgentSession(agentId: string, engine: EngineId): string | null {
+    return (this.one("SELECT session_id FROM agent_session WHERE agent_id = ? AND engine = ?", agentId, engine)?.["session_id"] as string | undefined) ?? null;
+  }
+
+  setAgentSession(agentId: string, engine: EngineId, sessionId: string): void {
+    this.run(
+      `INSERT INTO agent_session (agent_id, engine, session_id, updated_at) VALUES (?,?,?,?)
+       ON CONFLICT(agent_id, engine) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at`,
+      agentId,
+      engine,
+      sessionId,
+      this.nowIso(),
+    );
+  }
+
+  /** Forgets the agent's session for one engine (a lost session), or for every engine when none is given. */
+  clearAgentSession(agentId: string, engine?: EngineId): void {
+    if (engine) this.run("DELETE FROM agent_session WHERE agent_id = ? AND engine = ?", agentId, engine);
+    else this.run("DELETE FROM agent_session WHERE agent_id = ?", agentId);
   }
 
   /** Puts messages that a failed run received back to pending so the next run sees them. */
@@ -1881,4 +1909,24 @@ export class Store {
     const all = this.listDecisions();
     return { open: all.filter((d) => d.status === "open"), recent: all.filter((d) => d.status !== "open").slice(-20).reverse() };
   }
+}
+
+/** A fallback list is an ordered array of known live engines, each at most once, with an optional model name. */
+function validateFallbackList(key: string, value: unknown): FallbackEntry[] {
+  if (!Array.isArray(value)) throw new ValidationError(`${key} must be an ordered list of engines.`, { key });
+  const seen = new Set<string>();
+  const out: FallbackEntry[] = [];
+  for (const raw of value) {
+    const e = raw as { engine?: unknown; model?: unknown } | null;
+    if (e === null || typeof e !== "object" || typeof e.engine !== "string" || !(LIVE_ENGINES as readonly string[]).includes(e.engine)) {
+      throw new ValidationError(`Each entry of ${key} needs an engine, one of ${LIVE_ENGINES.join(", ")}.`, { key, entry: raw });
+    }
+    if (seen.has(e.engine)) throw new ValidationError(`${e.engine} is listed twice in ${key}.`, { key, engine: e.engine });
+    if (e.model !== undefined && e.model !== null && (typeof e.model !== "string" || e.model.trim() === "")) {
+      throw new ValidationError(`The model of ${e.engine} in ${key} must be a model name.`, { key, engine: e.engine });
+    }
+    seen.add(e.engine);
+    out.push({ engine: e.engine as EngineId, ...(typeof e.model === "string" ? { model: e.model } : {}) });
+  }
+  return out;
 }

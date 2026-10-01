@@ -52,18 +52,23 @@ export interface HarnessOptions {
   clock?: Clock;
   home?: string;
   watchdogMs?: number;
+  /** More doubles registered under other engine ids (for example claude and codex) to test fallback. */
+  extraAdapters?: FakeAdapter[];
+  /** Engine of a new project's CTO (default "fake"). */
+  defaultCtoEngine?: EngineId;
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const home = opts.home ?? tempDir("forewright-home-");
   const repo = opts.repo ?? makeRepo(opts.git === undefined ? {} : { git: opts.git });
   const adapter = opts.adapter ?? new FakeAdapter();
-  const adapters = new Map<EngineId, ProviderAdapter>([["fake", adapter]]);
+  const adapters = new Map<EngineId, ProviderAdapter>([[adapter.engine, adapter]]);
+  for (const extra of opts.extraAdapters ?? []) adapters.set(extra.engine, extra);
   const daemon = await startDaemon({
     forewrightHome: home,
     adapters,
     testMode: true,
-    defaultCtoEngine: "fake",
+    defaultCtoEngine: opts.defaultCtoEngine ?? "fake",
     watchdogMs: opts.watchdogMs ?? 60_000,
     ...(opts.clock ? { clock: opts.clock } : {}),
   });
@@ -87,7 +92,13 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   };
 }
 
-export async function waitFor<T>(fn: () => T | undefined | null | false | Promise<T | undefined | null | false>, what: string, timeoutMs = 20_000): Promise<T> {
+// Every process start costs seconds on some Windows machines (antivirus scanning each new process was
+// measured at about 3 s per start on a corporate laptop), so waits are longer there and can be scaled
+// with FOREWRIGHT_TEST_WAIT_SCALE.
+const WAIT_SCALE = Number(process.env["FOREWRIGHT_TEST_WAIT_SCALE"]) || (process.platform === "win32" ? 3 : 1);
+
+export async function waitFor<T>(fn: () => T | undefined | null | false | Promise<T | undefined | null | false>, what: string, baseTimeoutMs = 20_000): Promise<T> {
+  const timeoutMs = baseTimeoutMs * WAIT_SCALE;
   const start = Date.now();
   for (;;) {
     const v = await fn();
@@ -136,8 +147,8 @@ export function seedPrd(h: Harness, reqs: Record<string, string> = { "R-001": "A
   return h.rt.store.approveRequirementDoc(doc.revision, HUMAN).doc;
 }
 
-export function hire(h: Harness, name: string, role: AgentRole = "backend", permission?: PermissionProfile): Agent {
-  return h.rt.store.hireAgent({ name, role, engine: "fake", permission: permission ?? (role === "review" ? "read_only" : "workspace_write"), actor: SYSTEM });
+export function hire(h: Harness, name: string, role: AgentRole = "backend", permission?: PermissionProfile, engine: EngineId = "fake"): Agent {
+  return h.rt.store.hireAgent({ name, role, engine, permission: permission ?? (role === "review" ? "read_only" : "workspace_write"), actor: SYSTEM });
 }
 
 export function addTask(h: Harness, input: { title: string; assignee?: Agent; verify?: string[]; keys?: string[]; deps?: string[]; description?: string }): Task {

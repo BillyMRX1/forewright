@@ -38,6 +38,12 @@ export interface FakeRule {
 }
 
 export interface FakeAdapterOptions {
+  /** Engine id this double answers to (default "fake"). */
+  engine?: EngineId;
+  /** Whether this double can call Forewright's MCP tools (default "mcp"). "none" cannot be the CTO or review. */
+  coordinationTools?: "mcp" | "none";
+  /** Make the probe report the engine as not signed in. */
+  signedOut?: boolean;
   rules?: FakeRule[];
   defaultScript?: FakeScript;
   /** Called synchronously at the start of every run, before the child is spawned. */
@@ -49,13 +55,10 @@ export interface FakeAdapterOptions {
 const CHILD = fileURLToPath(new URL("./fake-child.js", import.meta.url));
 
 export class FakeAdapter implements ProviderAdapter {
-  readonly engine: EngineId = "fake";
+  /** Which engine this double stands in for. Tests register several to exercise fallback between engines. */
+  readonly engine: EngineId;
   readonly isTestDouble = true;
-  readonly capabilities: ProviderCapabilities = {
-    streaming: true, resume: true, cancellation: true, approvals: "none", modelSelection: "none",
-    attachments: false, workingDirectory: "cwd", usageReporting: "none", coordinationTools: "mcp",
-    notes: ["Test double: scripted output from a local process. Not a live provider."],
-  };
+  readonly capabilities: ProviderCapabilities;
   readonly rules: FakeRule[];
   defaultScript: FakeScript;
   onStart: ((req: RunRequest) => void) | undefined;
@@ -63,7 +66,16 @@ export class FakeAdapter implements ProviderAdapter {
   /** Every request this adapter has been asked to run, in order (for test assertions). */
   readonly requests: RunRequest[] = [];
 
+  private readonly signedOut: boolean;
+
   constructor(opts: FakeAdapterOptions = {}) {
+    this.engine = opts.engine ?? "fake";
+    this.capabilities = {
+      streaming: true, resume: true, cancellation: true, approvals: "none", modelSelection: "none",
+      attachments: false, workingDirectory: "cwd", usageReporting: "none", coordinationTools: opts.coordinationTools ?? "mcp",
+      notes: ["Test double: scripted output from a local process. Not a live provider."],
+    };
+    this.signedOut = opts.signedOut ?? false;
     this.onStart = opts.onStart;
     this.readStartTime = opts.readStartTime;
     this.rules = opts.rules ?? [];
@@ -72,7 +84,7 @@ export class FakeAdapter implements ProviderAdapter {
 
   async probe(): Promise<ProviderHealth> {
     return {
-      engine: "fake", binaryPath: process.execPath, version: "test-double", authenticated: true, authMethod: "test-double",
+      engine: this.engine, binaryPath: process.execPath, version: "test-double", authenticated: !this.signedOut, authMethod: "test-double",
       models: [], modelsSource: "none", problems: [], checkedAt: new Date().toISOString(), isTestDouble: true,
     };
   }

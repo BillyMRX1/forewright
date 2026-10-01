@@ -6,6 +6,7 @@ import { truncate } from "../core/safety.js";
 import type { Agent, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { gitTry } from "./git.js";
+import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { buildReviewPrompt, readInstructionFiles, reviewSystemPrompt } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { type ActiveRun, adapterFor, launchRun } from "./runs.js";
@@ -40,7 +41,9 @@ function reviewFailures(rt: ProjectRuntime, t: Task, reviewerId: string): number
     .filter((r) => r.kind === "review" && r.generation === t.generation && r.agentId === reviewerId && (r.state === "failed" || r.state === "uncertain")).length;
 }
 
-function pickReviewer(rt: ProjectRuntime, t: Task): Agent | null {
+type RunnableResolution = Extract<Resolution, { wait: false }>;
+
+function pickReviewer(rt: ProjectRuntime, t: Task): { agent: Agent; res: RunnableResolution } | null {
   const candidates = rt.store
     .listAgents()
     .filter(
@@ -49,11 +52,17 @@ function pickReviewer(rt: ProjectRuntime, t: Task): Agent | null {
         a.id !== t.assigneeAgentId &&
         a.lifecycle !== "paused" &&
         !rt.activeForAgent(a.id) &&
-        reviewFailures(rt, t, a.id) < MAX_REVIEW_FAILURES &&
-        rt.deps.adapters.has(a.engine) &&
-        !rt.quotaActive(a.engine),
+        reviewFailures(rt, t, a.id) < MAX_REVIEW_FAILURES,
     );
-  return candidates.find((a) => a.role === "review") ?? candidates[0] ?? null;
+  // Reviewers whose own engine is waiting for a usage limit may run on a fallback engine Billy listed.
+  const usable: Array<{ agent: Agent; res: RunnableResolution }> = [];
+  for (const a of candidates) {
+    const res = resolveFor(rt, a, "review");
+    if (res.wait) continue;
+    if (!rt.deps.adapters.has(res.engine)) continue;
+    usable.push({ agent: a, res });
+  }
+  return usable.find((c) => c.agent.role === "review") ?? usable[0] ?? null;
 }
 
 export function dispatchReviews(rt: ProjectRuntime): void {
@@ -63,21 +72,22 @@ export function dispatchReviews(rt: ProjectRuntime): void {
     if (t.blockReason !== null || t.candidateCommit === null || t.worktreePath === null) continue;
     if (rt.activeForTask(t.id).length > 0 || hasValidReview(rt, t)) continue;
     if (rt.countWorkAndReview() >= limit) return;
-    const reviewer = pickReviewer(rt, t);
-    if (!reviewer) {
+    const picked = pickReviewer(rt, t);
+    if (!picked) {
       rt.notifyCto(`need-reviewer:${t.id}:${t.candidateCommit}`, `${t.shortId} "${t.title}" is ready for review but no idle reviewer (role "review" or "testing", different from the author) is available. Hire or free one.`);
       continue;
     }
     try {
-      startReview(rt, t, reviewer);
+      startReview(rt, t, picked.agent, picked.res);
     } catch (err) {
       rt.reportInternalError(`starting the review of ${t.shortId}`, err);
     }
   }
 }
 
-function startReview(rt: ProjectRuntime, t: Task, reviewer: Agent): void {
+function startReview(rt: ProjectRuntime, t: Task, primary: Agent, res: RunnableResolution): void {
   const { store } = rt;
+  const reviewer = asRunning(primary, res); // the reviewer as it runs now: the engine and model actually chosen
   const wt = t.worktreePath!;
   const candidate = t.candidateCommit!;
   adapterFor(rt, reviewer);
@@ -85,6 +95,7 @@ function startReview(rt: ProjectRuntime, t: Task, reviewer: Agent): void {
     store.setBlocked(t.id, "environment", `The workspace folder for ${t.shortId} is missing, so it cannot be reviewed.`);
     return;
   }
+  noteEngineChoice(rt, primary, "review", res);
   const run = store.createRun({ taskId: t.id, agentId: reviewer.id, generation: t.generation, kind: "review", engine: reviewer.engine, ...(reviewer.model ? { model: reviewer.model } : {}), cwd: wt });
   const raw = gitTry(wt, ["diff", `${INTEGRATION_BRANCH}...${candidate}`]).stdout;
   const truncated = raw.length > DIFF_CAP;
@@ -178,7 +189,10 @@ async function handleReviewOutcome(rt: ProjectRuntime, a: ActiveRun, outcome: Ru
     return;
   }
   if (final.state === "quota_wait") {
+    // a.agent carries the engine this review ran on. A usage limit is not a review failure, so the
+    // next dispatch simply runs the review again, on a fallback engine when Billy listed one.
     rt.setQuota(a.agent.engine, final.retryAfter);
+    noteQuotaHit(rt, store.getAgent(a.agent.id), "review", a.agent.engine, taskId);
     return;
   }
   if (a.reviewSubmitted) return;

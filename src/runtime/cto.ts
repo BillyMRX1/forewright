@@ -4,9 +4,11 @@
 // posted to the cto channel.
 import type { Message } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
+import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { unusableReason } from "./health.js";
-import { buildCtoPrompt, buildResetSummary, buildStateDigest, ctoSystemPrompt, formatMessage, readInstructionFiles } from "./prompts.js";
+import { buildCtoPrompt, buildEngineSwitchNotice, buildResetSummary, buildStateDigest, ctoSystemPrompt, formatMessage, readInstructionFiles } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
+import { ProviderUnavailableError } from "./errors.js";
 import { type ActiveRun, adapterFor, launchRun } from "./runs.js";
 import { looksLikeSessionLoss, nameOfSender } from "./workers.js";
 
@@ -41,21 +43,24 @@ export class CtoDriver {
     const pending = store.pendingDeliveries(cto.id);
     if (pending.length === 0) return;
     const now = rt.clock.now().getTime();
-    if (now < this.cooldownUntil || rt.quotaActive(cto.engine)) return;
+    if (now < this.cooldownUntil) return;
+    const res = resolveFor(rt, cto, "cto");
+    if (res.wait) return; // the CTO's engine is waiting for a usage limit and no fallback can take over
+    const engine = res.engine;
 
-    const adapter = rt.deps.adapters.get(cto.engine);
+    const adapter = rt.deps.adapters.get(engine);
     if (!adapter) {
-      this.fail(`The CTO uses ${cto.engine}, which is not available on this machine. Change the CTO engine in Settings.`, `unavailable:${cto.engine}`);
+      this.fail(`The CTO uses ${engine}, which is not available on this machine. Change the CTO engine in Settings.`, `unavailable:${engine}`);
       return;
     }
-    const health = rt.deps.health.cached(cto.engine);
+    const health = rt.deps.health.cached(engine);
     if (health === null) {
-      void rt.deps.health.forEngine(cto.engine).then(() => rt.scheduler.wake("health"));
+      void rt.deps.health.forEngine(engine).then(() => rt.scheduler.wake("health"));
       return;
     }
-    const problem = unusableReason(health, cto.engine);
+    const problem = unusableReason(health, engine);
     if (problem) {
-      this.fail(`The CTO cannot run: ${problem}`, `unusable:${cto.engine}:${problem}`);
+      this.fail(`The CTO cannot run: ${problem}`, `unusable:${engine}:${problem}`);
       return;
     }
     this.error = null;
@@ -86,7 +91,11 @@ export class CtoDriver {
   startTurn(batch: Array<Message & { supersedes: { id: string; body: string } | null }>, extraPrompt?: string): ActiveRun {
     const rt = this.rt;
     const { store } = rt;
-    const cto = rt.ctoAgent();
+    const primary = rt.ctoAgent();
+    const res: Resolution = resolveFor(rt, primary, "cto");
+    if (res.wait) throw new ProviderUnavailableError(`The CTO's engine (${primary.engine}) is waiting for a usage limit to reset and no fallback engine can take over.`, { engine: primary.engine });
+    noteEngineChoice(rt, primary, "cto", res);
+    const cto = asRunning(primary, res); // the CTO as it runs now: the engine and model actually chosen
     const adapter = adapterFor(rt, cto);
     store.recordEvent("cto.turn_started", "agent", cto.id, { kind: "system" }, { messages: batch.length });
     const run = store.createRun({ agentId: cto.id, generation: 0, kind: "cto", engine: cto.engine, ...(cto.model ? { model: cto.model } : {}), cwd: rt.root });
@@ -94,13 +103,34 @@ export class CtoDriver {
 
     const nameOf = nameOfSender(rt);
     const taskShort = (id: string) => store.getTask(id).shortId;
-    const resume = adapter.capabilities.resume && cto.providerSessionId ? cto.providerSessionId : undefined;
-    const hadEarlierTurn = store.listRuns().some((r) => r.kind === "cto" && r.id !== run.id && r.state !== "queued");
+    // A session belongs to one engine: resume only the CTO's own session on the engine that runs now.
+    const ownSession = store.getAgentSession(cto.id, cto.engine);
+    const resume = adapter.capabilities.resume && ownSession ? ownSession : undefined;
+    const earlier = store.listRuns().filter((r) => r.kind === "cto" && r.id !== run.id && r.state !== "queued");
+    const previous = earlier.at(-1);
+    const switchedFrom = previous && previous.engine !== cto.engine ? previous.engine : null;
     let contextSummary: string | undefined;
-    if (!resume && hadEarlierTurn) {
-      const recent = store.listMessages({ channel: "cto", limit: 20 }).map((m) => formatMessage(m, nameOf, taskShort));
-      contextSummary = buildResetSummary(store.currentApprovedDoc(), recent);
+    const summaryParts: string[] = [];
+    if (!resume && earlier.length > 0) {
+      const batchIds = new Set(batch.map((m) => m.id));
+      const recent = store.listMessages({ channel: "cto", limit: 20 }).filter((m) => !batchIds.has(m.id)).map((m) => formatMessage(m, nameOf, taskShort));
+      summaryParts.push(buildResetSummary(store.currentApprovedDoc(), recent, switchedFrom ? `## Context (this engine has no earlier session of yours)` : undefined));
     }
+    if (switchedFrom) {
+      const lastHere = earlier.filter((r) => r.engine === cto.engine).at(-1);
+      let since: string[] | null = null;
+      if (lastHere) {
+        const after = lastHere.endedAt ?? lastHere.createdAt;
+        const inBatch = new Set(batch.map((m) => m.id));
+        since = store
+          .listMessages({ channel: "cto", limit: 200 })
+          .filter((m) => m.createdAt >= after && !inBatch.has(m.id))
+          .slice(-40)
+          .map((m) => formatMessage(m, nameOf, taskShort));
+      }
+      summaryParts.push(buildEngineSwitchNotice({ engine: cto.engine, previousEngine: switchedFrom, since }));
+    }
+    if (summaryParts.length > 0) contextSummary = summaryParts.join("\n\n");
     const prompt = buildCtoPrompt({
       digest: buildStateDigest(store),
       messages: batch.map((m) => formatMessage(m, nameOf, taskShort)),
@@ -141,13 +171,14 @@ export class CtoDriver {
         if (a.stop?.kind === "shutdown") store.requeueDeliveries(a.agent.id, a.run.id);
         return;
       case "quota_wait":
-        rt.setQuota(a.agent.engine, outcome.retryAfter);
+        rt.setQuota(a.agent.engine, outcome.retryAfter); // a.agent carries the engine this turn actually ran on
         store.requeueDeliveries(a.agent.id, a.run.id);
+        noteQuotaHit(rt, rt.ctoAgent(), "cto", a.agent.engine, null);
         return;
       default: {
         store.requeueDeliveries(a.agent.id, a.run.id);
         if (a.resumeSessionId && looksLikeSessionLoss(`${outcome.error ?? ""} ${outcome.errorDetail ?? ""}`)) {
-          store.clearAgentSession(a.agent.id);
+          store.clearAgentSession(a.agent.id, a.agent.engine);
           store.recordEvent("cto.session_reset", "agent", a.agent.id, { kind: "system" }, { lostSession: a.resumeSessionId, reason: outcome.error });
           return; // the next turn starts fresh with a context summary and the same messages
         }

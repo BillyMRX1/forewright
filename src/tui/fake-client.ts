@@ -1,8 +1,8 @@
 // In-memory ClientApi for view tests. Records every call so tests can assert on them.
 
 import type { ClientApi, ConnectionState, Subscription } from "./client.js";
-import type { MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
-import type { Agent, Decision, ForewrightEvent, Message, RequirementDoc, Run, Task, Verification } from "../core/store-types.js";
+import type { EngineUse, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
+import type { Agent, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { TASK_STATES, type TaskState } from "../core/types.js";
 
@@ -189,6 +189,12 @@ export class FakeClient implements ClientApi {
   readonly drafts = new Map<string, string>();
   readonly data = baseData();
   paused = false;
+  /** Fallback lists returned by state.settings and changed by settings.set. */
+  fallback: { cto: FallbackEntry[]; workers: FallbackEntry[] } = { cto: [], workers: [] };
+  /** Problems reported per fallback entry engine (a missing key means the entry is ready). */
+  fallbackProblems: Record<string, string> = {};
+  /** Engine actually in use per agent id, as the service reports it in state.team. */
+  engineUse: Record<string, EngineUse> = {};
   /** When false, the latest PRD revision is already approved (nothing to approve). */
   proposedPrd = true;
   /** When true, the runtime reports no active runs. */
@@ -262,7 +268,7 @@ export class FakeClient implements ClientApi {
           };
         }
         case "state.team":
-          return { agents: d.agents.map((a) => ({ ...a, currentTaskShortId: a.currentTaskId ? "T-2" : null })) };
+          return { agents: d.agents.map((a) => ({ ...a, currentTaskShortId: a.currentTaskId ? "T-2" : null, ...(this.engineUse[a.id] ? { engineUse: this.engineUse[a.id]! } : {}) })) };
         case "state.messages": {
           const ch = p["channel"];
           if (ch === "cto") return { messages: d.messages };
@@ -284,7 +290,16 @@ export class FakeClient implements ClientApi {
         case "evidence.diff":
           return { base: "1111111aaaa", head: "2222222bbbb", diff: "@@ -1 +1 @@\n-old line\n+new line", truncated: false };
         case "state.settings":
-          return { settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY } }, providers: d.providers, ctoEngine: "claude", ctoModel: null };
+          return {
+            settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: this.fallback },
+            providers: d.providers,
+            ctoEngine: "claude",
+            ctoModel: null,
+            fallbackStatus: {
+              cto: this.fallback.cto.map((e) => ({ engine: e.engine, model: e.model ?? null, problem: this.fallbackProblems[e.engine] ?? null })),
+              workers: this.fallback.workers.map((e) => ({ engine: e.engine, model: e.model ?? null, problem: this.fallbackProblems[e.engine] ?? null })),
+            },
+          };
         case "runs.log":
           return { lines: this.logLines, path: "/tmp/run.log" };
         case "drafts.get":
@@ -306,7 +321,10 @@ export class FakeClient implements ClientApi {
         case "tasks.reassign":
           return { task: d.tasks[0] };
         case "settings.set":
-          return { settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY } } };
+          if (p["key"] === "fallback.cto" || p["key"] === "fallback.workers") {
+            this.fallback = { ...this.fallback, [String(p["key"]).slice("fallback.".length)]: p["value"] as FallbackEntry[] };
+          }
+          return { settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: this.fallback } };
         case "agents.update":
           return { agent: d.agents[0] };
         default:

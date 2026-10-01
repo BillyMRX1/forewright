@@ -202,7 +202,21 @@ export interface Limits {
   maxMessagesPerThreadPerHour: number;
 }
 
-export type Settings = Limits & { authority: Authority };
+/** One step of the user-ordered fallback list: an engine and an optional model of that engine. */
+export interface FallbackEntry {
+  engine: EngineId;
+  model?: string;
+}
+
+/** Engines Billy chose to use, in order, when an agent's own engine hits a usage limit. Empty = no fallback. */
+export interface FallbackSettings {
+  cto: FallbackEntry[];
+  workers: FallbackEntry[];
+}
+
+export const FALLBACK_KEYS = ["fallback.cto", "fallback.workers"] as const;
+
+export type Settings = Limits & { authority: Authority; fallback: FallbackSettings };
 
 export const DEFAULT_LIMITS: Limits = {
   maxConcurrentWorkers: 2,

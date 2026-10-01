@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_TOAST_MS, MAX_TOASTS, currentToast, enqueueToast, removeToast, type Toast, type ToastKind } from "./toasts.js";
+import { DEFAULT_TOAST_MS, MAX_TOASTS, currentToast, engineNoticeText, enqueueToast, removeToast, type Toast, type ToastKind } from "./toasts.js";
 
 const t = (id: number, kind: ToastKind): Toast => ({ id, kind, text: `t${id}`, target: null });
 
@@ -32,5 +32,21 @@ describe("toast policy", () => {
     assert.equal(q.length, MAX_TOASTS);
     assert.ok(q.some((x) => x.id === 0), "the needs-you toast must survive");
     assert.deepEqual(q.map((x) => x.id), [0, 6, 7, 8, 9, 10, 11, 12]);
+  });
+});
+
+describe("engine fallback notices", () => {
+  const re = /\d{1,2}:\d{2} (AM|PM)/;
+  it("says which engine took over and until when", () => {
+    const text = engineNoticeText("engine.fallback", { from: "claude", to: "codex", until: "2026-01-01T15:00:00.000Z" }, "CTO");
+    assert.match(text, /^Claude usage limit reached\. CTO now on Codex until /);
+    assert.match(text, re);
+  });
+  it("says when the CTO is back", () => {
+    assert.equal(engineNoticeText("engine.restored", { engine: "claude" }, "CTO"), "CTO is back on Claude.");
+  });
+  it("says who waits when nothing can take over, and copes with an unknown reset time", () => {
+    assert.match(engineNoticeText("engine.waiting", { engine: "codex", until: "2026-01-01T15:00:00.000Z" }, "T-3"), /^Codex usage limit reached\. T-3 waits until \d{1,2}:\d{2} (AM|PM)\.$/);
+    assert.equal(engineNoticeText("engine.waiting", { engine: "codex", until: null }, "CTO"), "Codex usage limit reached. CTO waits until the limit resets.");
   });
 });

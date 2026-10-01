@@ -56,6 +56,8 @@ export interface WorkerPromptInput {
   requirements: Array<{ key: string; text: string }>;
   prdRevision: number | null;
   handoff: string | null;
+  /** Set when this run continues an attempt that ran on another engine. */
+  engineHandoff?: string;
   feedback: string[];
   messages: string[];
   instructions: string;
@@ -93,6 +95,7 @@ export function buildWorkerPrompt(i: WorkerPromptInput): string {
     sections.push(`## Requirements this task serves (approved PRD revision ${i.prdRevision ?? "?"})\n${i.requirements.map((r) => `- ${r.key}: ${r.text}`).join("\n")}`);
   }
   if (i.handoff) sections.push(`## Handoff note\n${truncate(i.handoff, 4000)}`);
+  if (i.engineHandoff) sections.push(i.engineHandoff);
   if (i.feedback.length > 0) sections.push(`## Feedback from earlier attempts (fix these first)\n${i.feedback.join("\n")}`);
   if (i.messages.length > 0) sections.push(`## New messages\n${i.messages.join("\n")}`);
   if (i.instructions) sections.push(i.instructions);
@@ -195,12 +198,36 @@ export function buildCtoPrompt(input: {
 }
 
 /** Context for a CTO turn that could not resume its provider session. */
-export function buildResetSummary(doc: RequirementDoc | null, recentCtoMessages: string[]): string {
+export function buildResetSummary(doc: RequirementDoc | null, recentCtoMessages: string[], heading = "## Context (your previous session could not be resumed)"): string {
   return [
-    "## Context (your previous session could not be resumed)",
+    heading,
     doc ? `Approved PRD summary: revision ${doc.revision}, ${doc.title}.` : "No approved PRD yet.",
     recentCtoMessages.length > 0 ? `Last messages in the CTO channel:\n${recentCtoMessages.join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Catch-up for a CTO turn that runs on a different engine than the previous turn
+ * (a usage limit moved it, or its own engine came back). `since` is what happened
+ * after the last turn on this engine, or null when this engine has not run the CTO yet.
+ */
+export function buildEngineSwitchNotice(input: { engine: EngineId; previousEngine: EngineId; since: string[] | null }): string {
+  const head =
+    input.since === null
+      ? `## Engine switch\nThis is your first turn on ${input.engine}. Your previous turn ran on ${input.previousEngine} because of a usage limit. The context summary above covers what happened before.`
+      : `## Engine switch\nSince your last turn on ${input.engine}, the CTO ran on ${input.previousEngine} because of a usage limit. These are the messages and decisions since then:`;
+  if (input.since === null) return head;
+  return `${head}\n${input.since.length > 0 ? input.since.join("\n") : "(nothing new in the CTO channel)"}`;
+}
+
+/** A work run that continues what another engine started on the same task (usage limit switch or switch back). */
+export function buildEngineHandoff(input: { engine: EngineId; previousEngine: EngineId; previousReport: string | null; diffStat: string }): string {
+  return [
+    `## Continuing earlier work (engine switch)`,
+    `An earlier attempt on this task ran on ${input.previousEngine} and stopped (usage limit). You are now running on ${input.engine}. Continue from the current state of the files in this workspace; do not start over.`,
+    input.previousReport ? `What the previous attempt last reported:\n${truncate(input.previousReport, 4000)}` : "The previous attempt did not report anything before it stopped.",
+    `Changes in the workspace so far (git diff --stat):\n${input.diffStat.trim() === "" ? "(no changes yet)" : truncate(input.diffStat, 3000)}`,
+  ].join("\n");
 }

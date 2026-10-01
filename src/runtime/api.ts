@@ -16,6 +16,7 @@ import type { ProviderStatus, TaskDetail } from "./protocol.js";
 import { PROTOCOL_VERSION } from "./protocol.js";
 import type { Connection } from "./server.js";
 import { engineRoleProblem } from "./engine-roles.js";
+import { fallbackStatus } from "./fallback.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 
 type P = Record<string, unknown>;
@@ -104,7 +105,10 @@ export class ClientApi {
       "state.runtime": async (p) => (await this.rt(p)).status(),
       "state.tasks": async (p) => ({ board: (await this.rt(p)).store.taskBoard() }),
       "state.task": async (p) => this.taskDetail(await this.rt(p), reqStr(p, "taskId", 200)),
-      "state.team": async (p) => ({ agents: (await this.rt(p)).store.teamView() }),
+      "state.team": async (p) => {
+        const rt = await this.rt(p);
+        return { agents: rt.store.teamView().map((a) => (a.retiredAt ? a : { ...a, engineUse: rt.engineUse(a) })) };
+      },
       "state.inbox": async (p) => (await this.rt(p)).store.inbox(),
       "state.messages": async (p) => {
         const rt = await this.rt(p);
@@ -142,7 +146,14 @@ export class ClientApi {
       "state.settings": async (p) => {
         const rt = await this.rt(p);
         const cto = rt.ctoAgent();
-        return { settings: rt.store.getSettings(), providers: await this.providerStatuses(rt, false), ctoEngine: cto.engine, ctoModel: cto.model };
+        const settings = rt.store.getSettings();
+        return {
+          settings,
+          providers: await this.providerStatuses(rt, false),
+          ctoEngine: cto.engine,
+          ctoModel: cto.model,
+          fallbackStatus: { cto: fallbackStatus(rt, "cto", settings.fallback.cto), workers: fallbackStatus(rt, "workers", settings.fallback.workers) },
+        };
       },
       "state.events": async (p) => {
         const rt = await this.rt(p);

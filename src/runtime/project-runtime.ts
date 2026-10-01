@@ -13,10 +13,11 @@ import { redactSecrets } from "../core/safety.js";
 import { type Agent, type Decision, type Run, type Task, Store } from "../core/store.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { EventBus } from "./bus.js";
+import { purposeFor, resolveFor } from "./fallback.js";
 import { CtoDriver } from "./cto.js";
 import { git, gitLine, gitTry, isGitRepo, revParse } from "./git.js";
 import type { ProviderHealthCache } from "./health.js";
-import type { RuntimeStatus } from "./protocol.js";
+import type { EngineUse, RuntimeStatus } from "./protocol.js";
 import { reconcileOnOpen } from "./recovery.js";
 import { type ActiveRun, type StopKind } from "./runs.js";
 import { Scheduler } from "./scheduler.js";
@@ -207,11 +208,21 @@ export class ProjectRuntime {
     for (const t of this.store.listTasks({ states: ["planned", "ready"] })) {
       if (t.blockReason !== "quota") continue;
       const assignee = t.assigneeAgentId ? this.store.getAgent(t.assigneeAgentId) : null;
-      if (!assignee || !this.quotaActive(assignee.engine)) this.store.clearBlocked(t.id);
+      // A fallback engine that can take over also ends the wait, not only the primary's reset.
+      if (!assignee || !resolveFor(this, assignee, "work").wait) this.store.clearBlocked(t.id);
     }
     for (const a of this.store.listAgents()) {
-      if (a.lifecycle === "waiting" && !this.quotaActive(a.engine) && !this.activeForAgent(a.id)) this.store.releaseAgent(a.id);
+      if (a.lifecycle === "waiting" && !resolveFor(this, a, purposeFor(a)).wait && !this.activeForAgent(a.id)) this.store.releaseAgent(a.id);
     }
+  }
+
+  /** The engine an agent runs on now, or would run on next. Shown in Team and the sidebar. */
+  engineUse(agent: Agent): EngineUse {
+    const active = this.activeForAgent(agent.id);
+    if (active) return { engine: active.run.engine, model: active.run.model, viaFallback: active.run.engine !== agent.engine, waitUntil: null };
+    const res = resolveFor(this, agent, purposeFor(agent));
+    if (res.wait) return { engine: agent.engine, model: agent.model, viaFallback: false, waitUntil: res.until };
+    return { engine: res.engine, model: res.model, viaFallback: res.viaFallback, waitUntil: null };
   }
 
   // ------------------------------------------------------------ controls

@@ -134,7 +134,17 @@ export function TeamView() {
     );
   }
 
-  const cols = COLUMNS.filter((c) => w >= c.from);
+  // The engine column shows the engine actually in use: marked "fallback" while a usage limit moved the agent,
+  // and "waiting" while its engine waits for a reset and nothing can take over.
+  const engineText = (a: (typeof agents)[number]): string => {
+    const use = a.engineUse;
+    if (!use) return a.engine;
+    if (use.viaFallback) return `${use.engine} fallback`;
+    if (use.waitUntil) return `${use.engine} waiting`;
+    return use.engine;
+  };
+  const engineW = Math.max(COLUMNS[2]!.width, ...agents.map((a) => engineText(a).length));
+  const cols = COLUMNS.map((c) => (c.title === "Engine" ? { ...c, width: engineW } : c)).filter((c) => w >= c.from + (c.title === "Engine" ? 0 : engineW - COLUMNS[2]!.width));
   const used = cols.reduce((n, c) => n + c.width + 1, 2);
   const lastW = w - used;
   const cell = (a: (typeof agents)[number], c: Col): Seg => {
@@ -147,7 +157,7 @@ export function TeamView() {
         return { text: fit(`${pillGlyph(st)} ${STATUS_LABEL[st]}`, c.width + 1), color: statusColor(st) };
       }
       case "Engine":
-        return { text: fit(a.engine, c.width + 1), dim: true };
+        return { text: fit(engineText(a), c.width + 1), ...(a.engineUse?.viaFallback ? { color: palette.attention } : { dim: true }) };
       case "Role":
         return { text: fit(clip(oneLine(a.role), c.width), c.width + 1), dim: true };
       case "Model":

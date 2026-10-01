@@ -211,6 +211,23 @@ describe("reconnecting", () => {
     assert.ok(api.callsTo("state.tasks").length > before);
     assert.match(lines(h)[0]!, /connected/);
   });
+
+  it("engine events raise fallback, restored and waiting notices", async () => {
+    const { h, api } = await mount({ cols: 140, rows: 30, view: VIEW.overview, toastMs: { info: 300 } });
+    api.emitEvent("engine.fallback", "agent", "a1", { agentId: "a1", role: "cto", from: "claude", to: "codex", until: "2026-10-01T15:00:00.000Z" });
+    await h.settle(100);
+    assert.match(h.frame(), /Claude usage limit reached\. CTO now on/);
+    assert.match(h.frame(), /Codex until \d{1,2}:\d{2} (AM|PM)\./);
+    await h.settle(500);
+    api.emitEvent("engine.restored", "agent", "a1", { agentId: "a1", role: "cto", engine: "claude" });
+    await h.settle(100);
+    assert.match(h.frame(), /CTO is back on Claude\./);
+    await h.settle(500);
+    api.emitEvent("engine.waiting", "agent", "a2", { agentId: "a2", role: "work", engine: "codex", until: "2026-10-01T15:00:00.000Z", taskId: "t2" });
+    await h.settle(200);
+    assert.match(h.frame(), /Codex usage limit reached\. T-2 waits/);
+    assert.match(h.frame(), /\d{1,2}:\d{2} (AM|PM)\./);
+  });
 });
 
 void [down, up];

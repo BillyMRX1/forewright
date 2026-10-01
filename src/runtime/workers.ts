@@ -1,17 +1,19 @@
 // Work runs: dispatch a ready task to its assignee in an isolated worktree,
 // then verify and submit the result after the provider finishes.
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
-import type { Agent, Message, Task } from "../core/store.js";
+import type { Agent, Message, Run, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { describeCheck, runCheck } from "./checks.js";
-import { GitError, WorkspaceError } from "./errors.js";
-import { git, isDirty, revParse } from "./git.js";
-import { buildWorkerPrompt, formatMessage, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
+import { GitError, ProviderUnavailableError, WorkspaceError } from "./errors.js";
+import { git, gitTry, isDirty, revParse } from "./git.js";
+import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
+import { buildEngineHandoff, buildWorkerPrompt, formatMessage, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
 import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
+import { INTEGRATION_BRANCH } from "./workspace.js";
 import { type ActiveRun, adapterFor, launchRun } from "./runs.js";
 
 export const taskPort = (shortId: string): number => 41000 + Number(shortId.slice(2)) * 10;
@@ -56,9 +58,10 @@ export function dispatchWork(rt: ProjectRuntime): void {
     if (t.blockReason !== null || t.assigneeAgentId === null) continue;
     const agent = store.getAgent(t.assigneeAgentId);
     if (agent.retiredAt || agent.lifecycle === "paused" || rt.activeForAgent(agent.id)) continue;
-    if (rt.quotaActive(agent.engine)) continue;
+    const res = resolveFor(rt, agent, "work");
+    if (res.wait) continue;
     try {
-      startWork(rt, t, agent);
+      startWork(rt, t, agent, res);
     } catch (err) {
       if (err instanceof LeaseConflictError) continue; // another scheduler won the claim
       if (err instanceof WorkspaceError || err instanceof GitError) {
@@ -71,14 +74,39 @@ export function dispatchWork(rt: ProjectRuntime): void {
   }
 }
 
-export function startWork(rt: ProjectRuntime, task: Task, agent: Agent): void {
+/** What a stopped run last said: its final text, or else the last assistant text in its log. */
+function lastReport(rt: ProjectRuntime, run: Run): string | null {
+  if (run.finalText && run.finalText.trim() !== "") return run.finalText;
+  const file = path.join(logsDir(rt.projectId), `${run.id}.jsonl`);
+  if (!existsSync(file)) return null;
+  const lines = readFileSync(file, "utf8").split("\n").filter((l) => l !== "");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const e = JSON.parse(lines[i]!) as { kind?: string; text?: string };
+      if (e.kind === "assistant_text" && e.text && e.text.trim() !== "") return e.text;
+    } catch {
+      // a partial last line of a killed run is not a report
+    }
+  }
+  return null;
+}
+
+export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolution?: Extract<Resolution, { wait: false }>): void {
   const { store } = rt;
+  let res = resolution;
+  if (!res) {
+    const r = resolveFor(rt, primary, "work");
+    if (r.wait) throw new ProviderUnavailableError(`${primary.name}'s engine (${primary.engine}) is waiting for a usage limit to reset and no fallback engine can take over.`, { engine: primary.engine });
+    res = r;
+  }
+  const agent = asRunning(primary, res); // the agent as it runs now: the engine and model actually chosen
   adapterFor(rt, agent); // fail before claiming when the engine is unusable
   const ws = rt.workspace.ensureTaskWorkspace(task);
   const generation = store.claimTask(task.id, rt.ownerId, LEASE_MS);
   try {
     store.setTaskWorkspace(task.id, generation, ws);
     const current = store.getTask(task.id);
+    noteEngineChoice(rt, primary, "work", res);
     const run = store.createRun({ taskId: task.id, agentId: agent.id, generation, kind: "work", engine: agent.engine, ...(agent.model ? { model: agent.model } : {}), cwd: ws.worktreePath });
 
     const doc = store.currentApprovedDoc();
@@ -93,6 +121,28 @@ export function startWork(rt: ProjectRuntime, task: Task, agent: Agent): void {
     const messages = pending.filter((m) => !m.dedupeKey?.startsWith("handoff:") && !m.dedupeKey?.startsWith("feedback:"));
     if (pending.length > 0) store.markDelivered(pending.map((m) => m.id), agent.id, run.id);
 
+    // The previous work attempt on this task. A different engine means a switch (usage limit, or the primary is back):
+    // the new engine gets what the last attempt reported and the current state of the files.
+    const lastAttempt = store.listRuns({ taskId: task.id }).filter((r) => r.kind === "work" && r.id !== run.id && r.state !== "queued").at(-1);
+    let engineHandoff: string | undefined;
+    if (lastAttempt && lastAttempt.engine !== agent.engine) {
+      engineHandoff = buildEngineHandoff({
+        engine: agent.engine,
+        previousEngine: lastAttempt.engine,
+        previousReport: lastReport(rt, lastAttempt),
+        diffStat: [
+          gitTry(ws.worktreePath, ["diff", "--stat", "HEAD"]).stdout,
+          gitTry(ws.worktreePath, ["diff", "--stat", `${INTEGRATION_BRANCH}...HEAD`]).stdout,
+          (() => {
+            const fresh = gitTry(ws.worktreePath, ["ls-files", "--others", "--exclude-standard"]).stdout.trim();
+            return fresh === "" ? "" : `New files not yet tracked:\n${fresh}`;
+          })(),
+        ]
+          .filter((x) => x.trim() !== "")
+          .join("\n"),
+      });
+    }
+
     const cto = rt.ctoAgent();
     const prompt = buildWorkerPrompt({
       agent,
@@ -102,6 +152,7 @@ export function startWork(rt: ProjectRuntime, task: Task, agent: Agent): void {
       requirements,
       prdRevision: doc?.revision ?? null,
       handoff,
+      ...(engineHandoff ? { engineHandoff } : {}),
       feedback: [...shownFeedback.values()].map((m) => `- ${truncate(m.body, 3000)}`),
       messages: messages.map((m) => formatMessage(m, nameOf, taskShort)),
       instructions: readInstructionFiles([rt.root, ws.worktreePath], agent.engine),
@@ -109,8 +160,8 @@ export function startWork(rt: ProjectRuntime, task: Task, agent: Agent): void {
 
     const tmp = path.join(ws.worktreePath, ".forewright-tmp");
     mkdirSync(tmp, { recursive: true });
-    const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId).at(-1);
-    const canResume = adapterFor(rt, agent).capabilities.resume && prior !== undefined && prior.engine === agent.engine && !(prior.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
+    const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId && r.engine === agent.engine).at(-1); // never another engine's session
+    const canResume = adapterFor(rt, agent).capabilities.resume && prior !== undefined && !(prior.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
     launchRun(rt, {
       run,
       agent,
@@ -175,9 +226,18 @@ async function handleWorkOutcome(rt: ProjectRuntime, a: ActiveRun, outcome: RunO
       if (a.stop?.kind === "stop_run") store.setBlocked(taskId, "human_input", "Stopped by Billy");
       return;
     case "quota_wait": {
+      // a.agent carries the engine this run actually used, so the wait lands on that engine.
       rt.setQuota(a.agent.engine, outcome.retryAfter);
+      const owner = store.getAgent(a.agent.id);
+      if (!resolveFor(rt, owner, "work").wait) {
+        // Another engine can take over (a fallback, or the primary is back): the task goes straight back
+        // to ready, no retry is counted, and the next dispatch continues the work there.
+        store.clearBlocked(taskId);
+        return;
+      }
       store.setBlocked(taskId, "quota", `The ${a.agent.engine} usage limit was reached; will try again after ${outcome.retryAfter ?? "an unknown time"}`);
       store.updateAgent(a.agent.id, { lifecycle: "waiting" }, { kind: "system" });
+      noteQuotaHit(rt, owner, "work", a.agent.engine, taskId);
       return;
     }
     default:

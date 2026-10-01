@@ -474,6 +474,66 @@ describe("Settings", () => {
   });
 });
 
+describe("Fallback", () => {
+  const toFallback = async (h: Parameters<typeof down>[0], list: 0 | 1) => {
+    const first = 2 + Object.keys(DEFAULT_AUTHORITY).length + Object.keys(DEFAULT_LIMITS).length;
+    for (let i = 0; i < first + list + 1; i++) await down(h);
+  };
+  it("Settings shows the two lists, empty by default", async () => {
+    const { h } = await mount({ cols: 200, rows: 80, view: VIEW.settings });
+    assert.match(h.frame(), /Fallback when a usage limit is reached/);
+    assert.match(h.frame(), /CTO fallback order: none \(waits for the reset\)/);
+  });
+
+  it("adds, reorders, changes and removes entries, saving the whole array each time", async () => {
+    const { h, api } = await mount({ cols: 200, rows: 80, view: VIEW.settings });
+    await toFallback(h, 0);
+    await enter(h);
+    assert.match(hints(h), /add/);
+    await h.send("a");
+    await h.send("a");
+    await h.settle(100);
+    const saves = () => api.callsTo("settings.set").map((c) => c.params as { key: string; value: unknown });
+    assert.deepEqual(saves().at(-1), { projectId: "p1", key: "fallback.cto", value: [{ engine: "claude" }, { engine: "codex" }] });
+    await h.send("]");
+    await h.settle(50);
+    await h.send("[");
+    await h.settle(50);
+    await h.send("[");
+    await h.settle(100);
+    assert.deepEqual(saves().at(-1)!.value, [{ engine: "codex" }, { engine: "claude" }]);
+    await h.send("x");
+    await h.settle(100);
+    assert.deepEqual(saves().at(-1)!.value, [{ engine: "claude" }]);
+    await h.send("m");
+    await h.settle(100);
+    assert.deepEqual(saves().at(-1)!.value, [{ engine: "claude", model: "sonnet" }]);
+    await esc(h);
+    assert.doesNotMatch(hints(h), /add/);
+  });
+
+  it("shows entries that cannot fill the role and why", async () => {
+    const api = new FakeClient();
+    api.fallback = { cto: [{ engine: "codex" }], workers: [] };
+    api.fallbackProblems = { codex: "codex cannot be the CTO" };
+    const { h } = await mount({ cols: 200, rows: 80, view: VIEW.settings, api });
+    await toFallback(h, 0);
+    await enter(h);
+    assert.match(h.frame(), /1\. codex .*cannot fill the role: codex cannot be the CTO/);
+  });
+
+  it("Team marks an agent running on a fallback engine and one that is waiting", async () => {
+    const api = new FakeClient();
+    api.engineUse = {
+      a2: { engine: "claude", model: null, viaFallback: true, waitUntil: null },
+      a3: { engine: "claude", model: null, viaFallback: false, waitUntil: "2026-10-01T15:00:00.000Z" },
+    };
+    const { h } = await mount({ cols: 160, rows: 40, view: VIEW.team, api });
+    assert.match(h.frame(), /Bo\s+● working\s+claude fallback/);
+    assert.match(h.frame(), /Cy\s+○ idle\s+claude waiting/);
+  });
+});
+
 describe("drafts and view state", () => {
   it("keeps the CTO draft across view switches and saves it to the service", async () => {
     const { h, api } = await mount();

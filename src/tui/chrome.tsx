@@ -77,9 +77,13 @@ function badgeColor(view: number): string {
 }
 
 function agentStatusText(a: AgentAttention, ctoBusy: boolean): string {
-  if (a.agent.role === "cto" && (a.status === "working" || ctoBusy) && a.status !== "needs_you") return "thinking";
-  if (a.status === "working") return a.taskShortId ?? STATUS_LABEL.working;
-  return STATUS_LABEL[a.status];
+  if (a.agent.role === "cto" && (a.status === "working" || ctoBusy) && a.status !== "needs_you") {
+    const use = a.agent.engineUse;
+    return use?.viaFallback ? `thinking ${sym().bullet} ${use.engine}` : "thinking";
+  }
+  const base = a.status === "working" ? (a.taskShortId ?? STATUS_LABEL.working) : STATUS_LABEL[a.status];
+  const use = a.agent.engineUse;
+  return use?.viaFallback ? `${base} ${sym().bullet} ${use.engine}` : base;
 }
 
 /** Left column: the views, then the agents sorted by how urgently they need you. */

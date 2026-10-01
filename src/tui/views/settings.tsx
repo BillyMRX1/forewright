@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Box } from "ink";
 import { InputBox, PaneHeader, SafeText, ScrollLines, type DLine, type Seg } from "../components.js";
 import { useCtx, useHintScope, useKeys, useLoad } from "../context.js";
 import { abbreviatePath, oneLine, wrapText } from "../format.js";
-import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../../core/store-types.js";
+import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, type FallbackEntry } from "../../core/store-types.js";
 import type { ProviderStatus } from "../../runtime/protocol.js";
-import type { EngineId } from "../../core/types.js";
+import { LIVE_ENGINES, type EngineId } from "../../core/types.js";
 import { palette, sym } from "../theme.js";
 
 export const LOCAL_NOTICE = "Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex) by their CLIs.";
@@ -14,11 +14,17 @@ type Item =
   | { kind: "cto-engine" }
   | { kind: "cto-model" }
   | { kind: "authority"; name: keyof typeof DEFAULT_AUTHORITY }
-  | { kind: "limit"; name: keyof typeof DEFAULT_LIMITS };
+  | { kind: "limit"; name: keyof typeof DEFAULT_LIMITS }
+  | { kind: "fallback"; list: FallbackList };
+
+type FallbackList = "cto" | "workers";
+const FALLBACK_LISTS: FallbackList[] = ["cto", "workers"];
+const FALLBACK_TITLE: Record<FallbackList, string> = { cto: "CTO", workers: "Workers (work and review runs)" };
 
 const AUTH_NAMES = Object.keys(DEFAULT_AUTHORITY) as Array<keyof typeof DEFAULT_AUTHORITY>;
 const LIMIT_NAMES = Object.keys(DEFAULT_LIMITS) as Array<keyof typeof DEFAULT_LIMITS>;
-const ITEMS: Item[] = [{ kind: "cto-engine" }, { kind: "cto-model" }, ...AUTH_NAMES.map((name) => ({ kind: "authority" as const, name })), ...LIMIT_NAMES.map((name) => ({ kind: "limit" as const, name }))];
+const ITEMS: Item[] = [{ kind: "cto-engine" }, { kind: "cto-model" }, ...AUTH_NAMES.map((name) => ({ kind: "authority" as const, name })), ...LIMIT_NAMES.map((name) => ({ kind: "limit" as const, name })), ...FALLBACK_LISTS.map((list) => ({ kind: "fallback" as const, list }))];
+const FALLBACK_START = 2 + AUTH_NAMES.length + LIMIT_NAMES.length;
 const MODES = ["ask", "auto", "deny"] as const;
 
 const NOT_SUPPORTED = "Not supported";
@@ -80,6 +86,11 @@ export function providerLines(p: ProviderStatus, width: number): DLine[] {
   return lines;
 }
 
+/** "codex, copilot" in order, or what an empty list means. */
+export function fallbackWords(list: FallbackEntry[]): string {
+  return list.length === 0 ? "none (waits for the reset)" : list.map((e, i) => `${i + 1}. ${e.engine}${e.model ? ` (${e.model})` : ""}`).join("  ");
+}
+
 export function SettingsView() {
   const ctx = useCtx();
   const { api, projectId } = ctx;
@@ -91,16 +102,26 @@ export function SettingsView() {
   const [sel, setSel] = useState(-1);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
+  /** The fallback lists as shown. Edits apply here at once and are saved with settings.set. */
+  const [fb, setFb] = useState<Record<FallbackList, FallbackEntry[]>>({ cto: [], workers: [] });
+  /** The list being edited, and the entry chosen in it. */
+  const [fbEdit, setFbEdit] = useState<FallbackList | null>(null);
+  const [fbIdx, setFbIdx] = useState(0);
+  const fromServer = data.data?.settings.fallback;
+  useEffect(() => {
+    if (fromServer) setFb({ cto: fromServer.cto, workers: fromServer.workers });
+  }, [fromServer]);
   const cto = (team.data?.agents ?? []).find((a) => a.role === "cto") ?? null;
   const providers = data.data?.providers ?? [];
   const cycle = <T,>(list: T[], v: T, dir: 1 | -1 = 1): T => list[(Math.max(0, list.indexOf(v)) + dir + list.length) % list.length]!;
-  useHintScope(editing ? "settings.edit" : "settings");
+  useHintScope(editing ? "settings.edit" : fbEdit ? "settings.fallback" : "settings");
 
   const value = (it: Item): string | number | boolean => {
     const s = data.data!.settings;
     if (it.kind === "cto-engine") return data.data!.ctoEngine;
     if (it.kind === "cto-model") return data.data!.ctoModel ?? "(engine default)";
     if (it.kind === "authority") return s.authority[it.name];
+    if (it.kind === "fallback") return fallbackWords(fb[it.list]);
     return s[it.name];
   };
   const set = (key: string, v: unknown) =>
@@ -108,6 +129,68 @@ export function SettingsView() {
       ctx.notify("Setting saved.");
       data.reload();
     }, ctx.fail);
+
+  /** Saves a whole list; a rejected change is reported and the list is read again from the service. */
+  const saveFallback = (list: FallbackList, next: FallbackEntry[]) => {
+    setFb((cur) => ({ ...cur, [list]: next }));
+    api.call("settings.set", { projectId, key: `fallback.${list}`, value: next }).then(
+      () => data.reload(),
+      (err: unknown) => {
+        ctx.fail(err);
+        data.reload();
+      },
+    );
+  };
+  const engineChoices = (): EngineId[] => {
+    const known = providers.map((p) => p.health.engine);
+    return LIVE_ENGINES.filter((e) => known.length === 0 || known.includes(e));
+  };
+  const modelsOf = (e: EngineId): Array<string | null> => [null, ...(providers.find((p) => p.health.engine === e)?.health.models ?? [])];
+
+  /** Keys while a fallback list is open: choose, change engine, add, remove, reorder, pick a model. */
+  const fallbackKeys = (input: string, key: { upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; escape?: boolean; return?: boolean }) => {
+    const list = fbEdit!;
+    const entries = fb[list];
+    const i = Math.min(fbIdx, Math.max(0, entries.length - 1));
+    const used = new Set(entries.map((e) => e.engine));
+    if (key.escape || key.return) return setFbEdit(null);
+    if (key.upArrow) return setFbIdx(Math.max(0, i - 1));
+    if (key.downArrow) return setFbIdx(Math.min(entries.length - 1, i + 1));
+    if (input === "a") {
+      const next = engineChoices().find((e) => !used.has(e));
+      if (!next) return ctx.notify("Every engine is already in the list.");
+      saveFallback(list, [...entries, { engine: next }]);
+      return setFbIdx(entries.length);
+    }
+    const cur = entries[i];
+    if (!cur) return;
+    if (key.leftArrow || key.rightArrow) {
+      const free = engineChoices().filter((e) => e === cur.engine || !used.has(e));
+      const engine = cycle(free, cur.engine, key.leftArrow ? -1 : 1);
+      if (engine === cur.engine) return;
+      return saveFallback(list, entries.map((e, k) => (k === i ? { engine } : e))); // the model belonged to the old engine
+    }
+    if (input === "x") {
+      saveFallback(list, entries.filter((_, k) => k !== i));
+      return setFbIdx(Math.max(0, i - 1));
+    }
+    if (input === "[" && i > 0) {
+      const next = [...entries];
+      [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
+      saveFallback(list, next);
+      return setFbIdx(i - 1);
+    }
+    if (input === "]" && i < entries.length - 1) {
+      const next = [...entries];
+      [next[i + 1], next[i]] = [next[i]!, next[i + 1]!];
+      saveFallback(list, next);
+      return setFbIdx(i + 1);
+    }
+    if (input === "m") {
+      const model = cycle(modelsOf(cur.engine), cur.model ?? null, 1);
+      saveFallback(list, entries.map((e, k) => (k === i ? { engine: e.engine, ...(model ? { model } : {}) } : e)));
+    }
+  };
 
   /** Changes the chosen value one step in `dir`. Numbers open the editor instead. */
   const activate = (dir: 1 | -1, fromEnter: boolean) => {
@@ -128,6 +211,13 @@ export function SettingsView() {
           data.reload();
           team.reload();
         }, ctx.fail);
+      }
+      return;
+    }
+    if (it.kind === "fallback") {
+      if (fromEnter) {
+        setFbIdx(0);
+        setFbEdit(it.list);
       }
       return;
     }
@@ -153,6 +243,7 @@ export function SettingsView() {
 
   useKeys((input, key) => {
     if (editing) return;
+    if (fbEdit) return fallbackKeys(input, key);
     if (key.escape) return ctx.back();
     if (key.upArrow) setSel((i) => Math.max(-1, i - 1));
     else if (key.downArrow) setSel((i) => Math.min(ITEMS.length - 1, i + 1));
@@ -181,7 +272,12 @@ export function SettingsView() {
       lines.push({ text: "" });
       heading("Limits");
     }
-    const name = it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : LABELS[it.name]!;
+    if (i === FALLBACK_START) {
+      lines.push({ text: "" });
+      heading("Fallback when a usage limit is reached");
+      for (const l of wrapText("Off by default. When an agent's own engine hits its limit, the first usable engine in its list takes over, and the agent goes back to its own engine as soon as the limit resets. Only engines you list are ever used.", inner)) lines.push({ text: l, dim: true });
+    }
+    const name = it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} fallback order` : LABELS[it.name]!;
     const v = value(it);
     const shown = typeof v === "boolean" ? (v ? "on" : "off") : String(v);
     const on = i === sel;
@@ -193,6 +289,23 @@ export function SettingsView() {
       lines.push({ text, segs });
     }
   });
+  let fbLine = lines.length;
+  if (fbEdit) {
+    const status = data.data.fallbackStatus?.[fbEdit] ?? [];
+    const entries = fb[fbEdit];
+    const at = Math.min(fbIdx, Math.max(0, entries.length - 1));
+    lines.push({ text: "" });
+    heading(`Editing: ${FALLBACK_TITLE[fbEdit]} fallback order`);
+    if (entries.length === 0) lines.push({ text: "  Empty: this work waits for the reset. Press a to add an engine.", dim: true });
+    entries.forEach((e, k) => {
+      const problem = status[k]?.problem ?? null;
+      const text = `${k === at ? sym().pointer : " "} ${k + 1}. ${e.engine}${e.model ? ` (${e.model})` : " (engine default model)"}${problem ? `  cannot fill the role: ${problem}` : ""}`;
+      if (k === at) fbLine = lines.length;
+      if (k === at) lines.push(ctx.focus === "main" ? { text, bar: true } : { text, color: palette.accent, bold: true });
+      else lines.push(problem ? { text, color: palette.attention } : { text });
+    });
+    lines.push({ text: "  a add  x remove  [ ] move up or down  left/right change engine  m model  esc done", dim: true });
+  }
   lines.push({ text: "" });
   for (const l of wrapText(LOCAL_NOTICE, inner)) lines.push({ text: l, color: palette.attention });
 
@@ -200,7 +313,7 @@ export function SettingsView() {
   return (
     <Box flexDirection="column" height={h} width={w}>
       <PaneHeader title="Settings" context="engines, authority and limits" width={w} />
-      <ScrollLines lines={lines} height={bodyH} width={w} active={!editing} focusLine={selLine} />
+      <ScrollLines lines={lines} height={bodyH} width={w} active={!editing} focusLine={fbEdit ? fbLine : selLine} />
       {editing ? (
         <>
           <SafeText dimColor>{`New value for ${oneLine(String(ITEMS[sel]?.kind === "limit" || ITEMS[sel]?.kind === "authority" ? (ITEMS[sel] as { name: string }).name : ""))}`}</SafeText>
