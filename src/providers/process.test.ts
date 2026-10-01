@@ -31,7 +31,7 @@ setInterval(() => {}, 1000);
 async function spawnTree(ignoreTerm: boolean): Promise<{ p: Awaited<ReturnType<typeof spawnOwned>>; grandchild: number }> {
   const p = await spawnOwned(NODE, ["-e", TREE_SCRIPT(ignoreTerm)], { cwd: CWD, env: ENV, stdin: "ignore" });
   const grandchild = await new Promise<number>((resolve) => {
-    p.child.stdout?.once("data", (d: Buffer) => resolve(Number(d.toString().trim())));
+    p.stdout.once("data", (d: Buffer) => resolve(Number(d.toString().trim())));
   });
   return { p, grandchild };
 }
@@ -191,7 +191,7 @@ test("isOwnedAlive compares start time on Windows and has no group to compare", 
 test("spawnOwned writes stdin then closes it", async () => {
   const p = await spawnOwned(NODE, ["-e", 'process.stdin.pipe(process.stdout)'], { cwd: CWD, env: ENV, stdin: "hello\n" });
   let out = "";
-  p.child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+  p.stdout.on("data", (d: Buffer) => (out += d.toString()));
   const exit = await p.exited;
   assert.equal(exit.code, 0);
   assert.equal(out, "hello\n");
@@ -243,4 +243,22 @@ test("childEnv passes API keys only with allowApiBilling and reports them as sec
 test("childEnv throws when an extra tries to inject an API key without allowApiBilling", () => {
   assert.throws(() => childEnv(BASE, { OPENAI_API_KEY: "x" }, { allowApiBilling: false }), EnvPolicyError);
   assert.doesNotThrow(() => childEnv(BASE, { OPENAI_API_KEY: "x" }, { allowApiBilling: true }));
+});
+
+test("a child that prints and exits while the start-time read is slow still yields all its output (stdout, stderr, stdin echo)", async () => {
+  const script = 'let d = ""; process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => { process.stdout.write("RESULT:" + d); process.stderr.write("boom"); });';
+  const p = await spawnOwned(NODE, ["-e", script], {
+    cwd: CWD, env: ENV, stdin: "ping",
+    // longer than the 2 s post-exit fallback: the child has long exited, and its output must still be waiting for the reader
+    readStartTime: async () => { await new Promise((r) => setTimeout(r, 2500)); return { time: "", error: "late" }; },
+  });
+  assert.equal(p.owned.startedAt, "exited-before-probe");
+  let out = "";
+  let err = "";
+  p.stdout.setEncoding("utf8").on("data", (c: string) => (out += c));
+  p.stderr.setEncoding("utf8").on("data", (c: string) => (err += c));
+  const status = await p.exited;
+  assert.equal(status.code, 0);
+  assert.equal(out, "RESULT:ping");
+  assert.equal(err, "boom");
 });

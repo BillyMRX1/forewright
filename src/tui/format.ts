@@ -106,7 +106,7 @@ export function clockTime(iso: string): string {
 
 export function abbreviatePath(p: string, max: number): string {
   const home = os.homedir();
-  const shown = p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
+  const shown = p === home || p.startsWith(`${home}/`) || p.startsWith(`${home}\\`) ? `~${p.slice(home.length)}` : p;
   if (shown.length <= max) return shown;
   return `...${shown.slice(shown.length - Math.max(1, max - 3))}`;
 }

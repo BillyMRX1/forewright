@@ -1,4 +1,5 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { envGet, isWindows, pathFor, WINDOWS_ENV_NAMES, type Platform } from "../core/platform.js";
 import type { OwnedProcess } from "../core/types.js";
@@ -132,6 +133,13 @@ export class LineSplitter {
 export interface SpawnedProcess {
   owned: OwnedProcess;
   child: ChildProcess;
+  /**
+   * The child's output. Read THESE, not child.stdout: they are fed from the moment of spawn, so output
+   * written while spawnOwned is still identifying the process is buffered here instead of being discarded
+   * (Node throws away the unread output of a child that has exited).
+   */
+  stdout: Readable;
+  stderr: Readable;
   /** Resolves once the child has exited and its stdio streams are closed. */
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }
@@ -243,13 +251,47 @@ export async function spawnOwned(
     exitFired = true;
   });
   const hasExited = (): boolean => exitFired || child.exitCode !== null || child.signalCode !== null;
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    let status: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  // Output is copied into buffering streams synchronously, before any await, so nothing the child prints can be lost.
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  child.stdout?.pipe(stdout);
+  child.stderr?.pipe(stderr);
+  // `exited` resolves once the child is closed AND everything it wrote has been read (or there was nothing unread).
+  // The 2 s fallback is only for a grandchild that keeps the pipes open after the child exited. It must not start
+  // while the caller cannot read yet (before spawnOwned returns), or unread buffered output could be cut off.
+  const drained = (s: PassThrough): Promise<void> =>
+    new Promise((res) => {
+      const check = (): boolean => {
+        if (s.readableEnded || (s.writableFinished && s.readableLength === 0)) {
+          res();
+          return true;
+        }
+        return false;
+      };
+      if (check()) return;
+      s.once("end", () => res());
+      s.on("finish", check);
+    });
+  type ExitStatus = { code: number | null; signal: NodeJS.Signals | null };
+  let armFallback: () => void = () => {};
+  const exited = new Promise<ExitStatus>((resolve) => {
+    let status: ExitStatus | null = null;
+    let armed = false;
+    let timer: NodeJS.Timeout | null = null;
+    const start = (): void => {
+      if (status !== null && armed && timer === null) timer = setTimeout(() => resolve(status as ExitStatus), 2000).unref();
+    };
+    armFallback = () => {
+      armed = true;
+      start();
+    };
     child.once("exit", (code, signal) => {
       status = { code, signal };
-      setTimeout(() => resolve(status as { code: number | null; signal: NodeJS.Signals | null }), 2000).unref();
+      start();
     });
-    child.once("close", (code, signal) => resolve({ code, signal }));
+    child.once("close", (code, signal) => {
+      void Promise.all([drained(stdout), drained(stderr)]).then(() => resolve({ code, signal }));
+    });
   });
   await new Promise<void>((resolve, reject) => {
     child.once("spawn", resolve);
@@ -276,8 +318,9 @@ export async function spawnOwned(
     }
   }
   if (startedAt === "") throw new SpawnError(`Could not read the OS start time of pid ${pid}${readError ? `: ${readError}` : ""}`, { bin, pid, readError });
+  armFallback(); // the caller attaches its stream readers right after this returns
   // On Windows pgid is the pid of the tree root (there are no process groups); terminateGroup ends the whole tree under it.
-  return { owned: { pid, pgid: pid, startedAt, command: [bin, ...args].join(" ").slice(0, 500) }, child, exited };
+  return { owned: { pid, pgid: pid, startedAt, command: [bin, ...args].join(" ").slice(0, 500) }, child, stdout, stderr, exited };
 }
 
 /**

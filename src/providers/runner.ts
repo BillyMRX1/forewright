@@ -113,12 +113,12 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
 
     const out = new LineSplitter();
     const err = new LineSplitter();
-    spawned.child.stdout?.setEncoding("utf8");
-    spawned.child.stderr?.setEncoding("utf8");
-    spawned.child.stdout?.on("data", (chunk: string) => {
+    spawned.stdout.setEncoding("utf8");
+    spawned.stderr.setEncoding("utf8");
+    spawned.stdout.on("data", (chunk: string) => {
       for (const l of out.push(chunk)) plan.parser.feedLine(l.text, l.truncated);
     });
-    spawned.child.stderr?.on("data", (chunk: string) => {
+    spawned.stderr.on("data", (chunk: string) => {
       for (const l of err.push(chunk)) plan.parser.feedStderr(l.text);
     });
 

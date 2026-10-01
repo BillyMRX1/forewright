@@ -54,8 +54,8 @@ export async function runCheck(
   const take = (chunk: string) => {
     output = (output + chunk).slice(-OUTPUT_CAP);
   };
-  spawned.child.stdout?.setEncoding("utf8").on("data", take);
-  spawned.child.stderr?.setEncoding("utf8").on("data", take);
+  spawned.stdout.setEncoding("utf8").on("data", take);
+  spawned.stderr.setEncoding("utf8").on("data", take);
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;

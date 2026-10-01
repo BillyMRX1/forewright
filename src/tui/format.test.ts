@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 import { abbreviatePath, ago, clip, diffLines, duration, plainBlockReason, windowed, wrapText } from "./format.js";
 
@@ -52,6 +54,8 @@ describe("format helpers", () => {
   });
 
   it("abbreviates the home directory", () => {
-    assert.ok(abbreviatePath(`${process.env["HOME"]}/x/y`, 50).startsWith("~/x"));
+    const home = os.homedir(); // HOME on POSIX, USERPROFILE on Windows
+    assert.ok(abbreviatePath(path.join(home, "x", "y"), 50).startsWith(`~${path.sep}x`));
+    assert.equal(abbreviatePath(home, 50), "~");
   });
 });
