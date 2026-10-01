@@ -8,6 +8,9 @@ export const RESTART_MESSAGE = "The service restarted while this run was active;
 const NOT_OURS_MESSAGE =
   "The process recorded for this run is not one this service started (the operating system reused the id), so it was left alone. Work in the workspace was kept";
 
+const NO_IDENTITY_MESSAGE =
+  "No start time was recorded for the process of this run, so it cannot be shown to be one this service started and it was left alone. Work in the workspace was kept";
+
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -28,7 +31,10 @@ export async function reconcileOnOpen(rt: ProjectRuntime): Promise<void> {
         : null;
     let reason = RESTART_MESSAGE;
     let terminated = false;
-    if (proc && (await isOwnedAlive(proc))) {
+    const unproven = proc !== null && proc.startedAt.trim() === "";
+    if (unproven) {
+      reason = NO_IDENTITY_MESSAGE; // an older row without a start time: never signal on a bare pid
+    } else if (proc && (await isOwnedAlive(proc))) {
       // We lost its pipes when the previous daemon died, so its result can never be read.
       await terminateGroup(proc, 2000);
       terminated = true;
@@ -36,7 +42,7 @@ export async function reconcileOnOpen(rt: ProjectRuntime): Promise<void> {
       reason = NOT_OURS_MESSAGE; // alive but its start time differs: never signal it
     }
     store.abandonRun(run.id, reason);
-    store.recordEvent("run.recovered", "run", run.id, { kind: "system" }, { terminated, pid: run.pid });
+    store.recordEvent("run.recovered", "run", run.id, { kind: "system" }, { terminated, pid: run.pid, ...(unproven ? { unproven: true } : {}) });
     if (run.kind === "work" && run.taskId) {
       const t = store.getTask(run.taskId);
       if (t.state === "working" && t.generation === run.generation) {

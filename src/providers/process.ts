@@ -324,6 +324,19 @@ export async function spawnOwned(
 }
 
 /**
+ * Two readings of one process's start time. Exact equality, or (POSIX `ps` prints whole seconds computed from
+ * the boot time, which can shift by a second when the system clock is stepped) within 1.5 s. A reused pid starts
+ * at a later time, and wrapping the pid space inside 1.5 s is not realistic. An empty reading never matches.
+ */
+export function sameStartTime(a: string, b: string): boolean {
+  if (a === "" || b === "") return false;
+  if (a === b) return true;
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  return !Number.isNaN(x) && !Number.isNaN(y) && Math.abs(x - y) <= 1500;
+}
+
+/**
  * PID existence alone is not proof: the start time and group must still match. Only for processes this
  * service does not hold a live handle on (reconciliation after a restart): a child it spawned and still
  * holds is known to be its own, so the watchdog never asks the OS about it.
@@ -335,7 +348,7 @@ export async function isOwnedAlive(
   const platform = deps.platform ?? process.platform;
   if (!pidAlive(owned.pid)) return false;
   const startTime = deps.startTime ?? ((pid: number) => processStartTime(pid, { platform }));
-  if ((await startTime(owned.pid)) !== owned.startedAt) return false;
+  if (!sameStartTime(await startTime(owned.pid), owned.startedAt)) return false;
   if (isWindows(platform)) return true; // no groups: pgid is the pid, and the start time already proved identity
   return (await (deps.pgidOf ?? processGroupId)(owned.pid)) === String(owned.pgid);
 }

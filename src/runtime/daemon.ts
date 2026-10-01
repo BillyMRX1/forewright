@@ -10,7 +10,7 @@ import { samePathString } from "../core/platform.js";
 import { initProject, openProject, readRegistry, resolveProject } from "../core/identity.js";
 import { ensureDir, socketPathFor } from "../core/paths.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
-import { processStartTime } from "../providers/process.js";
+import { processStartTime, sameStartTime } from "../providers/process.js";
 import { ClientApi } from "./api.js";
 import { DaemonLockError } from "./errors.js";
 import { ProviderHealthCache } from "./health.js";
@@ -45,9 +45,9 @@ async function lockAlive(rec: LockRecord): Promise<boolean> {
   try {
     process.kill(rec.pid, 0);
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM" ? (await processStartTime(rec.pid)) === rec.startedAt : false;
+    return (err as NodeJS.ErrnoException).code === "EPERM" ? sameStartTime(await processStartTime(rec.pid), rec.startedAt) : false;
   }
-  return (await processStartTime(rec.pid)) === rec.startedAt; // pid reuse changes the start time
+  return sameStartTime(await processStartTime(rec.pid), rec.startedAt); // pid reuse changes the start time
 }
 
 export class Daemon {

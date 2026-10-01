@@ -722,6 +722,10 @@ export class Store {
   }
 
   markRunStarted(runId: string, generation: number, proc: { pid: number; pgid: number; processStartedAt: string; providerSessionId?: string }): void {
+    if (proc.processStartedAt.trim() === "") {
+      // An empty identity could never prove ownership after a crash, so the orphan would be left running.
+      throw new ValidationError("Refusing to record a started run without the process start time", { runId, pid: proc.pid });
+    }
     const run = this.getRun(runId);
     this.assertRunCurrent(run, generation);
     tx(this.db, () => {

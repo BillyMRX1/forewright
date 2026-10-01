@@ -1,5 +1,5 @@
 import type { NormalizedEvent, RunHandle, RunOutcome, RunRequest, OwnedProcess } from "../core/types.js";
-import { LineSplitter, spawnOwned, terminateGroup } from "./process.js";
+import { LineSplitter, spawnOwned, terminateGroup, type StartTimeRead } from "./process.js";
 import { TerminationError } from "./errors.js";
 import { redact, safeRaw, truncate } from "./redact.js";
 import { looksLikeQuota, parseRetryAfter } from "./quota.js";
@@ -48,6 +48,8 @@ export interface RunPlan {
   /** Called once when the child is gone (delete temp files here). */
   cleanup?: () => void;
   graceMs?: number;
+  /** Test seam: replaces the OS start-time reader used to identify the child. */
+  readStartTime?: (pid: number) => Promise<StartTimeRead>;
 }
 
 export function emptyOutcome(req: Pick<RunRequest, "runId" | "generation">): RunOutcome {
@@ -94,7 +96,7 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
   handle.done = (async (): Promise<RunOutcome> => {
     let spawned;
     try {
-      spawned = await spawnOwned(plan.bin, plan.args, { cwd: plan.cwd, env: plan.env, stdin: plan.stdin });
+      spawned = await spawnOwned(plan.bin, plan.args, { cwd: plan.cwd, env: plan.env, stdin: plan.stdin, ...(plan.readStartTime ? { readStartTime: plan.readStartTime } : {}) });
     } catch (err) {
       plan.cleanup?.();
       markSpawned(null);

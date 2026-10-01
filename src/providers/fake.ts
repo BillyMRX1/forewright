@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type {
   EngineId, NormalizedEvent, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
-import { childEnv } from "./process.js";
+import { childEnv, type StartTimeRead } from "./process.js";
 import { decideOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo, type EventInput } from "./runner.js";
 
 export interface FakeScript {
@@ -42,6 +42,8 @@ export interface FakeAdapterOptions {
   defaultScript?: FakeScript;
   /** Called synchronously at the start of every run, before the child is spawned. */
   onStart?: (req: RunRequest) => void;
+  /** Test seam: a slow or odd OS start-time reader for the spawned child. */
+  readStartTime?: (pid: number) => Promise<StartTimeRead>;
 }
 
 const CHILD = fileURLToPath(new URL("./fake-child.js", import.meta.url));
@@ -57,11 +59,13 @@ export class FakeAdapter implements ProviderAdapter {
   readonly rules: FakeRule[];
   defaultScript: FakeScript;
   onStart: ((req: RunRequest) => void) | undefined;
+  private readonly readStartTime: FakeAdapterOptions["readStartTime"];
   /** Every request this adapter has been asked to run, in order (for test assertions). */
   readonly requests: RunRequest[] = [];
 
   constructor(opts: FakeAdapterOptions = {}) {
     this.onStart = opts.onStart;
+    this.readStartTime = opts.readStartTime;
     this.rules = opts.rules ?? [];
     this.defaultScript = opts.defaultScript ?? { outcome: "succeeded", finalText: "fake result" };
   }
@@ -117,7 +121,7 @@ export class FakeAdapter implements ProviderAdapter {
     const parser = new FakeParser(req, makeEmitter(stampReq, onEvent, []));
     return runPlan(req, {
       bin: process.execPath, args: [CHILD, JSON.stringify(childScript)], stdin: "ignore", cwd: req.cwd, env,
-      timeoutMs: req.timeoutMs, parser, graceMs: 300,
+      timeoutMs: req.timeoutMs, parser, graceMs: 300, ...(this.readStartTime ? { readStartTime: this.readStartTime } : {}),
     });
   }
 }

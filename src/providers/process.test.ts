@@ -262,3 +262,14 @@ test("a child that prints and exits while the start-time read is slow still yiel
   assert.equal(out, "RESULT:ping");
   assert.equal(err, "boom");
 });
+
+test("start times match exactly or within the 1.5 s the POSIX clock can shift, never when empty or far apart", async () => {
+  const { sameStartTime } = await import("./process.js");
+  assert.equal(sameStartTime("Thu Oct  1 05:46:18 2026", "Thu Oct  1 05:46:18 2026"), true);
+  assert.equal(sameStartTime("Thu Oct  1 05:46:18 2026", "Thu Oct  1 05:46:19 2026"), true);
+  assert.equal(sameStartTime("Thu Oct  1 05:46:18 2026", "Thu Oct  1 05:46:21 2026"), false);
+  assert.equal(sameStartTime("Mon Jan  1 00:00:00 2001", "Thu Oct  1 05:46:18 2026"), false);
+  assert.equal(sameStartTime("", ""), false);
+  assert.equal(sameStartTime("2026-10-01T05:16:00.3085475Z", "2026-10-01T05:16:00.3085475Z"), true);
+  assert.equal(sameStartTime("x", "y"), false);
+});
