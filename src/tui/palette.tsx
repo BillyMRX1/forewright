@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { ListRow, SafeText, TextInput } from "./components.js";
-import { useCtx, type JumpTarget } from "./context.js";
+import { channelKey, useCtx, type ChannelInfo, type JumpTarget } from "./context.js";
 import { SLASH_COMMANDS, VIEW_ACTIONS, type ActionId } from "./commands.js";
 import { VIEW, VIEW_NAMES, clip, oneLine, windowed } from "./format.js";
 import { borderStyle, palette as colors, sym } from "./theme.js";
@@ -12,7 +12,7 @@ import type { TeamMember } from "../runtime/protocol.js";
 
 export interface PaletteEntry {
   id: string;
-  kind: "view" | "action" | "task" | "agent" | "decision";
+  kind: "view" | "action" | "task" | "agent" | "decision" | "chat";
   label: string;
   /** Dim text after the label; also searched. Slash commands show up here. */
   hint?: string;
@@ -22,6 +22,8 @@ export interface PaletteEntry {
 
 export interface EntryOptions {
   paused?: boolean;
+  /** Where messages can go; each one except the CTO becomes a "Message: ..." entry. */
+  channels?: ChannelInfo[];
 }
 
 function slashOf(action: ActionId): string | undefined {
@@ -48,13 +50,16 @@ export function buildEntries(tasks: Task[], agents: TeamMember[], decisions: Dec
   act("log", "Read the raw log of a run");
   act("terminate", "Terminate the team");
   act("next", "Jump to the next thing that needs you", "ctrl+n");
-  act("sidebar", "Show or hide the sidebar");
   act("setup", "Run setup again");
   act("help", "Show every key and command", "?");
   act("quit", "Quit", "ctrl+c");
+  for (const c of opts.channels ?? []) {
+    if (c.channel === "cto") continue;
+    entries.push({ id: `chat:${channelKey(c)}`, kind: "chat", label: `Message: ${oneLine(c.label)}`, hint: c.channel === "project" ? "/chat" : c.channel === "task" ? "task thread" : "direct", target: { view: VIEW.cto, channelKey: channelKey(c) } });
+  }
   for (const d of decisions) if (d.status === "open") entries.push({ id: `decision:${d.id}`, kind: "decision", label: `Decision: ${oneLine(d.title)}`, target: { view: VIEW.inbox, decisionId: d.id } });
   for (const t of tasks) entries.push({ id: `task:${t.id}`, kind: "task", label: `${t.shortId} ${oneLine(t.title)}`, target: { view: VIEW.tasks, taskId: t.id } });
-  for (const a of agents) if (a.lifecycle !== "retired") entries.push({ id: `agent:${a.id}`, kind: "agent", label: `${oneLine(a.name)} (${a.role})`, target: { view: VIEW.team, agentId: a.id } });
+  for (const a of agents) if (a.lifecycle !== "retired") entries.push({ id: `agent:${a.id}`, kind: "agent", label: `${oneLine(a.name)} (${a.role})`, hint: "worker details and editing", target: { view: VIEW.home, agentId: a.id } });
   return entries;
 }
 
@@ -91,7 +96,7 @@ export function Palette({ onClose, onPick }: { onClose: () => void; onPick: (ent
   const ctx = useCtx();
   const [query, setQuery] = useState("");
   const [idx, setIdx] = useState(0);
-  const entries = buildEntries(ctx.tasks, ctx.teamAgents, ctx.openDecisions, { paused: ctx.runtime?.paused === true });
+  const entries = buildEntries(ctx.tasks, ctx.teamAgents, ctx.openDecisions, { paused: ctx.runtime?.paused === true, channels: ctx.channels });
   const found = filterEntries(entries, query);
   const sel = Math.min(idx, Math.max(0, found.length - 1));
   useInput((_input, key) => {
@@ -124,7 +129,7 @@ export function Palette({ onClose, onPick }: { onClose: () => void; onPick: (ent
             onEscape={onClose}
             focus
             width={Math.max(10, inner - 2)}
-            placeholder="type to filter views, commands, tasks, agents"
+            placeholder="type to filter screens, commands, recipients, workers, tasks"
           />
         </Box>
         {found.length === 0 ? <SafeText dimColor>No match.</SafeText> : null}

@@ -29,40 +29,44 @@ forewright
 1. `forewright` starts the background service if it is not running and tells you where its log is.
 2. If the folder has no workspace yet, the setup wizard opens on a welcome page that shows the resolved root and whether it is a git repository. Choosing "Create workspace and continue" adds a small `.forewright` marker folder (excluded from git through `.git/info/exclude`, never your `.gitignore`) and stores all state under the data directory below.
 3. The setup wizard (six short pages, then a summary) asks what the CTO could not guess: which tools Forewright may use (it checks them live: installed, version, signed in or not, models; `r` checks again, and nothing moves on until at least one tool is signed in), which tool leads as the CTO and with which model (Claude Code with `opus` is recommended for planning), which tools may do the work (the CTO can only hire agents on those), what happens when a tool hits its usage limit (wait for the reset, or hand the work to backup tools in an order you set), and whether finished work is merged into your branch only after you approve (the default) or automatically. Publishing and deleting always ask. `Esc` goes back one page, and "Skip setup, use recommended defaults" on the first two pages applies the recommendation for every page. Nothing is saved until the summary page. A project that already exists but never ran setup shows a one-line offer at startup ("enter to start, esc to skip"; skipping is remembered). Run it again any time with `/setup` or "Run setup again" in the palette.
-4. The CTO view opens with the message box focused. Just type what you want and press `Enter`, or press `Up`/`Down` and `Enter` to start from one of the example briefs. The CTO proposes a PRD, shown as a card in the conversation. Type `/approve` to approve it (you are asked first) or `/prd` to read it in full.
-5. After approval the CTO plans tasks and hires agents. The sidebar lists the views (CTO, Overview, Tasks, Inbox, Team, Chat, Evidence, Settings) and every agent, most urgent first. Move with the arrow keys and press `Enter` to open a view. Decisions that need you appear in the Inbox with a dot.
+4. The wizard ends on the CTO screen with the message box focused. Just type what you want and press `Enter`, or press `Up`/`Down` and `Enter` to start from one of the example briefs. The CTO proposes a PRD, shown as a card in the conversation with the keys that act on it: `Ctrl+A` approves it (you are asked first, `/approve` works too) and `Ctrl+R` (or `/prd`) reads it in full.
+5. After approval the CTO plans tasks and hires agents. From then on `forewright` opens on Home: what needs you, what every worker is doing right now, overall progress and the latest events, all on one screen. Press `Enter` on anything that needs you to open it, or on a worker to see its details.
 
 Starting `forewright` from a subfolder or a linked git worktree opens the same project. Moving the project folder keeps its identity, because the identity lives in the marker file.
 
 ## Keys
 
-The screen has three focus zones: the sidebar, the main pane and the message box (in CTO and Chat). The focused zone has a bright border. `Tab` and `Shift+Tab` move between them. The bottom line always lists the keys of the zone you are in.
+There are four numbered tabs along the top: `1 Home`, `2 CTO`, `3 Tasks`, `4 Inbox`. Settings is not a tab; open it with `,` or the palette. Badges after a tab name show tasks being worked on (Tasks) and what waits for you (Inbox: open decisions plus a PRD to approve). There is one bottom bar with at most six hints for what you can do right now; `?` always opens the full list.
 
 | Where | Key | Action |
 |---|---|---|
-| Anywhere | `Tab`, `Shift+Tab` | Move focus between sidebar, main pane and message box |
-| Anywhere | `Ctrl+P` (or `Ctrl+K`) | Command palette: every view, command, task, agent and open decision. `Enter` runs, `Esc` closes |
-| Anywhere | `Ctrl+N` | Jump to the next thing that needs you: open decisions, then a proposed PRD, then blocked tasks. Press again to cycle |
+| Anywhere | `Ctrl+P` (or `Ctrl+K`, or `:` outside a text box) | Command palette: every screen, command, chat recipient, worker, task and open decision. `Enter` runs, `Esc` closes |
+| Anywhere | `Ctrl+N` (`n` outside a text box) | Jump to the next thing that needs you: open decisions, then a proposed PRD, then blocked tasks. Press again to cycle |
 | Anywhere | `Ctrl+G` | Jump to the item the notice (bottom right) is about |
 | Anywhere | `Ctrl+E` | Show or hide technical details of the last error |
 | Anywhere | `Ctrl+C` | Quit the screen. While agents are running it asks first; the service keeps running either way |
-| Not in a message box | `?` | Help listing every key and command |
-| Sidebar | `Up`, `Down`, `Enter` or `Right` | Move through the views, open one (focus moves into it) |
-| Sidebar | `Esc` | Dismiss the error line or the notice |
-| Main pane | `Up`, `Down`, `Enter` | Move through lists and open the chosen item or run its main action (destructive actions ask first) |
-| Main pane | `Esc` or `Left` | Go back: details to list, list to sidebar |
-| Main pane | `PgUp`, `PgDn` | Scroll long content |
-| Message box | `Enter` | Send |
-| Message box | `Shift+Enter` or `Ctrl+J` | New line |
-| Message box | `Up` on an empty box | Move to the conversation so you can scroll it |
-| Message box | `Esc` | Leave for the sidebar. The draft is kept |
-| Message box | `/` | Slash commands (below). Suggestions appear as you type; `Up`/`Down` choose, `Tab` or `Enter` completes |
+| Anywhere | `Shift+Tab` | Previous tab (also from the message box; your draft is kept) |
+| No text box | `1` to `4`, `Tab` | Jump to a tab, or the next tab |
+| No text box | `,` and `?` | Settings and help |
+| No text box | `Esc`, `q` | Close what is open, one level at a time. `Esc` never quits; `q` quits (asking first while agents run) when nothing is open |
+| Lists | `Up`, `Down` (or `j`, `k`), `Enter`, `PgUp`, `PgDn` | Move, open the chosen item, scroll |
+| Home and Tasks | `/` | Filter the workers or tasks. `Enter` keeps the filter, `Esc` clears it |
+| Home | `p` | Pause or resume all work (asks first) |
+| Home, a worker's details | `e` edit engine, model and permission; `t` open its task; `l` raw log | |
+| CTO, message box | `Enter` send, `Shift+Enter` or `Ctrl+J` new line, `Tab` change recipient, `Ctrl+A` approve the PRD, `Ctrl+R` read it, `Esc` leave the box | Typing is typing: only Ctrl keys, `Enter`, `Esc`, `Tab` and the arrows act here |
+| CTO, conversation | `a` approve the PRD, `r` read it, `m` change recipient, `i` or `Enter` back to the box | |
+| Tasks | `v` board or list (wide screens), `l` log; `Enter` opens a task | |
+| A task's details | `Tab`, `Shift+Tab` or `1` to `4`: Overview, Run log, Checks, Diff. `Enter` resume, `s` stop run, `r` reassign, `c` cancel, `l` full log | Cancel and stop ask first |
+| Inbox | `h` history; `Enter` or `Tab` go to the decision; there `1` to `9` choose an option, `Enter` resolve (asks first), `a` add a note, `j`/`k` next decision. For a PRD: `Enter` approve, `r` read, `o` open the CTO | |
+| Settings | `Up`, `Down`, `Left`, `Right`, `Enter`; `Tab` next group (Engines, Backups, Control, Limits); `d` engine details | |
 
-Single letters only act where no text box has focus, and they are listed on the bottom line: in Tasks (`v` board or list, `l` log; in task details `Enter` resume, `c` cancel, `a` reassign, `l` log, `x` stop run), in the CTO conversation (`a` approve the PRD, `d` read it), in the Inbox (`h` history; choosing an option: `Enter` resolve, `a` add a note), in Team (`l` log).
+Single letters and digits only act where no text box has focus. The CTO message box starts focused; press `Esc` to leave it, then `1` to `4` switch tabs.
 
-Slash commands, in the CTO or Chat message box: `/approve`, `/prd`, `/pause`, `/resume`, `/stop`, `/inbox`, `/tasks`, `/team`, `/settings`, `/setup`, `/help`, plus `/overview`, `/chat`, `/evidence`, `/log` and `/terminate`. Anything with more words than a command name (for example a path) is sent as an ordinary message.
+The CTO screen is also where you talk to the rest of the team: `Tab` in the message box cycles the recipient through the CTO, the project channel, each agent and each task thread (`@name` at the start of a project message sends it to that agent only). The palette lists every recipient as "Message: ...", and `/chat` opens the project channel.
 
-The sidebar shows the views with badges (tasks being worked on, a dot and the count of decisions waiting for you) and below them the agents with a status symbol (needs you, blocked, done, working, idle), most urgent first. Under 90 columns the sidebar turns into a tab line; under 60 columns it is hidden and views are reached through the palette (`Ctrl+P`). The title bar shows the project, the git branch and the connection (connected, reconnecting, offline) and a PAUSED pill. Notices appear as a small card at the bottom right of the main pane (on small terminals they replace the bottom line) and stay 8 seconds when they need you, 5 when something finished and 4 otherwise. Set `FOREWRIGHT_ASCII=1` for plain symbols and borders and `FOREWRIGHT_BELL=1` for a terminal bell on needs-you notices. Team and task details show the last lines of the run's live output. Text you type in message boxes is saved as a draft and comes back after you switch views or restart.
+Slash commands, in the CTO message box: `/approve`, `/prd`, `/pause`, `/resume`, `/stop`, `/inbox`, `/tasks`, `/team`, `/settings`, `/setup`, `/help`, plus `/home`, `/overview`, `/cto`, `/chat`, `/evidence`, `/log` and `/terminate`. Anything with more words than a command name (for example a path) is sent as an ordinary message.
+
+Home puts four sections on one screen with rules between them and no boxes: NEEDS YOU (decisions, a PRD to approve, blocked tasks), WORKERS (one row per worker with engine, model, task, a state glyph, elapsed time and what it did last; a worker that moved to a backup engine reads "using Claude" and one waiting for a usage limit reads "limit reached, back 3:00 PM"), PROGRESS and LATEST. The free height goes to LATEST. On narrow terminals the model column goes first, then the engine, and on short ones LATEST and then PROGRESS. State is never color alone: `!` needs you, `✗` blocked, `✓` done, `●` working, `○` idle, `⏸` waiting for a limit. The top bar shows the project, the git branch, the four tabs (never abbreviated: when they do not fit it shows the current tab and a `tab` hint), a PAUSED pill and the connection (connected, reconnecting, offline). Notices appear as a small card at the bottom right (on small terminals they replace the bottom line) and stay 8 seconds when they need you, 5 when something finished and 4 otherwise. Set `FOREWRIGHT_ASCII=1` for plain symbols and borders and `FOREWRIGHT_BELL=1` for a terminal bell on needs-you notices. A task's Overview and a worker's details show the last lines of the run's live output. Text you type in message boxes is saved as a draft (one per recipient) and comes back after you switch screens or restart. The screen works from 120x40 down to 40x12.
 
 What the controls do:
 

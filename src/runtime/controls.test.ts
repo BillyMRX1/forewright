@@ -7,7 +7,7 @@ import { openAndMigrate } from "../core/db.js";
 import { dbPath } from "../core/paths.js";
 import { Store } from "../core/store.js";
 import { FakeAdapter } from "../providers/fake.js";
-import { isOwnedAlive } from "../providers/process.js";
+import { isOwnedAlive, readStartTime } from "../providers/process.js";
 import { assertGroupGone, addTask, gitIn, hire, isWork, poke, rule, seedPrd, sleep, startHarness, taskOf, waitFor, workRequests, type Harness } from "./test-harness.js";
 
 const hanging = () => new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true, spawnGrandchild: true, writeFiles: { "wip.txt": "work in progress\n" } })] });
@@ -130,6 +130,62 @@ test("shutdown stops running runs as 'daemon shutdown', returns the task to read
     assert.equal(reopened.getTask(task.id).blockReason, null);
     assert.ok(existsSync(`${worktree}/wip.txt`));
     await assertGroupGone(active.process!.pgid);
+  } finally {
+    if (!closed) await h.daemon.close();
+    h.client.close();
+  }
+});
+
+test("shutdown while a run is still starting (slow OS start-time read) stops it too: no child outlives the daemon", async () => {
+  const adapter = new FakeAdapter({
+    rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true, spawnGrandchild: true })],
+    readStartTime: async (pid) => {
+      await sleep(1500); // a slow CIM/ps read: the run is not yet known to have a process
+      return readStartTime(pid);
+    },
+  });
+  const h = await startHarness({ adapter });
+  let closed = false;
+  try {
+    seedPrd(h);
+    const agent = hire(h, "Wren");
+    const task = addTask(h, { title: "Slow start", assignee: agent });
+    poke(h);
+    const active = await waitFor(() => [...h.rt.active.values()].find((a) => a.taskId === task.id && a.handle), "the run to be launched");
+    assert.equal(active.process, null, "the start is still in flight");
+    await h.daemon.close();
+    closed = true;
+    const proc = active.handle!.process;
+    assert.ok(proc, "the child was spawned and is known to the handle");
+    await assertGroupGone(proc.pgid);
+    const reopened = new Store(openAndMigrate(dbPath(h.projectId)), h.projectId, h.rt.clock);
+    const run = reopened.getRun(active.run.id);
+    assert.equal(run.state, "stopped");
+    assert.match(run.error ?? "", /daemon shutdown/);
+    assert.equal(reopened.getTask(task.id).state, "ready");
+  } finally {
+    if (!closed) await h.daemon.close();
+    h.client.close();
+  }
+});
+
+test("a run launched after shutdown began is never started (nothing is left running)", async () => {
+  const adapter = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true, spawnGrandchild: true, writeFiles: { "wip.txt": "x\n" } })], defaultScript: { outcome: "succeeded", hangUntilCancelled: true } });
+  const h = await startHarness({ adapter });
+  let closed = false;
+  try {
+    seedPrd(h);
+    const { active } = await runningWorker(h);
+    const closing = h.daemon.close(); // synchronously marks the runtime as stopping and takes its list of runs
+    closed = true;
+    const late = h.rt.cto.startTurn([]);
+    await closing;
+    assert.equal(adapter.requests.length, 1, "the late launch never reached the provider");
+    assert.equal(late.handle, null);
+    await assertGroupGone(active.process!.pgid);
+    const reopened = new Store(openAndMigrate(dbPath(h.projectId)), h.projectId, h.rt.clock);
+    assert.equal(reopened.getRun(late.run.id).state, "stopped");
+    assert.equal(reopened.getRun(active.run.id).state, "stopped");
   } finally {
     if (!closed) await h.daemon.close();
     h.client.close();

@@ -6,16 +6,21 @@
 import type { TaskState } from "../core/types.js";
 
 export type AgentStatus = "needs_you" | "blocked" | "done" | "working" | "idle";
+/** What a worker row can show: the attention statuses plus a wait for a usage limit. */
+export type DisplayStatus = AgentStatus | "waiting";
 
+/**
+ * Four hues plus gray, each with one job. accent (cyan): focus and selection only. attention (yellow): the one
+ * "look here" color, things that need you. done (green): finished or ok. error (red): failed or blocked.
+ * muted (gray): secondary text. Working and review have no color of their own: their glyph and word carry them.
+ */
 export const palette = {
   attention: "yellow",
-  working: "cyan",
   done: "green",
   idle: "gray",
   error: "red",
   muted: "gray",
   accent: "cyan",
-  review: "magenta",
 } as const;
 
 export type ThemeColor = (typeof palette)[keyof typeof palette];
@@ -87,57 +92,63 @@ export function borderStyle(): "round" | typeof ASCII_BORDER {
   return asciiMode() ? ASCII_BORDER : "round";
 }
 
-const UNICODE_GLYPHS: Record<AgentStatus, string> = {
-  needs_you: "◉",
-  blocked: "■",
-  done: "●",
-  working: "◐",
+const UNICODE_GLYPHS: Record<DisplayStatus, string> = {
+  needs_you: "!",
+  blocked: "✗",
+  done: "✓",
+  working: "●",
   idle: "○",
+  waiting: "⏸",
 };
-const ASCII_GLYPHS: Record<AgentStatus, string> = {
+const ASCII_GLYPHS: Record<DisplayStatus, string> = {
   needs_you: "!",
   blocked: "x",
   done: "+",
   working: "*",
-  idle: "-",
+  idle: "o",
+  waiting: "~",
 };
 
-export function statusGlyph(status: AgentStatus): string {
+/** One distinct shape per status, so the screen reads without color. */
+export function statusGlyph(status: DisplayStatus): string {
   return (asciiMode() ? ASCII_GLYPHS : UNICODE_GLYPHS)[status];
 }
 
-const UNICODE_PILL: Record<AgentStatus, string> = { needs_you: "◉", blocked: "!", done: "✓", working: "●", idle: "○" };
-
-/** Glyph in front of a status pill: "● working", "◉ needs you", "✓ done", "! blocked". */
-export function pillGlyph(status: AgentStatus): string {
-  return (asciiMode() ? ASCII_GLYPHS : UNICODE_PILL)[status];
-}
-
-const STATUS_COLOR: Record<AgentStatus, ThemeColor> = {
+const STATUS_COLOR: Record<DisplayStatus, string | undefined> = {
   needs_you: palette.attention,
   blocked: palette.error,
   done: palette.done,
-  working: palette.working,
+  working: undefined,
   idle: palette.idle,
+  waiting: palette.attention,
 };
 
-export function statusColor(status: AgentStatus): ThemeColor {
+export function statusColor(status: DisplayStatus): string | undefined {
   return STATUS_COLOR[status];
 }
 
-export const STATUS_LABEL: Record<AgentStatus, string> = {
+export const STATUS_LABEL: Record<DisplayStatus, string> = {
   needs_you: "needs you",
   blocked: "blocked",
   done: "done",
   working: "working",
   idle: "idle",
+  waiting: "waiting",
 };
 
-export const TASK_STATE_COLOR: Record<TaskState, ThemeColor> = {
+const UNICODE_TASK_GLYPHS: Record<TaskState, string> = { planned: "○", ready: "◇", working: "●", review: "◐", done: "✓", cancelled: "✗" };
+const ASCII_TASK_GLYPHS: Record<TaskState, string> = { planned: ".", ready: ">", working: "*", review: "?", done: "+", cancelled: "x" };
+
+/** A distinct glyph per task state. */
+export function taskGlyph(state: TaskState): string {
+  return (asciiMode() ? ASCII_TASK_GLYPHS : UNICODE_TASK_GLYPHS)[state];
+}
+
+export const TASK_STATE_COLOR: Record<TaskState, string | undefined> = {
   planned: palette.muted,
-  ready: palette.accent,
-  working: palette.working,
-  review: palette.review,
+  ready: undefined,
+  working: undefined,
+  review: undefined,
   done: palette.done,
   cancelled: palette.muted,
 };

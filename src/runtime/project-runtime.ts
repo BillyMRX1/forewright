@@ -403,7 +403,12 @@ export class ProjectRuntime {
     this.stopping = true;
     this.scheduler.stop();
     this.abort.abort();
-    await Promise.all([...this.active.values()].map((a) => this.stopActive(a, "shutdown", "daemon shutdown")));
+    // Includes runs still inside adapter.start (the OS start-time read): cancel is remembered and the child is
+    // ended as soon as it exists. A finishing run can hand work to another launch, so repeat until none are left.
+    for (let pass = 0; this.active.size > 0; pass++) {
+      if (pass >= 20) throw new Error(`Shutdown could not stop ${this.active.size} run(s) after ${pass} passes`);
+      await Promise.all([...this.active.values()].map((a) => this.stopActive(a, "shutdown", "daemon shutdown")));
+    }
     await this.integrationPromise;
     this.publish();
     this.closed = true;

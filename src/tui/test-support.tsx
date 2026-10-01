@@ -40,7 +40,7 @@ export async function mount(opts: MountOptions = {}) {
       isGit
       branch="main"
       size={{ columns: cols, rows }}
-      initialView={opts.view ?? VIEW.cto}
+      initialView={opts.view ?? VIEW.home}
       {...(opts.toastMs ? { toastMs: opts.toastMs } : {})}
       {...(opts.onQuit ? { onQuit: opts.onQuit } : {})}
       {...(opts.offlineAfterMs !== undefined ? { offlineAfterMs: opts.offlineAfterMs } : {})}

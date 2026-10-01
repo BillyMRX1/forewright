@@ -6,7 +6,8 @@ import type { Agent, Authority, Decision, FallbackEntry, ForewrightEvent, Messag
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
 
-const NOW = "2026-09-30T10:00:00.000Z";
+/** The moment everything in the fake project happened: four minutes ago, so ages and elapsed times read like a live project. */
+const NOW = new Date(Date.now() - 4 * 60_000).toISOString();
 
 export function makeTask(over: Partial<Task> & Pick<Task, "id" | "shortId" | "title" | "state">): Task {
   return {
@@ -212,6 +213,12 @@ export class FakeClient implements ClientApi {
   openDecisions: Decision[] = [this.data.decision];
   /** Lines returned by runs.log. */
   logLines = ["line one \x1b[31mred\x1b[0m", "line two"];
+  /** Events returned by state.events: a few seeded ones, then everything passed to emitEvent. */
+  events: ForewrightEvent[] = [
+    { seq: 1, at: new Date(Date.now() - 6 * 60_000).toISOString(), type: "task.completed", entityKind: "task", entityId: "t1", actor: "system", payload: {} },
+    { seq: 2, at: new Date(Date.now() - 5 * 60_000).toISOString(), type: "decision.requested", entityKind: "decision", entityId: "dec1", actor: "agent:a1", payload: { title: "Which rounding rule?" } },
+    { seq: 3, at: new Date(Date.now() - 4.5 * 60_000).toISOString(), type: "requirement_doc.proposed", entityKind: "requirement_doc", entityId: "d2", actor: "agent:a1", payload: { revision: 2 } },
+  ];
   private eventListeners = new Set<(e: ForewrightEvent) => void>();
   failWith: Error | null = null;
   private connListeners = new Set<(s: ConnectionState) => void>();
@@ -287,6 +294,8 @@ export class FakeClient implements ClientApi {
           if (ch === "cto") return { messages: d.messages };
           return { messages: [{ ...d.messages[0]!, id: "c1", channel: ch, body: `hello in ${String(ch)}` }] };
         }
+        case "state.events":
+          return { events: this.events.filter((e) => e.seq > (p["sinceSeq"] as number)).slice(0, typeof p["limit"] === "number" ? p["limit"] : 200) };
         case "state.channels":
           return {
             channels: [
@@ -357,13 +366,14 @@ export class FakeClient implements ClientApi {
   /** Delivers a service event to every subscriber, like the daemon's event stream. */
   emitEvent(type: string, entityKind: string, entityId: string, payload: Record<string, unknown> = {}, actor = "system"): void {
     const event: ForewrightEvent = { seq: ++this.seq, at: NOW, type, entityKind, entityId, actor, payload };
+    this.events.push(event);
     for (const cb of this.eventListeners) cb(event);
   }
-  private seq = 0;
+  private seq = 3;
 
   async subscribe(_projectId: string, sinceSeq: number, onEvent: (event: ForewrightEvent) => void): Promise<Subscription> {
     this.eventListeners.add(onEvent);
-    return { lastSeq: sinceSeq, stop: () => void this.eventListeners.delete(onEvent) };
+    return { lastSeq: Math.max(sinceSeq, this.seq), stop: () => void this.eventListeners.delete(onEvent) };
   }
   onRuntime(cb: (p: string, s: RuntimeStatus) => void): () => void {
     this.runtimeListeners.add(cb);

@@ -1,30 +1,27 @@
-// Root component: title bar, sidebar, main pane, hint line, focus model, global keys and overlays.
+// Root component: top bar with numbered tabs, the screen, one hint bar, the focus model, global keys and overlays.
 
 import { execFile } from "node:child_process";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import type { ClientApi } from "./client.js";
-import { Ctx, needTarget, type AppCtx, type JumpTarget, type Selection, type Zone } from "./context.js";
-import { SafeText } from "./components.js";
-import { VIEW, VIEW_NAMES, wrapText } from "./format.js";
+import { Ctx, needTarget, type AppCtx, type ChannelInfo, type ClaimKind, type JumpTarget, type Selection, type Zone } from "./context.js";
+import { Rule, SafeText } from "./components.js";
+import { TAB_COUNT, VIEW, wrapText } from "./format.js";
 import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
 import type { Decision, ForewrightEvent, RequirementDoc, Task } from "../core/store-types.js";
 import { TASK_STATES } from "../core/types.js";
 import { deriveAttention, needsYouItems, nextNeedItem, type UnseenDone } from "./attention.js";
-import { Sidebar, TabLine, TitleBar, ToastCard, type ConnView } from "./chrome.js";
+import { ToastCard, TopBar, type ConnView } from "./shell.js";
 import { Palette, type PaletteEntry } from "./palette.js";
 import { ConfirmCard, HelpModal, PrdViewer } from "./modals.js";
 import { footerHints } from "./keys.js";
 import { viewOfAction, type ActionId } from "./commands.js";
 import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
-import { borderStyle, palette as colors } from "./theme.js";
-import { OverviewView } from "./views/overview.js";
+import { palette as colors } from "./theme.js";
+import { HomeView } from "./views/home.js";
 import { CtoView } from "./views/cto.js";
 import { TasksView } from "./views/tasks.js";
-import { ChatView } from "./views/chat.js";
 import { InboxView } from "./views/inbox.js";
-import { TeamView } from "./views/team.js";
-import { EvidenceView } from "./views/evidence.js";
 import { SettingsView } from "./views/settings.js";
 import { LogViewer } from "./views/log.js";
 import { SetupWizard } from "./setup.js";
@@ -43,7 +40,7 @@ export interface AppProps {
   onQuit?: () => void;
   /** Git branch to show. When left out, it is read from the project folder. */
   branch?: string | null;
-  /** How long the connection may stay lost before the title bar says offline instead of reconnecting. */
+  /** How long the connection may stay lost before the top bar says offline instead of reconnecting. */
   offlineAfterMs?: number;
   /** Show the one-line offer to run setup (an existing project that never ran or skipped it). */
   setupOffer?: boolean;
@@ -59,13 +56,14 @@ interface Snapshot {
   tasks: Task[];
   decisions: Decision[];
   proposedPrd: boolean;
+  channels: ChannelInfo[];
 }
 
-const EMPTY_SNAPSHOT: Snapshot = { agents: [], tasks: [], decisions: [], proposedPrd: false };
+const EMPTY_SNAPSHOT: Snapshot = { agents: [], tasks: [], decisions: [], proposedPrd: false, channels: [] };
 
-/** CTO and Chat have a message box. */
+/** Only the CTO screen has a message box. */
 function viewHasInput(view: number): boolean {
-  return view === VIEW.cto || view === VIEW.chat;
+  return view === VIEW.cto;
 }
 
 function defaultZone(view: number): Zone {
@@ -114,16 +112,14 @@ export function App(props: AppProps) {
   const win = useWindowSize();
   const cols = Math.max(20, props.size?.columns ?? (win.columns || 80));
   const rows = Math.max(6, props.size?.rows ?? (win.rows || 24));
-  const initial = props.initialView ?? VIEW.cto;
+  const initial = props.initialView ?? VIEW.home;
 
   const [view, setView] = useState(initial);
-  const [cursor, setCursor] = useState(initial);
   const [rawFocus, setFocus] = useState<Zone>(defaultZone(initial));
-  const [hintScope, setHintScopeState] = useState("cto.input");
+  const [hintScope, setHintScopeState] = useState("home");
   const setHintScope = useCallback((scope: string | null) => {
     if (scope !== null) setHintScopeState(scope);
   }, []);
-  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [tick, setTick] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
@@ -143,10 +139,9 @@ export function App(props: AppProps) {
   const [confirm, setConfirm] = useState<{ text: string; onYes: () => Promise<void> | void; quit?: boolean } | null>(null);
   const inputCount = useRef(0);
   const [inputClaims, setInputClaims] = useState(0);
-  const tabCaptured = useRef(false);
-  const setTabCaptured = useCallback((v: boolean) => {
-    tabCaptured.current = v;
-  }, []);
+  const claims = useRef<Record<ClaimKind, number>>({ tab: 0, digits: 0, level: 0 });
+  const returnView = useRef<number>(VIEW.home);
+  const latestSeq = useRef(0);
   const selection = useRef<Selection>({ taskId: null, runId: null });
   const runtimeRef = useRef<RuntimeStatus | null>(null);
   runtimeRef.current = runtime;
@@ -160,9 +155,14 @@ export function App(props: AppProps) {
   const toastMs = { ...DEFAULT_TOAST_MS, ...props.toastMs };
   const branch = useBranch(props.root, props.isGit, props.branch);
 
+  const errorRef = useRef<ErrorInfo | null>(null);
+  errorRef.current = error;
   const fail = useCallback((err: unknown) => {
-    setError(toErrorInfo(err));
-    setErrorOpen(false);
+    const info = toErrorInfo(err);
+    // The same failure arriving again (a view reloading) keeps the details open instead of closing them.
+    const same = errorRef.current !== null && errorRef.current.plain === info.plain && errorRef.current.detail === info.detail;
+    setError(info);
+    if (!same) setErrorOpen(false);
   }, []);
   const raise = useCallback((kind: ToastKind, text: string, target: ToastTarget | null = null) => {
     toastId.current += 1;
@@ -262,13 +262,18 @@ export function App(props: AppProps) {
     let stopped = false;
     api
       .subscribe(projectId, 0, (ev) => {
+        latestSeq.current = Math.max(latestSeq.current, ev.seq);
         bump();
         eventRef.current(ev);
       })
       .then(
         (s) => {
+          latestSeq.current = Math.max(latestSeq.current, s.lastSeq);
           if (stopped) s.stop();
-          else sub = s;
+          else {
+            sub = s;
+            bump();
+          }
         },
         fail,
       );
@@ -303,12 +308,13 @@ export function App(props: AppProps) {
       api.call("state.team", { projectId }),
       api.call("state.tasks", { projectId }),
       api.call("state.prd", { projectId }),
+      api.call("state.channels", { projectId }),
     ]).then(
-      ([rt, inbox, team, board, prd]) => {
+      ([rt, inbox, team, board, prd, chans]) => {
         if (cancelled) return;
         setRuntime(rt);
         const tasks = TASK_STATES.flatMap((st) => board.board[st]);
-        setSnap({ agents: team.agents, tasks, decisions: inbox.open, proposedPrd: prd.doc?.status === "proposed" });
+        setSnap({ agents: team.agents, tasks, decisions: inbox.open, proposedPrd: prd.doc?.status === "proposed", channels: chans.channels });
         // Finished work is "unseen" only if it finished after this client started.
         const done = tasks.filter((t) => t.state === "done");
         if (doneSeen.current === null) doneSeen.current = new Set(done.map((t) => t.id));
@@ -350,20 +356,15 @@ export function App(props: AppProps) {
     };
   }, [api, fail, conn === "connected"]);
 
-  // ---- layout
-  const sidebarMode: "full" | "tabs" | "none" = sidebarHidden ? "none" : cols >= 90 ? "full" : cols >= 60 ? "tabs" : "none";
-  const sidebarW = cols >= 120 ? 26 : 24;
+  // ---- layout: top bar, rule, the screen, then the notice rows and the one hint bar
   const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 6).slice(0, 3) : [];
   const errorRows = error ? 1 + detailLines.length : 0;
   const offerRows = offer ? 1 : 0;
-  const contentH = Math.max(3, rows - 2 - errorRows - offerRows);
-  const paneOuterW = sidebarMode === "full" ? cols - sidebarW : cols;
-  const paneOuterH = sidebarMode === "tabs" ? contentH - 1 : contentH;
-  const bodyWidth = Math.max(8, paneOuterW - 4);
-  const bodyHeight = Math.max(1, paneOuterH - 2);
+  const bodyHeight = Math.max(2, rows - 3 - errorRows - offerRows);
+  const bodyWidth = Math.max(8, cols - 2);
 
   // ---- focus
-  const focus: Zone = rawFocus === "sidebar" && sidebarMode === "none" ? "main" : rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
+  const focus: Zone = rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
   const overlay = help || confirm !== null || logRun !== null || paletteOpen || prdOpen || wizard;
   const modal = overlay || offer;
 
@@ -376,13 +377,22 @@ export function App(props: AppProps) {
       setInputClaims(inputCount.current);
     };
   }, []);
+  const claim = useCallback((kind: ClaimKind) => {
+    claims.current[kind] += 1;
+    return () => {
+      claims.current[kind] -= 1;
+    };
+  }, []);
+  const latest = useCallback(() => latestSeq.current, []);
   const setSelection = useCallback((sel: Partial<Selection>) => {
     selection.current = { ...selection.current, ...sel };
   }, []);
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const openView = useCallback((i: number, zone?: Zone) => {
-    const v = ((i % VIEW_NAMES.length) + VIEW_NAMES.length) % VIEW_NAMES.length;
+    const v = Math.min(Math.max(0, i), VIEW.settings);
+    if (v === VIEW.settings && viewRef.current !== VIEW.settings) returnView.current = viewRef.current;
     setView(v);
-    setCursor(v);
     setFocus(zone ?? defaultZone(v));
   }, []);
   const goto = useCallback(
@@ -406,24 +416,15 @@ export function App(props: AppProps) {
       return next.length === u.length ? u : next;
     });
   }, []);
-  // The sidebar cursor follows the open view whenever the sidebar is not the focus.
-  useEffect(() => {
-    if (focus !== "sidebar") setCursor(view);
-  }, [focus, view]);
 
-  const dismissNotices = () => {
-    setError(null);
-    if (shownId !== null) setToasts((q) => removeToast(q, shownId));
-  };
   const back = useCallback(() => {
-    if (sidebarMode !== "none") {
-      setCursor(view);
-      setFocus("sidebar");
-    } else {
-      setError(null);
-      setToasts((q) => (q.length > 0 ? removeToast(q, currentToast(q)!.id) : q));
+    if (viewRef.current === VIEW.settings) {
+      openView(returnView.current);
+      return;
     }
-  }, [sidebarMode, view]);
+    setError(null);
+    setToasts((q) => (q.length > 0 ? removeToast(q, currentToast(q)!.id) : q));
+  }, [openView]);
 
   const attention = useMemo(
     () => deriveAttention({ agents: snap.agents, tasks: snap.tasks, decisions: snap.decisions, runtime, proposedPrd: snap.proposedPrd, unseenDone: unseen }),
@@ -434,7 +435,7 @@ export function App(props: AppProps) {
   const toastTarget = (target: ToastTarget): Omit<JumpTarget, "nonce"> => {
     if (target.kind === "decision") return { view: VIEW.inbox, decisionId: target.decisionId, focus: "main" };
     if (target.kind === "task") return { view: VIEW.tasks, taskId: target.taskId, focus: "main" };
-    return { view: VIEW.cto };
+    return { view: VIEW.cto, channelKey: "cto::" };
   };
 
   // ---- actions
@@ -447,8 +448,8 @@ export function App(props: AppProps) {
       const a = active.find((r) => r.taskId === sel.taskId);
       if (a) return a.runId;
       const detail = await api.call("state.task", { projectId, taskId: sel.taskId });
-      const latest = [...detail.runs].sort((x, y) => y.createdAt.localeCompare(x.createdAt))[0];
-      return latest ? latest.id : null;
+      const latestRun = [...detail.runs].sort((x, y) => y.createdAt.localeCompare(x.createdAt))[0];
+      return latestRun ? latestRun.id : null;
     }
     if (active.length === 1) return active[0]!.runId;
     return null;
@@ -495,6 +496,8 @@ export function App(props: AppProps) {
     const v = viewOfAction(id);
     if (v !== null) return goto(v);
     switch (id) {
+      case "chat":
+        return jumpTo({ view: VIEW.cto, channelKey: "project::" });
       case "approve":
         api.call("state.prd", { projectId }).then((r) => {
           if (r.doc?.status === "proposed") approve(r.doc);
@@ -531,11 +534,6 @@ export function App(props: AppProps) {
           else fail({ plain: "No run to show. Open a task with a run first, or wait for a run to start.", detail: null });
         }, fail);
         return;
-      case "sidebar":
-        if (cols < 60) return notify("The sidebar is hidden on narrow terminals. Use ctrl+p to switch views.");
-        setSidebarHidden((h) => !h);
-        setFocus((f) => (f === "sidebar" ? "main" : f));
-        return;
       case "help":
         setHelp(true);
         return;
@@ -560,11 +558,7 @@ export function App(props: AppProps) {
     else if (entry.action) run(entry.action);
   };
 
-  const cycleFocus = (dir: 1 | -1) => {
-    const zones: Zone[] = [...(sidebarMode !== "none" ? (["sidebar"] as Zone[]) : []), "main", ...(viewHasInput(view) ? (["input"] as Zone[]) : [])];
-    const i = Math.max(0, zones.indexOf(focus));
-    setFocus(zones[(i + dir + zones.length) % zones.length]!);
-  };
+  const typing = focus === "input" || inputClaims > 0;
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
@@ -585,7 +579,7 @@ export function App(props: AppProps) {
       return;
     }
     if (help) {
-      if (key.escape || input === "?") setHelp(false);
+      if (key.escape || input === "?" || input === "q") setHelp(false);
       return;
     }
     if (offer) {
@@ -599,6 +593,7 @@ export function App(props: AppProps) {
       return;
     }
     if (paletteOpen || logRun !== null || prdOpen || wizard) return; // they own their keys
+    // Keys that work everywhere, even while typing.
     if (key.ctrl && (input === "p" || input === "k")) return setPaletteOpen(true);
     if (key.ctrl && input === "n") return goNextNeed();
     if (key.ctrl && input === "g") {
@@ -609,19 +604,31 @@ export function App(props: AppProps) {
       return;
     }
     if (key.ctrl && input === "e") return setErrorOpen((o) => !o);
+    // shift+tab goes to the previous tab, also from a message box.
+    if (key.tab && key.shift) {
+      if (claims.current.tab > 0) return;
+      return goto((viewRef.current + TAB_COUNT - 1) % TAB_COUNT);
+    }
+    // Everything below is for when no text box has focus.
+    if (typing) return;
+    if (key.ctrl || key.meta) return;
     if (key.tab) {
-      if (tabCaptured.current && !key.shift) return;
-      return cycleFocus(key.shift ? -1 : 1);
+      if (claims.current.tab > 0) return;
+      return goto(viewRef.current >= TAB_COUNT ? returnView.current : (viewRef.current + 1) % TAB_COUNT);
     }
-    if (focus === "sidebar") {
-      if (key.upArrow) setCursor((c) => Math.max(0, c - 1));
-      else if (key.downArrow) setCursor((c) => Math.min(VIEW_NAMES.length - 1, c + 1));
-      else if (key.return || key.rightArrow) openView(cursor);
-      else if (key.escape) dismissNotices();
-      else if (input === "?") setHelp(true);
-      return;
+    if (/^[1-4]$/.test(input)) {
+      if (claims.current.digits > 0) return;
+      return goto(Number(input) - 1);
     }
-    if (focus === "main" && inputCount.current === 0 && input === "?" && !key.ctrl && !key.meta) setHelp(true);
+    if (input === ",") return goto(VIEW.settings);
+    if (input === "?") return setHelp(true);
+    if (input === ":") return setPaletteOpen(true);
+    if (input === "n") return goNextNeed();
+    if (input === "q") {
+      if (claims.current.level > 0) return; // the screen closes what it has open first
+      if (viewRef.current === VIEW.settings) return back();
+      return quit();
+    }
   });
 
   const ctx: AppCtx = useMemo(
@@ -640,8 +647,8 @@ export function App(props: AppProps) {
       focus,
       setFocus,
       back,
+      claim,
       setHintScope,
-      setTabCaptured,
       run,
       runtime,
       providers,
@@ -657,132 +664,115 @@ export function App(props: AppProps) {
       openDecisions: snap.decisions,
       teamAgents: snap.agents,
       tasks: snap.tasks,
+      channels: snap.channels,
+      latestSeq: latest,
       jump,
       jumpTo,
       markSeen,
     }),
-    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, bodyWidth, focus, back, setTabCaptured, run, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, attention, needs, snap, jump, jumpTo, markSeen],
+    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, bodyWidth, focus, back, claim, run, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, attention, needs, snap, latest, jump, jumpTo, markSeen],
   );
   const overlayCtx = useMemo(() => ({ ...ctx, modal: false, focus: "main" as Zone }), [ctx]);
 
-  const viewEl = [
-    <CtoView key="v0" />,
-    <OverviewView key="v1" />,
-    <TasksView key="v2" />,
-    <InboxView key="v3" />,
-    <TeamView key="v4" />,
-    <ChatView key="v5" />,
-    <EvidenceView key="v6" />,
-    <SettingsView key="v7" />,
-  ][view];
+  const viewEl = [<HomeView key="v0" />, <CtoView key="v1" />, <TasksView key="v2" />, <InboxView key="v3" />, <SettingsView key="v4" />][view];
 
   const paused = runtime?.paused === true;
-  const badges = { tasks: snap.tasks.filter((t) => t.state === "working").length, inbox: snap.decisions.length };
+  const badges = { tasks: snap.tasks.filter((t) => t.state === "working").length, inbox: snap.decisions.length + (snap.proposedPrd ? 1 : 0) };
   const cardMode = shown !== null && cols >= 70 && rows >= 20;
-  const scope = confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
-  const typing = focus === "input" || inputClaims > 0;
-  const hintText = footerHints(scope, cols - 4, { needs: needs.length, toast: shown?.target != null, typing });
-  const paneBorder = modal || focus === "main";
+  const scope = confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : hintScope;
+  const hintText = footerHints(scope, cols - 2, { needs: needs.length, toast: shown?.target != null, typing, prd: snap.proposedPrd });
   const showView = !overlay;
+
+  if (wizard) {
+    return (
+      <Ctx.Provider value={ctx}>
+        <Box flexDirection="column" width={cols} height={rows}>
+          <SetupWizard
+            api={api}
+            projectId={projectId}
+            root={props.root}
+            isGit={props.isGit}
+            width={cols}
+            height={rows}
+            onCancel={() => setWizard(false)}
+            onFinish={() => {
+              setWizard(false);
+              setTick((n) => n + 1);
+              goto(VIEW.cto, "input");
+              notify("Setup saved. Tell the CTO what you want to build.");
+            }}
+          />
+        </Box>
+      </Ctx.Provider>
+    );
+  }
 
   return (
     <Ctx.Provider value={ctx}>
       <Box flexDirection="column" width={cols} height={rows}>
-        <TitleBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} />
-        <Box flexDirection="column" width={cols} height={rows - 2} flexShrink={0} overflow="hidden">
-          <Box height={contentH} flexShrink={0} flexDirection={sidebarMode === "tabs" ? "column" : "row"}>
-            {sidebarMode === "full" ? <Sidebar width={sidebarW} height={contentH} cursor={cursor} focused={focus === "sidebar"} badges={badges} attention={attention} ctoBusy={runtime?.ctoBusy === true} /> : null}
-            {sidebarMode === "tabs" ? <TabLine width={cols} cursor={cursor} focused={focus === "sidebar"} badges={badges} /> : null}
-            <Box
-              borderStyle={borderStyle()}
-              borderColor={paneBorder ? colors.accent : colors.muted}
-              {...(paneBorder ? {} : { borderDimColor: true })}
-              paddingX={1}
-              flexDirection="column"
-              width={paneOuterW}
-              height={paneOuterH}
-              flexShrink={0}
-              overflow="hidden"
-            >
-              <Box flexDirection="column" height={bodyHeight} width={bodyWidth} flexShrink={0} display={showView ? "flex" : "none"} overflow="hidden">
-                {viewEl}
-              </Box>
-              {confirm ? <ConfirmCard text={confirm.text} width={bodyWidth} height={bodyHeight} /> : null}
-              {help ? (
-                <Ctx.Provider value={overlayCtx}>
-                  <HelpModal width={bodyWidth} height={bodyHeight} />
-                </Ctx.Provider>
-              ) : null}
-              {prdOpen ? (
-                <Ctx.Provider value={overlayCtx}>
-                  <PrdViewer onClose={() => setPrdOpen(false)} onApprove={approve} />
-                </Ctx.Provider>
-              ) : null}
-              {logRun !== null ? (
-                <Ctx.Provider value={overlayCtx}>
-                  <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
-                </Ctx.Provider>
-              ) : null}
-              {wizard ? (
-                <SetupWizard
-                  api={api}
-                  projectId={projectId}
-                  root={props.root}
-                  isGit={props.isGit}
-                  width={bodyWidth}
-                  height={bodyHeight}
-                  onCancel={() => setWizard(false)}
-                  onFinish={() => {
-                    setWizard(false);
-                    setTick((n) => n + 1);
-                    goto(VIEW.cto, "input");
-                    notify("Setup saved. Tell the CTO what you want to build.");
-                  }}
-                />
-              ) : null}
-              {paletteOpen ? (
-                <Ctx.Provider value={overlayCtx}>
-                  <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} />
-                </Ctx.Provider>
-              ) : null}
-              {cardMode && shown ? (
-                <Box position="absolute" bottom={0} right={1}>
-                  <ToastCard toast={shown} width={bodyWidth} />
-                </Box>
-              ) : null}
-            </Box>
+        <TopBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} view={view} badges={badges} />
+        <Rule width={cols} />
+        <Box flexDirection="column" width={cols} height={bodyHeight} flexShrink={0} paddingX={1} overflow="hidden">
+          <Box flexDirection="column" height={bodyHeight} width={bodyWidth} flexShrink={0} display={showView ? "flex" : "none"} overflow="hidden">
+            {viewEl}
           </Box>
-          {offer ? (
-            <Box height={1} flexShrink={0} paddingX={1}>
-              <SafeText color={colors.attention} bold>
-                {"Set up engines for this project?"}
-              </SafeText>
-              <Text dimColor>{"  enter to start, esc to skip"}</Text>
-            </Box>
+          {confirm ? <ConfirmCard text={confirm.text} width={bodyWidth} height={bodyHeight} /> : null}
+          {help ? (
+            <Ctx.Provider value={overlayCtx}>
+              <HelpModal width={bodyWidth} height={bodyHeight} />
+            </Ctx.Provider>
           ) : null}
-          {error ? (
-            <Box flexDirection="column" height={errorRows} flexShrink={0} paddingX={1}>
-              <Box height={1}>
-                <SafeText color={colors.error}>{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (ctrl+e: details)" : ""}`}</SafeText>
-              </Box>
-              {detailLines.map((l, i) => (
-                <Box key={i} height={1}>
-                  <SafeText color={colors.error} dimColor>{`  ${l}`}</SafeText>
-                </Box>
-              ))}
+          {prdOpen ? (
+            <Ctx.Provider value={overlayCtx}>
+              <PrdViewer onClose={() => setPrdOpen(false)} onApprove={approve} />
+            </Ctx.Provider>
+          ) : null}
+          {logRun !== null ? (
+            <Ctx.Provider value={overlayCtx}>
+              <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
+            </Ctx.Provider>
+          ) : null}
+          {paletteOpen ? (
+            <Ctx.Provider value={overlayCtx}>
+              <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} />
+            </Ctx.Provider>
+          ) : null}
+          {cardMode && shown ? (
+            <Box position="absolute" bottom={0} right={1}>
+              <ToastCard toast={shown} width={bodyWidth} />
             </Box>
           ) : null}
         </Box>
-        <Box height={1} flexShrink={0} paddingX={2}>
+        {offer ? (
+          <Box height={1} flexShrink={0} paddingX={1}>
+            <SafeText color={colors.attention} bold>
+              {"Set up engines for this project?"}
+            </SafeText>
+            <Text dimColor>{"  enter to start, esc to skip"}</Text>
+          </Box>
+        ) : null}
+        {error ? (
+          <Box flexDirection="column" height={errorRows} flexShrink={0} paddingX={1}>
+            <Box height={1}>
+              <SafeText color={colors.error}>{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (ctrl+e: details)" : ""}`}</SafeText>
+            </Box>
+            {detailLines.map((l, i) => (
+              <Box key={i} height={1}>
+                <SafeText color={colors.error} dimColor>{`  ${l}`}</SafeText>
+              </Box>
+            ))}
+          </Box>
+        ) : null}
+        <Box height={1} flexShrink={0} paddingX={1}>
           {shown && !cardMode ? (
             <>
-              <SafeText color={shown.kind === "needs_you" ? colors.attention : shown.kind === "error" ? colors.error : shown.kind === "finished" ? colors.done : colors.accent} bold={shown.kind === "needs_you"}>
+              <SafeText color={shown.kind === "needs_you" ? colors.attention : shown.kind === "error" ? colors.error : shown.kind === "finished" ? colors.done : colors.muted} bold={shown.kind === "needs_you"}>
                 {shown.text}
               </SafeText>
               {shown.target ? <Text dimColor>{"  ctrl+g go"}</Text> : null}
             </>
           ) : (
-            <SafeText dimColor>{wizard || offer ? "" : hintText}</SafeText>
+            <SafeText dimColor>{offer ? "" : hintText}</SafeText>
           )}
         </Box>
       </Box>

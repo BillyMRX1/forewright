@@ -613,6 +613,7 @@ describe("setup in the app", () => {
     assert.ok(written(api)["setup.completedAt"], "saved through settings.set");
     assert.doesNotMatch(h.frame(), /setup done/);
     assert.match(h.frame(), /Tell the CTO what you want to build/, "back in the CTO view");
+    assert.match(h.frame(), /to: CTO/);
   });
 
   it("Esc on the offer records skippedAt once and the view works afterwards", async () => {
@@ -630,7 +631,7 @@ describe("setup in the app", () => {
 
   it("bare letters do nothing while the offer is shown, and the message box is not typed into", async () => {
     const api = fresh();
-    const { h } = await mount({ api, setupOffer: true });
+    const { h } = await mount({ api, setupOffer: true, view: VIEW.cto });
     await h.send("hello");
     await h.send("?");
     assert.match(h.frame(), /Set up engines for this project\?/);
@@ -647,7 +648,7 @@ describe("setup in the app", () => {
 
   it("/setup and the palette entry run the wizard again, and Esc on page 1 closes it", async () => {
     const api = fresh();
-    const { h } = await mount({ api });
+    const { h } = await mount({ api, view: VIEW.cto });
     await h.send("/setup");
     await enter(h);
     await h.settle(150);
@@ -663,8 +664,20 @@ describe("setup in the app", () => {
     assert.equal(setCalls(api).length, 0, "leaving changes nothing");
   });
 
-  it("keys inside the wizard do not leak to the app (no ? help, no view keys)", async () => {
+  it("the wizard takes the whole screen: no top bar, no tabs", async () => {
     const { h } = await mount({ api: fresh() });
+    await ctrl(h, "p");
+    await h.send("setup");
+    await enter(h);
+    await h.settle(150);
+    assert.match(h.frame(), /setup 1\/6/);
+    assert.doesNotMatch(h.frame(), /1 Home|2 CTO/);
+    await h.send("3");
+    assert.doesNotMatch(h.frame(), /TASKS/);
+  });
+
+  it("keys inside the wizard do not leak to the app (no ? help, no view keys)", async () => {
+    const { h } = await mount({ api: fresh(), view: VIEW.cto });
     await h.send("/setup");
     await enter(h);
     await h.settle(150);
@@ -691,7 +704,7 @@ describe("setup in the app", () => {
 
   it("after setup the CTO view has the message box focused and the arrows and Enter pick an example brief", async () => {
     const api = fresh();
-    const { h } = await mount({ api, cols: 120, rows: 36 });
+    const { h } = await mount({ api, cols: 120, rows: 36, view: VIEW.cto });
     assert.match(h.frame(), /Try one of these/);
     await down(h);
     await enter(h);

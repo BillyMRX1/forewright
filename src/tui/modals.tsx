@@ -54,7 +54,7 @@ export function PrdViewer({ onClose, onApprove }: { onClose: () => void; onAppro
   const { data } = useLoad(() => ctx.api.call("state.prd", { projectId: ctx.projectId }));
   const doc = data?.doc ?? null;
   useInput((input, key) => {
-    if (key.escape || input === "d") onClose();
+    if (key.escape || input === "d" || input === "q") onClose();
     else if (input === "a" && doc?.status === "proposed") onApprove(doc);
   });
   const w = ctx.bodyWidth;

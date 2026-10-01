@@ -5,34 +5,31 @@ import { VIEW, closeAll, ctrl, down, enter, esc, hints, lines, mount, up } from 
 
 afterEach(closeAll);
 
-/** Esc to the sidebar, so further Esc presses dismiss notices. */
-const toSidebar = async (h: Parameters<typeof esc>[0]) => {
-  await esc(h);
-};
 
 describe("notices", () => {
   it("a needs-you notice is a rounded card at the bottom right of the main pane, and it expires", async () => {
-    const { h, api } = await mount({ cols: 100, rows: 30, view: VIEW.overview, toastMs: { needs_you: 500 } });
+    const { h, api } = await mount({ cols: 100, rows: 30, view: VIEW.home, toastMs: { needs_you: 500 } });
     api.emitEvent("decision.requested", "decision", "dec9", { title: "Pick a color" }, "agent:a1");
     await h.settle(100);
     const l = lines(h);
     const row = l.findIndex((x) => /Needs you: Pick a color/.test(x));
     assert.ok(row > 0, "notice is not on screen");
-    assert.match(l[row - 1]!, /╭─+╮ │$/, "card top border sits against the right edge of the pane");
-    assert.match(l[row]!, /│ Needs you: Pick a color\s+│ │$/);
+    assert.match(l[row - 1]!, /╭─+╮$/, "card top border sits at the right edge of the screen");
+    assert.equal([...l[row - 1]!].length, 99, "one column of margin on the right");
+    assert.match(l[row]!, /│ Needs you: Pick a color\s+│$/);
     assert.match(l[row + 1]!, /ctrl\+g go there/);
     assert.ok(row > l.length / 2, "card is in the lower half");
     await h.settle(700);
-    assert.doesNotMatch(h.frame(), /Pick a color/);
+    assert.doesNotMatch(h.frame(), /Needs you: Pick a color/);
     assert.match(hints(h), /\? help/);
   });
 
   it("replaces the hint line on small terminals", async () => {
-    const { h, api } = await mount({ cols: 60, rows: 20, view: VIEW.overview, toastMs: { needs_you: 500 } });
+    const { h, api } = await mount({ cols: 60, rows: 20, view: VIEW.home, toastMs: { needs_you: 500 } });
     api.emitEvent("decision.requested", "decision", "dec9", { title: "Pick a color" }, "agent:a1");
     await h.settle(100);
     assert.match(hints(h), /Needs you: Pick a color\s+ctrl\+g go/);
-    assert.doesNotMatch(h.frame(), /╭[─]+╮\s*│\n.*Pick a color/);
+    assert.doesNotMatch(h.frame(), /╭[─]+╮\s*\n.*Pick a color/);
     await h.settle(700);
     assert.match(hints(h), /\? help/);
   });
@@ -40,32 +37,32 @@ describe("notices", () => {
   it("Ctrl+G jumps to the decision in the Inbox with it selected", async () => {
     const api = new FakeClient();
     api.openDecisions.push({ ...api.data.decision, id: "dec9", title: "Pick a color" });
-    const { h } = await mount({ view: VIEW.overview, api });
+    const { h } = await mount({ view: VIEW.home, api });
     api.emitEvent("decision.requested", "decision", "dec9", { title: "Pick a color" }, "agent:a1");
     await h.settle(100);
     await ctrl(h, "g");
     await h.settle(250);
-    assert.match(lines(h)[2]!, /Inbox · 2 open/);
+    assert.match(h.frame(), /Open 3/);
     assert.match(h.frame(), /▸ Pick a color/);
     assert.doesNotMatch(h.frame(), /ctrl\+g go there/);
   });
 
   it("Ctrl+G on a finished task opens its details", async () => {
-    const { h, api } = await mount({ view: VIEW.overview });
+    const { h, api } = await mount({ view: VIEW.home });
     api.emitEvent("task.completed", "task", "t4");
     await h.settle(100);
     assert.match(h.frame(), /T-4 finished: Write tests/);
     await ctrl(h, "g");
     await h.settle(250);
-    assert.match(lines(h)[2]!, /T-4 · Write tests\s+● Review/);
+    assert.match(h.frame(), /Tasks > T-4 Write tests/);
+    assert.match(h.frame(), /◐ Review/);
   });
 
   it("raises notices for failed runs, blocked tasks, CTO replies and proposed PRDs", async () => {
-    const { h, api } = await mount({ view: VIEW.overview });
+    const { h, api } = await mount({ view: VIEW.home });
     api.emitEvent("run.finished", "run", "run-abcdef12", { state: "failed" });
     await h.settle(100);
     assert.match(h.frame(), /Run for T-2 failed/);
-    await toSidebar(h);
     await esc(h);
     api.emitEvent("run.finished", "run", "run-x", { state: "succeeded" });
     api.emitEvent("task.blocked", "task", "t5", { reason: "failed_verification" });
@@ -82,7 +79,7 @@ describe("notices", () => {
   });
 
   it("does not raise notices for dependency blocks or human-input blocks", async () => {
-    const { h, api } = await mount({ view: VIEW.overview });
+    const { h, api } = await mount({ view: VIEW.home });
     api.emitEvent("task.blocked", "task", "t3", { reason: "dependency" });
     api.emitEvent("task.blocked", "task", "t2", { reason: "human_input" });
     await h.settle(100);
@@ -91,10 +88,9 @@ describe("notices", () => {
   });
 
   it("queues at most 8 and shows one at a time, the most urgent first", async () => {
-    const { h, api } = await mount({ view: VIEW.overview });
+    const { h, api } = await mount({ view: VIEW.home });
     for (let i = 0; i < 12; i++) api.emitEvent("decision.requested", "decision", `d${i}`, { title: `Question ${i}` }, "agent:a1");
     await h.settle(100);
-    await toSidebar(h);
     const seen: string[] = [];
     for (let i = 0; i < 12; i++) {
       const m = /Needs you: (Question \d+)/.exec(h.frame());
@@ -107,68 +103,84 @@ describe("notices", () => {
     assert.equal(seen.at(-1), "Question 11");
   });
 
-  it("Esc in the sidebar dismisses the current notice", async () => {
-    const { h, api } = await mount({ view: VIEW.overview });
-    api.emitEvent("message.posted", "message", "m9", { channel: "cto" }, "agent:a1");
+  it("Esc at the top of a screen dismisses the current notice", async () => {
+    const { h, api } = await mount({ view: VIEW.home });
+    api.emitEvent("decision.requested", "decision", "dec9", { title: "Pick a color" }, "agent:a1");
     await h.settle(100);
-    assert.match(h.frame(), /CTO replied/);
-    await esc(h); // main -> sidebar
-    await esc(h); // dismiss
-    assert.doesNotMatch(h.frame(), /CTO replied/);
+    assert.match(h.frame(), /Needs you: Pick a color/);
+    await esc(h);
+    assert.doesNotMatch(h.frame(), /Needs you: Pick a color/);
   });
 });
 
-describe("ctrl+n, next needs-you", () => {
+describe("n and ctrl+n, next needs-you", () => {
   it("cycles decisions, then the PRD, then back", async () => {
-    const { h } = await mount({ view: VIEW.overview });
+    const { h } = await mount({ view: VIEW.home });
+    assert.match(hints(h), /n needs you \(2\)/);
+    await h.send("n");
+    await h.settle(200);
+    assert.match(h.frame(), /Open 2/);
+    assert.match(h.frame(), /▸ Which rounding rule\?/);
+    await h.send("n");
+    await h.settle(200);
+    assert.match(h.frame(), /to: CTO/);
+    assert.match(hints(h), /a approve prd/); // focus is on the conversation so a and r work
+    await h.send("n");
+    await h.settle(200);
+    assert.match(h.frame(), /Open 2/);
+  });
+
+  it("works from a message box with ctrl+n, where a bare n is just a letter", async () => {
+    const { h } = await mount({ view: VIEW.cto });
+    await h.send("n");
+    assert.match(h.frame(), /›\s+n/);
     assert.match(hints(h), /ctrl\+n needs you \(2\)/);
     await ctrl(h, "n");
     await h.settle(200);
-    assert.match(lines(h)[2]!, /Inbox · 1 open/);
-    assert.match(h.frame(), /▸ Which rounding rule\?/);
-    await ctrl(h, "n");
-    await h.settle(200);
-    assert.match(lines(h)[2]!, /CTO · Claude/);
-    assert.match(hints(h), /approve prd/); // focus is on the conversation so a and d work
-    await ctrl(h, "n");
-    await h.settle(200);
-    assert.match(lines(h)[2]!, /Inbox · 1 open/);
-  });
-
-  it("works from a message box", async () => {
-    const { h } = await mount();
-    await ctrl(h, "n");
-    await h.settle(200);
-    assert.match(lines(h)[2]!, /Inbox/);
+    assert.match(h.frame(), /Open 2/);
   });
 
   it("visits blocked tasks after the decisions and PRD, and says so when nothing waits", async () => {
     const api = new FakeClient();
     api.openDecisions = [];
     api.data.tasks.find((t) => t.id === "t5")!.blockReason = "quota";
-    const { h } = await mount({ view: VIEW.overview, api });
-    await ctrl(h, "n"); // PRD
+    const { h } = await mount({ view: VIEW.home, api });
+    await h.send("n"); // PRD
     await h.settle(200);
-    assert.match(lines(h)[2]!, /CTO · Claude/);
-    await ctrl(h, "n"); // blocked task T-5
+    assert.match(h.frame(), /to: CTO/);
+    await esc(h);
+    await h.send("n"); // blocked task T-5
     await h.settle(250);
-    assert.match(lines(h)[2]!, /T-5 · Write README/);
-    assert.match(h.frame(), /Blocked/);
+    assert.match(h.frame(), /Tasks > T-5 Write README/);
+    assert.match(h.frame(), /! Waiting for the provider usage limit to reset\./);
     const calm = new FakeClient();
     calm.openDecisions = [];
     calm.proposedPrd = false;
-    const c = await mount({ view: VIEW.overview, api: calm });
-    await ctrl(c.h, "n");
+    const c = await mount({ view: VIEW.home, api: calm });
+    await c.h.send("n");
     await c.h.settle(100);
     assert.match(c.h.frame(), /Nothing needs you right now/);
-    assert.doesNotMatch(hints(c.h), /ctrl\+n/);
+    assert.doesNotMatch(hints(c.h), /needs you/);
+  });
+
+  it("blocked tasks appear in the NEEDS YOU strip on Home, and Enter opens them", async () => {
+    const api = new FakeClient();
+    api.openDecisions = [];
+    api.proposedPrd = false;
+    api.data.tasks.find((t) => t.id === "t5")!.blockReason = "failed_verification";
+    const { h } = await mount({ view: VIEW.home, api });
+    assert.match(h.frame(), /NEEDS YOU \(1\)/);
+    assert.match(h.frame(), /Blocked\s+T-5 Write README/);
+    await enter(h);
+    await h.settle(250);
+    assert.match(h.frame(), /Tasks > T-5 Write README/);
   });
 });
 
-describe("attention in the sidebar", () => {
-  it("marks finished work as done until the agent is looked at in Team", async () => {
+describe("attention on Home", () => {
+  it("marks finished work as done until the worker is looked at", async () => {
     const api = new FakeClient();
-    const { h } = await mount({ cols: 100, rows: 30, view: VIEW.tasks, api });
+    const { h } = await mount({ cols: 120, rows: 36, view: VIEW.home, api });
     api.noRuns = true;
     const t2 = api.data.tasks.find((t) => t.id === "t2")!;
     t2.state = "done";
@@ -176,26 +188,26 @@ describe("attention in the sidebar", () => {
     api.data.agents[1]!.currentTaskId = null;
     api.emitEvent("task.completed", "task", "t2");
     await h.settle(500);
-    assert.match(h.frame(), /✓ Bo|● Bo\s+done/);
-    // open Team and look at Bo
+    assert.match(lines(h).find((l) => /^   Bo\b/.test(l)) ?? "", /Bo\s+Codex.*✓/);
+    // open the worker and look at it
     await ctrl(h, "p");
     await h.send("Bo (");
     await enter(h);
     await h.settle(300);
-    assert.doesNotMatch(h.frame(), /● Bo\s+done/);
-    assert.match(h.frame(), /○ Bo\s+idle/);
+    await esc(h);
+    assert.match(lines(h).find((l) => /^   Bo\b/.test(l)) ?? "", /Bo\s+Codex.*○/);
   });
 
-  it("shows a working agent with its task, a blocked agent in red words, and keeps the order urgent first", async () => {
+  it("shows a working worker with its task, a blocked worker with ✗, and keeps the order urgent first", async () => {
     const api = new FakeClient();
     api.data.tasks.find((t) => t.id === "t5")!.assigneeAgentId = "a3";
     api.data.tasks.find((t) => t.id === "t5")!.blockReason = "failed_verification";
-    const { h } = await mount({ cols: 100, rows: 30, view: VIEW.overview, api });
+    const { h } = await mount({ cols: 120, rows: 36, view: VIEW.home, api });
     const f = lines(h);
-    const order = ["Ada", "Cy", "Bo"].map((n) => f.findIndex((l) => new RegExp(`[◉■◐○] ${n}\\s`).test(l)));
-    assert.ok(order.every((i) => i > 0), `agents missing: ${order.join(",")}`);
+    const order = ["Ada", "Cy", "Bo"].map((n) => f.findIndex((l) => new RegExp(`^   ${n}\\s`).test(l)));
+    assert.ok(order.every((i) => i > 0), `workers missing: ${order.join(",")}`);
     assert.ok(order[0]! < order[1]! && order[1]! < order[2]!, "needs you, then blocked, then working");
-    assert.match(h.frame(), /■ Cy\s+blocked/);
+    assert.match(f[order[1]!]!, /Cy\s+Claude.*✗/);
   });
 });
 
@@ -213,7 +225,7 @@ describe("reconnecting", () => {
   });
 
   it("engine events raise fallback, restored and waiting notices", async () => {
-    const { h, api } = await mount({ cols: 140, rows: 30, view: VIEW.overview, toastMs: { info: 300 } });
+    const { h, api } = await mount({ cols: 140, rows: 30, view: VIEW.home, toastMs: { info: 300 } });
     api.emitEvent("engine.fallback", "agent", "a1", { agentId: "a1", role: "cto", from: "claude", to: "codex", until: "2026-10-01T15:00:00.000Z" });
     await h.settle(100);
     assert.match(h.frame(), /Claude usage limit reached\. CTO now on/);

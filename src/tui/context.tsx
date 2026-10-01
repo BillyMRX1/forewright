@@ -4,13 +4,29 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useInput, type Key } from "ink";
 import type { ClientApi } from "./client.js";
 import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
-import type { Decision, Task } from "../core/store-types.js";
+import type { Decision, MessageChannel, Task } from "../core/store-types.js";
 import type { AgentAttention, NeedItem } from "./attention.js";
 import type { ActionId } from "./commands.js";
 import { VIEW } from "./format.js";
 
-/** Where the keyboard is: the navigation sidebar, the view in the main pane, or a message box. */
-export type Zone = "sidebar" | "main" | "input";
+/** Where the keyboard is: the view itself, or a message box in it. */
+export type Zone = "main" | "input";
+
+/** A place a message can go: the CTO, the project channel, a task thread or one agent. */
+export interface ChannelInfo {
+  channel: MessageChannel;
+  taskId: string | null;
+  agentId: string | null;
+  label: string;
+  lastAt: string | null;
+}
+
+export function channelKey(c: Pick<ChannelInfo, "channel" | "taskId" | "agentId">): string {
+  return `${c.channel}:${c.taskId ?? ""}:${c.agentId ?? ""}`;
+}
+
+/** What a view can ask the shell to leave to it. "tab" and "digits" keep tab/shift+tab and 1-4 from switching tabs; "level" means the view has something open that q and esc close first. */
+export type ClaimKind = "tab" | "digits" | "level";
 
 export interface Selection {
   taskId: string | null;
@@ -23,7 +39,11 @@ export interface JumpTarget {
   decisionId?: string;
   taskId?: string;
   agentId?: string;
-  /** Where focus lands. Defaults to the message box in CTO and Chat, the main pane elsewhere. */
+  /** Opens the CTO view addressed to this recipient (see channelKey). */
+  channelKey?: string;
+  /** Opens a task's detail on this sub-tab (0 Overview, 1 Run log, 2 Checks, 3 Diff). */
+  taskTab?: number;
+  /** Where focus lands. Defaults to the message box in the CTO view, the main pane elsewhere. */
   focus?: Zone;
   /** Leave any text box so single-letter keys of the view work. Shorthand for focus: "main". */
   blurInput?: boolean;
@@ -48,10 +68,14 @@ export interface AppCtx {
   narrow: boolean;
   focus: Zone;
   setFocus(zone: Zone): void;
-  /** Leaves the view for the sidebar (or clears the notice when the sidebar is hidden). */
+  /** Esc at the top of a view: closes Settings, otherwise dismisses the error line or the notice. */
   back(): void;
-  /** While true, Tab belongs to the message box (it completes a slash command) instead of moving focus. */
-  setTabCaptured(captured: boolean): void;
+  /** Takes tab/shift+tab, the digits or the "something is open" level away from the shell until released. */
+  claim(kind: ClaimKind): () => void;
+  /** Where every place a message can go is listed. */
+  channels: ChannelInfo[];
+  /** Highest event number seen so far, for reading the latest events. */
+  latestSeq(): number;
   /** Tells the hint line which keys the view offers right now. Null leaves it to someone else. */
   setHintScope(scope: string | null): void;
   /** Runs a command, like the palette or a slash command does. */
@@ -79,10 +103,16 @@ export interface AppCtx {
   markSeen(sel: { taskId?: string; agentId?: string }): void;
 }
 
+/** Keeps a claim for as long as `active` is true. */
+export function useClaim(kind: ClaimKind, active: boolean): void {
+  const { claim } = useCtx();
+  useEffect(() => (active ? claim(kind) : undefined), [active, kind, claim]);
+}
+
 /** Where an item that needs Billy lives: a decision in the Inbox, the PRD in the CTO view, a blocked task in Tasks. */
 export function needTarget(item: NeedItem): Omit<JumpTarget, "nonce"> {
   if (item.kind === "decision") return { view: VIEW.inbox, decisionId: item.decisionId, focus: "main" };
-  if (item.kind === "prd") return { view: VIEW.cto, focus: "main" };
+  if (item.kind === "prd") return { view: VIEW.cto, channelKey: "cto::", focus: "main" };
   return { view: VIEW.tasks, taskId: item.taskId, focus: "main" };
 }
 
@@ -111,7 +141,8 @@ export function useJump(view: number, apply: (jump: JumpTarget) => void): void {
 /** Key handler for the main pane: silent while a modal is open or focus is elsewhere. */
 export function useKeys(handler: (input: string, key: Key) => void, active = true): void {
   const ctx = useCtx();
-  useInput(handler, { isActive: active && !ctx.modal && ctx.focus === "main" });
+  // Ctrl and meta combinations belong to the shell (ctrl+p, ctrl+n, ctrl+c), never to a screen's bare-letter keys.
+  useInput((input, key) => (key.ctrl || key.meta ? undefined : handler(input, key)), { isActive: active && !ctx.modal && ctx.focus === "main" });
 }
 
 /** Declares which key table the hint line shows for this view. Pass null while another component owns the hint line. */

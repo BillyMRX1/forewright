@@ -139,6 +139,13 @@ export function launchRun(rt: ProjectRuntime, spec: RunSpec): ActiveRun {
         ]
       : [];
 
+  if (rt.stopping) {
+    // Shutdown already began and took its list of running runs: a late launch would start a child nobody stops.
+    active.stop = { kind: "shutdown", reason: "daemon shutdown" };
+    void finalize({ ...syntheticFailure(spec, "", ""), state: "stopped", error: "Stopped: daemon shutdown", errorDetail: null });
+    return active;
+  }
+
   let handle: RunHandle;
   try {
     handle = adapter.start(

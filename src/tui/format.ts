@@ -5,11 +5,12 @@ import type { BlockReason, RunState, TaskState } from "../core/types.js";
 import { sanitizeTerminal } from "../core/safety.js";
 import { TASK_STATE_COLOR, sym } from "./theme.js";
 
-/** Navigation order: the CTO conversation is home, then the overview and the rest. */
-export const VIEW_NAMES = ["CTO", "Overview", "Tasks", "Inbox", "Team", "Chat", "Evidence", "Settings"] as const;
-export const VIEW_SHORT = ["CTO", "Ovw", "Tsk", "Inb", "Tea", "Cht", "Evd", "Set"] as const;
+/** The four numbered tabs (keys 1 to 4), then Settings, which is reached with `,` or the palette and is not a tab. */
+export const VIEW_NAMES = ["Home", "CTO", "Tasks", "Inbox", "Settings"] as const;
 /** View indexes, matching VIEW_NAMES. */
-export const VIEW = { cto: 0, overview: 1, tasks: 2, inbox: 3, team: 4, chat: 5, evidence: 6, settings: 7 } as const;
+export const VIEW = { home: 0, cto: 1, tasks: 2, inbox: 3, settings: 4 } as const;
+/** How many views are tabs. */
+export const TAB_COUNT = 4;
 
 /** Clean untrusted text for one-line display: sanitized, tabs to spaces, newlines to spaces. */
 export function oneLine(text: string): string {
@@ -86,6 +87,16 @@ export function shortAge(iso: string | null, now = Date.now()): string {
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
+}
+
+/** Elapsed time since `startIso`, short: `3m 12s`, or `3m` when `compact`. */
+export function elapsed(startIso: string | null, compact: boolean, now = Date.now()): string {
+  if (!startIso) return "";
+  const t = Date.parse(startIso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (compact) return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`;
+  return duration(startIso, null, now);
 }
 
 export function duration(startIso: string | null, endIso: string | null, now = Date.now()): string {

@@ -1,11 +1,11 @@
 // Small building blocks shared by all views.
 
-import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { Box, Text, useInput, type Key } from "ink";
 import { sanitizeTerminal } from "../core/safety.js";
-import { useCtx, type Zone } from "./context.js";
+import { Ctx, useCtx, type Zone } from "./context.js";
 import { clip, windowed } from "./format.js";
-import { STATUS_LABEL, borderStyle, palette, pillGlyph, statusColor, sym, type AgentStatus } from "./theme.js";
+import { STATUS_LABEL, borderStyle, palette, statusColor, statusGlyph, sym, type DisplayStatus } from "./theme.js";
 
 type TextProps = ComponentProps<typeof Text>;
 
@@ -15,10 +15,12 @@ function clean(text: string): string {
 }
 
 /** The only way untrusted text reaches the screen. */
-export function SafeText({ children, wrap = "truncate-end", width, ...rest }: Omit<TextProps, "children"> & { children: string; /** Cuts longer text with the theme ellipsis instead of the terminal's own ellipsis. */ width?: number }) {
+export function SafeText({ children, wrap = "truncate-end", width, ...rest }: Omit<TextProps, "children"> & { children: string; /** Cuts longer text with the theme ellipsis instead of the terminal's own ellipsis. Defaults to the width of the screen area, so a line never reaches Ink's own truncation. */ width?: number }) {
+  const area = useContext(Ctx)?.bodyWidth;
+  const w = width ?? area;
   return (
     <Text wrap={wrap} {...rest}>
-      {width !== undefined ? clip(clean(children), width) : clean(children)}
+      {w !== undefined ? clip(clean(children), w) : clean(children)}
     </Text>
   );
 }
@@ -38,7 +40,7 @@ export interface DLine {
   bold?: boolean;
   /** Styled pieces. When present they are drawn instead of `text`, which should hold the same words. */
   segs?: Seg[];
-  /** Draws the line as a selection bar in the accent color. */
+  /** Draws the line as the selected row: inverse video. */
   bar?: boolean;
 }
 
@@ -72,9 +74,9 @@ export function clipSegs(segs: Seg[], width: number): Seg[] {
 export function Row({ line, width }: { line: DLine; width?: number }) {
   const shownSegs = line.segs ? (width !== undefined ? clipSegs(line.segs, width) : line.segs) : null;
   const plain = width !== undefined ? clip(clean(line.text.length > 0 ? line.text : " "), width) : clean(line.text.length > 0 ? line.text : " ");
-  const style = { ...(line.bar ? { color: "black", bold: true } : line.color ? { color: line.color } : {}), ...(!line.bar && line.dim ? { dimColor: true } : {}), ...(line.bold && !line.bar ? { bold: true } : {}) };
+  const style = { ...(line.bar ? { inverse: true } : line.color ? { color: line.color } : {}), ...(!line.bar && line.dim ? { dimColor: true } : {}), ...(line.bold && !line.bar ? { bold: true } : {}) };
   return (
-    <Box height={1} flexShrink={0} {...(line.bar ? { backgroundColor: palette.accent } : {})}>
+    <Box height={1} flexShrink={0}>
       <Text wrap="truncate-end" {...style}>
         {shownSegs && !line.bar
           ? shownSegs.map((s, i) => (
@@ -263,7 +265,7 @@ export function TextInput({
     return (
       <Box height={1}>
         {focus ? <Text inverse> </Text> : null}
-        <SafeText dimColor>{placeholder}</SafeText>
+        <SafeText dimColor width={Math.max(1, width - 1)}>{placeholder}</SafeText>
       </Box>
     );
   }
@@ -359,11 +361,12 @@ export function Hint({ children }: { children: string }) {
 
 // ------------------------------------------------------------------ small visual pieces
 
-/** Status pill: `● working`, `◉ needs you`, `✓ done`, `! blocked`, `○ idle`, in the status color. */
-export function Pill({ status, label }: { status: AgentStatus; label?: string }) {
+/** Status pill: `● working`, `! needs you`, `✓ done`, `✗ blocked`, `○ idle`, in the status color. */
+export function Pill({ status, label }: { status: DisplayStatus; label?: string }) {
+  const color = statusColor(status);
   return (
-    <Text color={statusColor(status)} bold={status === "needs_you"} wrap="truncate-end">
-      {`${pillGlyph(status)} ${label ?? STATUS_LABEL[status]}`}
+    <Text {...(color ? { color } : {})} bold={status === "needs_you"} wrap="truncate-end">
+      {`${statusGlyph(status)} ${label ?? STATUS_LABEL[status]}`}
     </Text>
   );
 }
@@ -408,16 +411,16 @@ export function PaneHeader({ title, context, pill, width }: { title: string; con
   );
 }
 
-/** One selectable row. Selected rows get an accent bar while their list has focus, accent text otherwise. */
+/** One selectable row. The selected row is inverse video while its list has focus, bold with a pointer otherwise. */
 export function ListRow({ segs, selected, focused, width }: { segs: Seg[]; selected: boolean; focused: boolean; width: number }) {
   const s = sym();
   const mark = selected ? `${s.pointer} ` : "  ";
   const plain = clip(`${mark}${clean(segs.map((x) => x.text).join(""))}`, width);
   if (selected && focused) {
     return (
-      <Box height={1} flexShrink={0} width={width} backgroundColor={palette.accent}>
-        <Text wrap="truncate-end" color="black" bold>
-          {plain}
+      <Box height={1} flexShrink={0} width={width}>
+        <Text wrap="truncate-end" inverse>
+          {plain.padEnd(width)}
         </Text>
       </Box>
     );
@@ -426,9 +429,9 @@ export function ListRow({ segs, selected, focused, width }: { segs: Seg[]; selec
   return (
     <Box height={1} flexShrink={0} width={width}>
       <Text wrap="truncate-end">
-        <Text color={palette.accent}>{mark}</Text>
+        <Text>{mark}</Text>
         {shown.map((x, i) => (
-          <Text key={i} {...(selected ? { color: palette.accent } : x.color ? { color: x.color } : {})} {...(x.dim && !selected ? { dimColor: true } : {})} {...(x.bold || selected ? { bold: true } : {})}>
+          <Text key={i} {...(x.color ? { color: x.color } : {})} {...(x.dim && !selected ? { dimColor: true } : {})} {...(x.bold || selected ? { bold: true } : {})}>
             {clean(x.text)}
           </Text>
         ))}
@@ -437,16 +440,32 @@ export function ListRow({ segs, selected, focused, width }: { segs: Seg[]; selec
   );
 }
 
-/** A rounded panel with a bold title row. */
-export function Card({ title, width, height, accent = false, children }: { title: string; width: number; height?: number; accent?: boolean; children: ReactNode }) {
+/** A full-width horizontal rule, the only divider between sections. */
+export function Rule({ width }: { width: number }) {
   return (
-    <Box borderStyle={borderStyle()} borderColor={accent ? palette.accent : palette.muted} {...(accent ? {} : { borderDimColor: true })} flexDirection="column" paddingX={1} width={width} {...(height !== undefined ? { height } : {})} flexShrink={0} overflow="hidden">
-      <Box height={1} flexShrink={0}>
-        <Text bold wrap="truncate-end">
-          {clean(title)}
+    <Box height={1} flexShrink={0}>
+      <Text dimColor wrap="truncate-end">
+        {sym().frame.h.repeat(Math.max(1, width))}
+      </Text>
+    </Box>
+  );
+}
+
+/** A small uppercase label for a section: bold title (yellow when `color` is given), a dim note after it and an optional dim text at the right edge. */
+export function SectionLabel({ title, note, right, color, width }: { title: string; note?: string; right?: string; color?: string; width: number }) {
+  const rightText = right ? clip(clean(right), Math.max(0, width - [...title].length - 2)) : "";
+  const noteRoom = Math.max(0, width - [...title].length - 1 - (rightText ? [...rightText].length + 1 : 0));
+  const noteText = note ? ` ${clip(clean(note), noteRoom)}` : "";
+  const pad = rightText ? Math.max(1, width - [...title].length - [...noteText].length - [...rightText].length) : 0;
+  return (
+    <Box height={1} flexShrink={0} width={width}>
+      <Text wrap="truncate-end">
+        <Text bold {...(color ? { color } : {})}>
+          {title}
         </Text>
-      </Box>
-      {children}
+        {noteText ? <Text dimColor>{noteText}</Text> : null}
+        {rightText ? <Text dimColor>{`${" ".repeat(pad)}${rightText}`}</Text> : null}
+      </Text>
     </Box>
   );
 }

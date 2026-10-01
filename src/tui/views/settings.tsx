@@ -1,18 +1,20 @@
 import { useEffect, useState } from "react";
-import { Box } from "ink";
-import { InputBox, PaneHeader, SafeText, ScrollLines, type DLine, type Seg } from "../components.js";
-import { useCtx, useHintScope, useKeys, useLoad } from "../context.js";
+import { Box, Text } from "ink";
+import { InputBox, SafeText, ScrollLines, type DLine, type Seg } from "../components.js";
+import { useClaim, useCtx, useHintScope, useKeys, useLoad } from "../context.js";
 import { abbreviatePath, oneLine, wrapText } from "../format.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, type FallbackEntry } from "../../core/store-types.js";
 import type { ProviderStatus } from "../../runtime/protocol.js";
 import { LIVE_ENGINES, type EngineId } from "../../core/types.js";
-import { palette, sym } from "../theme.js";
+import { borderStyle, palette, sym } from "../theme.js";
+import { engineLabel } from "../toasts.js";
 
 export const LOCAL_NOTICE = "Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex) by their CLIs.";
 
 type Item =
   | { kind: "cto-engine" }
   | { kind: "cto-model" }
+  | { kind: "setup" }
   | { kind: "authority"; name: keyof typeof DEFAULT_AUTHORITY }
   | { kind: "limit"; name: keyof typeof DEFAULT_LIMITS }
   | { kind: "fallback"; list: FallbackList };
@@ -23,21 +25,32 @@ const FALLBACK_TITLE: Record<FallbackList, string> = { cto: "CTO", workers: "Wor
 
 const AUTH_NAMES = Object.keys(DEFAULT_AUTHORITY) as Array<keyof typeof DEFAULT_AUTHORITY>;
 const LIMIT_NAMES = Object.keys(DEFAULT_LIMITS) as Array<keyof typeof DEFAULT_LIMITS>;
-const ITEMS: Item[] = [{ kind: "cto-engine" }, { kind: "cto-model" }, ...AUTH_NAMES.map((name) => ({ kind: "authority" as const, name })), ...LIMIT_NAMES.map((name) => ({ kind: "limit" as const, name })), ...FALLBACK_LISTS.map((list) => ({ kind: "fallback" as const, list }))];
-const FALLBACK_START = 2 + AUTH_NAMES.length + LIMIT_NAMES.length;
+
+export const GROUPS = ["Engines", "Backups", "Control", "Limits"] as const;
+type Group = (typeof GROUPS)[number];
+
+/** Every item with the group it lives in, in the order the cursor visits them. */
+const ITEMS: Array<{ group: Group; item: Item }> = [
+  { group: "Engines", item: { kind: "cto-engine" } },
+  { group: "Engines", item: { kind: "cto-model" } },
+  { group: "Engines", item: { kind: "setup" } },
+  ...FALLBACK_LISTS.map((list) => ({ group: "Backups" as const, item: { kind: "fallback" as const, list } })),
+  ...AUTH_NAMES.map((name) => ({ group: "Control" as const, item: { kind: "authority" as const, name } })),
+  ...LIMIT_NAMES.map((name) => ({ group: "Limits" as const, item: { kind: "limit" as const, name } })),
+];
 const MODES = ["ask", "auto", "deny"] as const;
 
 const NOT_SUPPORTED = "Not supported";
 
 const LABELS: Record<string, string> = {
-  autoLocalEdits: "Edit files in agent workspaces without asking",
-  autoChecks: "Run checks without asking",
+  autoLocalEdits: "Edit files in agent workspaces without asking (not active yet)",
+  autoChecks: "Run checks without asking (not active yet)",
   autoIntegrateToForewrightBranch: "Merge finished work into the Forewright branch",
   mergeToUserBranch: "Merge into your own branch",
   publish: "Publish (push, release)",
   destructive: "Destructive actions",
   spendLimitUsd: "Spend limit in USD (0 = no API spend)",
-  allowApiBilling: "Allow API billing for agents",
+  allowApiBilling: "Allow API billing for agents (not active yet)",
   maxConcurrentWorkers: "Concurrent workers",
   maxTurnsPerRun: "Turns per run",
   runTimeoutMs: "Run timeout (ms)",
@@ -91,6 +104,15 @@ export function fallbackWords(list: FallbackEntry[]): string {
   return list.length === 0 ? "none (waits for the reset)" : list.map((e, i) => `${i + 1}. ${e.engine}${e.model ? ` (${e.model})` : ""}`).join("  ");
 }
 
+/** One short line for an engine: its health in words and what the tool reports. */
+function providerLine(p: ProviderStatus): DLine {
+  const h = p.health;
+  const health = providerHealth(p);
+  const detail = [h.version ? `v${h.version}` : null, h.authMethod, p.quotaUntil === "unknown" ? "limit reset time unknown" : p.quotaUntil ? `limit until ${p.quotaUntil}` : null].filter(Boolean).join("  ");
+  const name = engineLabel(h.engine);
+  return { text: `  ${name.padEnd(18)} ${sym().bullet} ${health.text}  ${detail}`, segs: [{ text: `  ${name.padEnd(18)} ` }, { text: `${sym().bullet} ${health.text}`, color: health.color }, { text: `  ${detail}`, dim: true }] };
+}
+
 export function SettingsView() {
   const ctx = useCtx();
   const { api, projectId } = ctx;
@@ -98,10 +120,10 @@ export function SettingsView() {
   const h = ctx.bodyHeight;
   const data = useLoad(() => api.call("state.settings", { projectId }));
   const team = useLoad(() => api.call("state.team", { projectId }));
-  /** -1 means nothing is chosen yet, so the engines at the top stay in view until you move down. */
-  const [sel, setSel] = useState(-1);
+  const [sel, setSel] = useState(0);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
+  const [details, setDetails] = useState(false);
   /** The fallback lists as shown. Edits apply here at once and are saved with settings.set. */
   const [fb, setFb] = useState<Record<FallbackList, FallbackEntry[]>>({ cto: [], workers: [] });
   /** The list being edited, and the entry chosen in it. */
@@ -111,15 +133,18 @@ export function SettingsView() {
   useEffect(() => {
     if (fromServer) setFb({ cto: fromServer.cto, workers: fromServer.workers });
   }, [fromServer]);
-  const cto = (team.data?.agents ?? []).find((a) => a.role === "cto") ?? null;
+  const cto = (team.data?.agents ?? []).find((a) => a.role === "cto" && !a.retiredAt) ?? null;
   const providers = data.data?.providers ?? [];
   const cycle = <T,>(list: T[], v: T, dir: 1 | -1 = 1): T => list[(Math.max(0, list.indexOf(v)) + dir + list.length) % list.length]!;
   useHintScope(editing ? "settings.edit" : fbEdit ? "settings.fallback" : "settings");
+  useClaim("tab", true);
+  useClaim("level", editing || fbEdit !== null);
 
   const value = (it: Item): string | number | boolean => {
     const s = data.data!.settings;
     if (it.kind === "cto-engine") return data.data!.ctoEngine;
     if (it.kind === "cto-model") return data.data!.ctoModel ?? "(engine default)";
+    if (it.kind === "setup") return "Run setup again";
     if (it.kind === "authority") return s.authority[it.name];
     if (it.kind === "fallback") return fallbackWords(fb[it.list]);
     return s[it.name];
@@ -194,8 +219,12 @@ export function SettingsView() {
 
   /** Changes the chosen value one step in `dir`. Numbers open the editor instead. */
   const activate = (dir: 1 | -1, fromEnter: boolean) => {
-    if (!data.data || sel < 0) return;
-    const it = ITEMS[sel]!;
+    if (!data.data) return;
+    const it = ITEMS[sel]!.item;
+    if (it.kind === "setup") {
+      if (fromEnter) ctx.run("setup");
+      return;
+    }
     if (it.kind === "cto-engine" || it.kind === "cto-model") {
       if (!cto) return ctx.fail({ plain: "The CTO agent does not exist yet.", detail: null });
       if (it.kind === "cto-engine") {
@@ -232,7 +261,7 @@ export function SettingsView() {
   };
 
   const commit = (raw: string) => {
-    const it = ITEMS[sel]!;
+    const it = ITEMS[sel]?.item;
     if (it === undefined) return;
     if (it.kind !== "authority" && it.kind !== "limit") return;
     const n = Number(raw.trim());
@@ -241,82 +270,118 @@ export function SettingsView() {
     void set(it.kind === "authority" ? `authority.${it.name}` : it.name, n);
   };
 
+  const group = ITEMS[Math.min(sel, ITEMS.length - 1)]!.group;
+  const moveGroup = (dir: 1 | -1) => {
+    const g = GROUPS[(GROUPS.indexOf(group) + dir + GROUPS.length) % GROUPS.length]!;
+    setSel(ITEMS.findIndex((x) => x.group === g));
+  };
+
   useKeys((input, key) => {
     if (editing) return;
     if (fbEdit) return fallbackKeys(input, key);
     if (key.escape) return ctx.back();
-    if (key.upArrow) setSel((i) => Math.max(-1, i - 1));
-    else if (key.downArrow) setSel((i) => Math.min(ITEMS.length - 1, i + 1));
+    if (key.tab) return moveGroup(key.shift ? -1 : 1);
+    if (key.upArrow || input === "k") setSel((i) => Math.max(0, i - 1));
+    else if (key.downArrow || input === "j") setSel((i) => Math.min(ITEMS.length - 1, i + 1));
     else if (key.leftArrow) activate(-1, false);
     else if (key.rightArrow) activate(1, false);
     else if (key.return || input === " ") activate(1, true);
+    else if (input === "d") setDetails((v) => !v);
   });
 
   if (!data.data) return <SafeText dimColor>Loading...</SafeText>;
-  const inner = w - 2;
+
+  // ---------------------------------------------------------------- the panel of the chosen group
+  const railW = w >= 60 ? 12 : 0;
+  const panelW = railW > 0 ? w - railW : w;
+  const inner = Math.max(10, panelW - (railW > 0 ? 3 : 0));
   const lines: DLine[] = [];
-  let selLine = 0; // stays 0 (top) until an item is chosen
-  const heading = (t: string) => lines.push({ text: t, bold: true });
-  heading("Engines");
-  for (const p of providers) lines.push(...providerLines(p, inner));
-  ITEMS.forEach((it, i) => {
-    if (i === 0) {
-      lines.push({ text: "" });
-      heading("CTO");
-    }
-    if (i === 2) {
-      lines.push({ text: "" });
-      heading("Authority");
-    }
-    if (i === 2 + AUTH_NAMES.length) {
-      lines.push({ text: "" });
-      heading("Limits");
-    }
-    if (i === FALLBACK_START) {
-      lines.push({ text: "" });
-      heading("Fallback when a usage limit is reached");
-      for (const l of wrapText("Off by default. When an agent's own engine hits its limit, the first usable engine in its list takes over, and the agent goes back to its own engine as soon as the limit resets. Only engines you list are ever used.", inner)) lines.push({ text: l, dim: true });
-    }
-    const name = it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} fallback order` : LABELS[it.name]!;
+  let selLine = 0;
+  const heading = (t: string) => lines.push({ text: t.toUpperCase(), bold: true, dim: true });
+  const itemsOfGroup = ITEMS.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
+  const labelOf = (it: Item) => (it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "setup" ? "Setup" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} backup order` : LABELS[it.name]!);
+  const labelW = Math.min(Math.max(...itemsOfGroup.map((x) => [...labelOf(x.item)].length)), Math.max(12, Math.floor(inner * 0.6)));
+  const pushItem = (it: Item, i: number) => {
+    const name = labelOf(it);
     const v = value(it);
-    const shown = typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+    const shown = it.kind === "setup" ? "[ Run setup again ]" : typeof v === "boolean" ? (v ? "on" : "off") : String(v);
     const on = i === sel;
     if (on) selLine = lines.length;
-    const text = `${on ? sym().pointer : " "} ${name}: ${shown}`;
-    if (on) lines.push(ctx.focus === "main" && !editing ? { text, bar: true } : { text, color: palette.accent, bold: true });
+    const text = `${name.padEnd(labelW)}  ${shown}`;
+    if (on) lines.push(ctx.focus === "main" && !editing && !fbEdit ? { text: `${sym().pointer} ${text}`, bar: true } : { text: `${sym().pointer} ${text}`, bold: true });
     else {
-      const segs: Seg[] = [{ text: `  ${name}: ` }, { text: shown, ...(typeof v === "boolean" ? { color: v ? palette.done : palette.muted } : { color: palette.accent }) }];
-      lines.push({ text, segs });
+      const segs: Seg[] = [{ text: `  ${name.padEnd(labelW)}  ` }, { text: shown, ...(typeof v === "boolean" ? (v ? { color: palette.done } : { dim: true }) : {}) }];
+      lines.push({ text: `  ${text}`, segs });
     }
-  });
+  };
+  if (group === "Engines") {
+    heading("Engines found");
+    if (details) for (const p of providers) lines.push(...providerLines(p, inner));
+    else {
+      for (const p of providers) {
+        lines.push(providerLine(p));
+        for (const prob of p.health.problems.slice(0, 1)) for (const l of wrapText(`    ${prob}`, inner)) lines.push({ text: l, color: palette.attention });
+      }
+      lines.push({ text: "  d shows capabilities and notes for each engine", dim: true });
+    }
+    lines.push({ text: "" });
+    heading("CTO");
+  } else if (group === "Backups") {
+    heading("When a usage limit is reached");
+    for (const l of wrapText("Off by default. When an agent's own engine hits its limit, the first usable engine in its list takes over, and the agent goes back to its own engine as soon as the limit resets. Only engines you list are ever used.", inner)) lines.push({ text: l, dim: true });
+    lines.push({ text: "" });
+  } else if (group === "Control") {
+    heading("Authority");
+  } else heading("Limits");
+  for (const x of itemsOfGroup) pushItem(x.item, x.i);
   let fbLine = lines.length;
-  if (fbEdit) {
+  if (group === "Backups" && fbEdit) {
     const status = data.data.fallbackStatus?.[fbEdit] ?? [];
     const entries = fb[fbEdit];
     const at = Math.min(fbIdx, Math.max(0, entries.length - 1));
     lines.push({ text: "" });
-    heading(`Editing: ${FALLBACK_TITLE[fbEdit]} fallback order`);
+    heading(`Editing: ${FALLBACK_TITLE[fbEdit]} backup order`);
     if (entries.length === 0) lines.push({ text: "  Empty: this work waits for the reset. Press a to add an engine.", dim: true });
     entries.forEach((e, k) => {
       const problem = status[k]?.problem ?? null;
       const text = `${k === at ? sym().pointer : " "} ${k + 1}. ${e.engine}${e.model ? ` (${e.model})` : " (engine default model)"}${problem ? `  cannot fill the role: ${problem}` : ""}`;
       if (k === at) fbLine = lines.length;
-      if (k === at) lines.push(ctx.focus === "main" ? { text, bar: true } : { text, color: palette.accent, bold: true });
+      if (k === at) lines.push(ctx.focus === "main" ? { text, bar: true } : { text, bold: true });
       else lines.push(problem ? { text, color: palette.attention } : { text });
     });
     lines.push({ text: "  a add  x remove  [ ] move up or down  left/right change engine  m model  esc done", dim: true });
   }
-  lines.push({ text: "" });
-  for (const l of wrapText(LOCAL_NOTICE, inner)) lines.push({ text: l, color: palette.attention });
+  if (group === "Engines") {
+    lines.push({ text: "" });
+    for (const l of wrapText(LOCAL_NOTICE, inner)) lines.push({ text: l, color: palette.attention });
+  }
 
-  const bodyH = Math.max(1, h - 1 - (editing ? 2 : 0));
+  const bodyH = Math.max(1, h - (editing ? 2 : 0));
+  const panel = (
+    <Box flexDirection="column" width={panelW} height={bodyH} flexShrink={0} {...(railW > 0 ? { paddingLeft: 1, borderStyle: borderStyle(), borderTop: false, borderRight: false, borderBottom: false, borderColor: palette.muted, borderDimColor: true } : {})}>
+      {railW === 0 ? <SafeText bold>{`${group}  (tab: next group)`}</SafeText> : null}
+      <ScrollLines lines={lines} height={Math.max(1, bodyH - (railW === 0 ? 1 : 0))} width={inner} active={!editing} focusLine={fbEdit ? fbLine : selLine} />
+    </Box>
+  );
   return (
     <Box flexDirection="column" height={h} width={w}>
-      <PaneHeader title="Settings" context="engines, authority and limits" width={w} />
-      <ScrollLines lines={lines} height={bodyH} width={w} active={!editing} focusLine={fbEdit ? fbLine : selLine} />
+      <Box height={bodyH} flexShrink={0}>
+        {railW > 0 ? (
+          <Box flexDirection="column" width={railW} flexShrink={0}>
+            {GROUPS.map((g) => (
+              <Box key={g} height={1}>
+                <Text {...(g === group ? { bold: true, ...(ctx.focus === "main" && !editing && !fbEdit ? {} : {}) } : { dimColor: true })} wrap="truncate-end">
+                  {`${g === group ? sym().pointer : " "} ${g}`}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        ) : null}
+        {panel}
+      </Box>
       {editing ? (
         <>
-          <SafeText dimColor>{`New value for ${oneLine(String(ITEMS[sel]?.kind === "limit" || ITEMS[sel]?.kind === "authority" ? (ITEMS[sel] as { name: string }).name : ""))}`}</SafeText>
+          <SafeText dimColor>{`New value for ${oneLine(String(ITEMS[sel]?.item.kind === "limit" || ITEMS[sel]?.item.kind === "authority" ? (ITEMS[sel]!.item as { name: string }).name : ""))}`}</SafeText>
           <InputBox value={text} onChange={setText} onSubmit={commit} onEscape={() => setEditing(false)} focus={ctx.focus === "main"} placeholder="" width={w} maxRows={1} compact />
         </>
       ) : null}

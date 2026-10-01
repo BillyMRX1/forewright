@@ -1912,8 +1912,9 @@ export class Store {
     return board;
   }
 
+  /** Every agent, retired ones included, so history can still name them; callers hide the retired. */
   teamView(): Array<Agent & { currentTaskShortId: string | null }> {
-    return this.listAgents().map((a) => ({
+    return this.listAgents({ includeRetired: true }).map((a) => ({
       ...a,
       currentTaskShortId: a.currentTaskId ? this.getTask(a.currentTaskId).shortId : null,
     }));

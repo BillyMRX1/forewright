@@ -4,14 +4,12 @@ import { VIEW } from "./format.js";
 
 /** Everything the command palette, slash commands and shortcuts can trigger. */
 export type ActionId =
+  | "go.home"
   | "go.cto"
-  | "go.overview"
   | "go.tasks"
   | "go.inbox"
-  | "go.team"
-  | "go.chat"
-  | "go.evidence"
   | "go.settings"
+  | "chat"
   | "approve"
   | "prd"
   | "pause"
@@ -19,20 +17,16 @@ export type ActionId =
   | "stop"
   | "log"
   | "terminate"
-  | "sidebar"
   | "help"
   | "setup"
   | "quit"
   | "next";
 
 export const VIEW_ACTIONS: Array<{ id: ActionId; view: number }> = [
+  { id: "go.home", view: VIEW.home },
   { id: "go.cto", view: VIEW.cto },
-  { id: "go.overview", view: VIEW.overview },
   { id: "go.tasks", view: VIEW.tasks },
   { id: "go.inbox", view: VIEW.inbox },
-  { id: "go.team", view: VIEW.team },
-  { id: "go.chat", view: VIEW.chat },
-  { id: "go.evidence", view: VIEW.evidence },
   { id: "go.settings", view: VIEW.settings },
 ];
 
@@ -54,13 +48,15 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "stop", description: "stop the current run (asks first)", action: "stop" },
   { name: "inbox", description: "open the Inbox", action: "go.inbox" },
   { name: "tasks", description: "open Tasks", action: "go.tasks" },
-  { name: "team", description: "open the Team", action: "go.team" },
+  { name: "team", description: "open Home, where the workers are", action: "go.home" },
   { name: "settings", description: "open Settings", action: "go.settings" },
   { name: "help", description: "show every key and command", action: "help" },
   { name: "setup", description: "run the setup again: tools, CTO, workers, limits, control", action: "setup" },
-  { name: "overview", description: "open the Overview", action: "go.overview" },
-  { name: "chat", description: "open Chat", action: "go.chat" },
-  { name: "evidence", description: "open Evidence", action: "go.evidence" },
+  { name: "home", description: "open Home", action: "go.home" },
+  { name: "overview", description: "open Home (the overview)", action: "go.home" },
+  { name: "cto", description: "open the CTO conversation", action: "go.cto" },
+  { name: "chat", description: "talk to the project channel (change recipient with tab)", action: "chat" },
+  { name: "evidence", description: "open Tasks; a task's Checks and Diff tabs hold its evidence", action: "go.tasks" },
   { name: "log", description: "read the raw log of the current run", action: "log" },
   { name: "terminate", description: "terminate the team: pause, stop every run, retire the workers (asks first)", action: "terminate" },
 ];

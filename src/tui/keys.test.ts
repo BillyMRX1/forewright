@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { BINDINGS, SCOPE_TITLES, bindingsFor, findCollisions, footerHints, helpLines, type Binding } from "./keys.js";
+import { BINDINGS, MAX_HINTS, SCOPE_TITLES, bindingsFor, findCollisions, footerEntries, footerHints, helpLines, type Binding } from "./keys.js";
 import { SLASH_COMMANDS, parseSlash, slashSuggestions } from "./commands.js";
 
 afterEach(() => {
@@ -26,12 +26,19 @@ describe("key table", () => {
     for (const b of BINDINGS) assert.ok(titled.has(b.scope), `scope ${b.scope} (${b.id}) has no title`);
   });
 
-  it("no single letter or digit is a global key, so typing can never trigger an action", () => {
+  it("keys that work while typing are never letters or digits, so typing can never trigger an action", () => {
     for (const b of bindingsFor("global")) {
       for (const k of b.keys) assert.ok(!/^[a-zA-Z0-9]$/.test(k), `global key ${k} (${b.id}) conflicts with typing`);
     }
-    for (const scope of ["cto.input", "chat.input", "slash", "sidebar"]) {
+    for (const scope of ["cto.input", "slash"]) {
       for (const b of bindingsFor(scope)) for (const k of b.keys) assert.ok(!/^[a-zA-Z0-9]$/.test(k), `${scope} key ${k} would conflict with typing`);
+    }
+  });
+
+  it("bare letters and digits are only bound where no text box has focus", () => {
+    const idle = new Set(["idle", "home", "home.worker", "cto", "cto.input.empty", "tasks", "tasks.detail", "tasks.detail.final", "inbox", "inbox.options", "inbox.prd", "settings", "settings.fallback", "prd", "log", "help", "confirm"]);
+    for (const b of BINDINGS) {
+      if (b.keys.some((k) => /^[a-zA-Z0-9]$/.test(k))) assert.ok(idle.has(b.scope), `${b.id} binds a bare letter in scope ${b.scope}, which has a text box`);
     }
   });
 
@@ -59,21 +66,33 @@ describe("key table", () => {
     }
   });
 
+  it("the hint bar never has more than 6 hints, in any scope, at any width", () => {
+    for (const width of [24, 40, 80, 140, 300]) {
+      for (const [scope] of SCOPE_TITLES) {
+        for (const typing of [false, true]) {
+          const entries = footerEntries(scope, width, { needs: 2, toast: true, typing });
+          assert.ok(entries.length <= MAX_HINTS, `${scope} at ${width} shows ${entries.length} hints: ${entries.join(" | ")}`);
+        }
+      }
+    }
+  });
+
   it("hint lines are lowercase and joined with a middle dot", () => {
     const f = footerHints("tasks.detail", 140, { needs: 0, toast: false, typing: false });
     assert.equal(f, f.toLowerCase());
-    assert.match(f, /^tab focus · enter resume · c cancel · a reassign · l log · esc back · ctrl\+p commands · \? help$/);
+    assert.match(f, /^s stop run · r reassign · c cancel · l full log · esc back · \? help$/);
   });
 
   it("shows the next-needs-you key only when something is waiting, and the notice key only with a notice", () => {
-    assert.match(footerHints("overview", 160, { needs: 3, toast: false, typing: false }), /ctrl\+n needs you \(3\)/);
-    assert.doesNotMatch(footerHints("overview", 160, { needs: 0, toast: false, typing: false }), /ctrl\+n needs you/);
-    assert.match(footerHints("overview", 160, { needs: 0, toast: true, typing: false }), /ctrl\+g go to notice/);
+    assert.match(footerHints("home", 160, { needs: 3, toast: false, typing: false }), /n needs you \(3\)/);
+    assert.match(footerHints("cto.input", 160, { needs: 3, toast: false, typing: true }), /ctrl\+n needs you \(3\)/);
+    assert.doesNotMatch(footerHints("home", 160, { needs: 0, toast: false, typing: false }), /needs you/);
+    assert.match(footerHints("home", 160, { needs: 0, toast: true, typing: false }), /ctrl\+g go to notice/);
   });
 
   it("uses words instead of arrows in ASCII mode", () => {
     process.env["FOREWRIGHT_ASCII"] = "1";
-    const f = footerHints("sidebar", 140, { needs: 0, toast: false, typing: false });
+    const f = footerHints("home", 140, { needs: 0, toast: false, typing: false });
     assert.match(f, /up\/down move/);
     assert.match(f, / - /);
     assert.doesNotMatch(f, /[^\x00-\x7f]/);
@@ -103,6 +122,6 @@ describe("slash commands", () => {
 
   it("covers every command the plan names", () => {
     const names = SLASH_COMMANDS.map((c) => c.name);
-    for (const n of ["approve", "prd", "pause", "resume", "stop", "inbox", "tasks", "team", "settings", "help"]) assert.ok(names.includes(n), n);
+    for (const n of ["approve", "prd", "pause", "resume", "stop", "inbox", "tasks", "team", "settings", "help", "setup", "home", "overview", "chat", "evidence", "log", "terminate"]) assert.ok(names.includes(n), n);
   });
 });

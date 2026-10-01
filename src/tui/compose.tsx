@@ -1,9 +1,9 @@
-// The message box used by CTO and Chat: a bordered input with slash command suggestions above it.
+// The message box of the CTO screen: an input line with slash command suggestions above it.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Box, type Key } from "ink";
 import { InputBox, ListRow, inputBoxHeight } from "./components.js";
-import { useCtx, useHintScope } from "./context.js";
+import { useClaim, useCtx, useHintScope } from "./context.js";
 import { parseSlash, slashSuggestions } from "./commands.js";
 
 /** How many suggestions fit above the box for a pane this tall. */
@@ -59,11 +59,8 @@ export function ComposeBox({
   const open = suggestions.length > 0;
   const at = Math.min(sel, Math.max(0, suggestions.length - 1));
   useHintScope(focus ? (open ? "slash" : scope) : null);
-  const { setTabCaptured } = ctx;
-  useEffect(() => {
-    setTabCaptured(open);
-    return () => setTabCaptured(false);
-  }, [open, setTabCaptured]);
+  // While suggestions are open, tab completes a command instead of moving between tabs or recipients.
+  useClaim("tab", open);
 
   const submit = (raw: string) => {
     const text = raw.trim();
@@ -112,7 +109,7 @@ export function ComposeBox({
           setSel(0);
         }}
         onSubmit={submit}
-        onEscape={ctx.back}
+        onEscape={() => ctx.setFocus("main")}
         onUp={onUp}
         intercept={intercept}
         focus={focus}
