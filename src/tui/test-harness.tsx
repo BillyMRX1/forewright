@@ -16,7 +16,13 @@ class FakeStdout extends EventEmitter {
   write = (frame: string) => {
     this.frames.push(frame);
   };
-  lastFrame = () => this.frames[this.frames.length - 1];
+  // Color and style codes (SGR, ESC[...m) are removed so assertions read the same whether or not the
+  // test runner forces color (it does when run from a real terminal). Every other escape sequence is
+  // kept, so tests that check untrusted escapes are stripped still see them if they leak.
+  lastFrame = () => {
+    const f = this.frames[this.frames.length - 1];
+    return f === undefined ? undefined : f.replace(/\x1b\[[0-9;]*m/g, "");
+  };
 }
 
 class FakeStdin extends EventEmitter {

@@ -1,12 +1,12 @@
 # Demonstration
 
-A reproducible walkthrough with a tiny disposable product, including a restart continuity check. It uses your real Claude Code or Codex login, so it spends a small amount of your subscription usage. To rehearse without any provider, run everything with a temporary data directory and the fake provider used by the test suite (`npm test`).
+A reproducible walkthrough with a tiny disposable product, including a restart continuity check. It uses your real Claude Code or Codex login, so it spends a small amount of your subscription usage. To rehearse without any provider, run everything with a temporary data directory and the fake provider used by the test suite (`pnpm test`).
 
 ## Setup
 
 ```
 cd path/to/agentic-department
-npm install && npm run build && npm link
+pnpm install && pnpm build && npm link
 mkdir -p /tmp/forewright-demo && cd /tmp/forewright-demo
 git init && git commit --allow-empty -m "start"
 ```

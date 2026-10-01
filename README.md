@@ -14,8 +14,8 @@ Agents are the coding command line tools you already use (Claude Code, Codex, An
 ## Install
 
 ```
-npm install
-npm run build
+pnpm install
+pnpm build
 npm link        # puts `forewright` on your PATH; or use: alias forewright="node $PWD/dist/cli/main.js"
 ```
 
@@ -114,8 +114,8 @@ Agents run under your signed-in subscriptions (or, for OpenCode, free models and
 ## Development
 
 ```
-npm run build
-npm test        # builds, then runs node --test over dist/**/*.test.js
+pnpm build
+pnpm test       # builds, then runs node --test over dist/**/*.test.js
 ```
 
 Tests use temporary directories and a fake provider. They never touch your real data directory, `~/.claude`, `~/.codex` or any vault.
