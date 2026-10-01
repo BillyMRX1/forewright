@@ -273,3 +273,59 @@ test("start times match exactly or within the 1.5 s the POSIX clock can shift, n
   assert.equal(sameStartTime("2026-10-01T05:16:00.3085475Z", "2026-10-01T05:16:00.3085475Z"), true);
   assert.equal(sameStartTime("x", "y"), false);
 });
+
+// ---------------------------------------------------------------- proxy and certificate variables
+
+const NONET = {}; // an empty Forewright config: these tests never read the real one
+const NET_BASE = {
+  PATH: "/usr/bin", FOO: "no", ANTHROPIC_API_KEY: "sk-ant-secretsecret",
+  HTTP_PROXY: "http://p:1", HTTPS_PROXY: "http://p:2", ALL_PROXY: "socks5://p:3", NO_PROXY: "localhost",
+  http_proxy: "http://l:1", https_proxy: "http://l:2", all_proxy: "socks5://l:3", no_proxy: "lo",
+  NODE_EXTRA_CA_CERTS: "/ca/a.pem", SSL_CERT_FILE: "/ca/b.pem", SSL_CERT_DIR: "/ca/dir", REQUESTS_CA_BUNDLE: "/ca/c.pem", CURL_CA_BUNDLE: "/ca/d.pem", NODE_USE_SYSTEM_CA: "1",
+};
+
+test("childEnv passes every proxy and CA variable in both spellings and still strips keys and unknown variables", () => {
+  const { env } = childEnv(NET_BASE, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  for (const [k, v] of Object.entries(NET_BASE)) {
+    if (k === "FOO" || k === "ANTHROPIC_API_KEY") assert.equal(env[k], undefined, k);
+    else assert.equal(env[k], v, k);
+  }
+});
+
+test("childEnv sets NODE_USE_ENV_PROXY=1 only when a proxy is present and the user did not choose", () => {
+  const withProxy = childEnv({ PATH: "/x", https_proxy: "http://p:8" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  assert.equal(withProxy.env["NODE_USE_ENV_PROXY"], "1");
+  const none = childEnv({ PATH: "/x", NO_PROXY: "localhost" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  assert.equal(none.env["NODE_USE_ENV_PROXY"], undefined, "NO_PROXY alone is not a proxy");
+  const chosen = childEnv({ PATH: "/x", HTTPS_PROXY: "http://p:8", NODE_USE_ENV_PROXY: "0" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  assert.equal(chosen.env["NODE_USE_ENV_PROXY"], "0");
+});
+
+test("childEnv on Windows treats https_proxy and HTTPS_PROXY as one variable, spelled in upper case", () => {
+  const { env } = childEnv({ Path: "C:\\x", https_proxy: "http://p:8", Node_Extra_Ca_Certs: "C:\\ca.pem" }, {}, { allowApiBilling: false, platform: "win32", network: NONET });
+  assert.equal(env["HTTPS_PROXY"], "http://p:8");
+  assert.equal(env["https_proxy"], undefined);
+  assert.equal(env["NODE_EXTRA_CA_CERTS"], "C:\\ca.pem");
+  assert.equal(env["NODE_USE_ENV_PROXY"], "1");
+});
+
+test("childEnv fills proxy and CA from the config only where the environment sets none (environment wins)", () => {
+  const cfg = { proxy: { https: "http://cfg:1", http: "http://cfg:2", noProxy: "cfg.local", caFile: "/cfg/ca.pem" } };
+  const { env } = childEnv({ PATH: "/x", HTTPS_PROXY: "http://env:9", SSL_CERT_FILE: "/env/ca.pem" }, {}, { allowApiBilling: false, platform: "linux", network: cfg });
+  assert.equal(env["HTTPS_PROXY"], "http://env:9");
+  assert.equal(env["https_proxy"], undefined, "the pair is left alone when one spelling is set");
+  assert.equal(env["HTTP_PROXY"], "http://cfg:2");
+  assert.equal(env["http_proxy"], "http://cfg:2");
+  assert.equal(env["NO_PROXY"], "cfg.local");
+  assert.equal(env["SSL_CERT_FILE"], "/env/ca.pem");
+  assert.equal(env["NODE_EXTRA_CA_CERTS"], "/cfg/ca.pem");
+  assert.equal(env["REQUESTS_CA_BUNDLE"], "/cfg/ca.pem");
+  assert.equal(env["CURL_CA_BUNDLE"], "/cfg/ca.pem");
+});
+
+test("childEnv reports proxy URLs with a login as secrets (URL, login part and password)", () => {
+  const { secrets } = childEnv({ PATH: "/x", HTTPS_PROXY: "http://alice:s3cret%21pw@proxy.corp:8080" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  for (const s of ["http://alice:s3cret%21pw@proxy.corp:8080", "alice:s3cret%21pw", "s3cret%21pw", "s3cret!pw"]) assert.ok(secrets.includes(s), s);
+  const plainProxy = childEnv({ PATH: "/x", HTTPS_PROXY: "http://proxy.corp:8080" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  assert.deepEqual(plainProxy.secrets, []);
+});

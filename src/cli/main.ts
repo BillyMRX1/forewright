@@ -6,6 +6,7 @@ import { forewrightHome, migrateLegacyHome, socketPath } from "../core/paths.js"
 import { createAdapters } from "../providers/registry.js";
 import { startDaemon } from "../runtime/daemon.js";
 import { runBridge } from "../runtime/mcp-bridge.js";
+import { runConfig } from "./config.js";
 import { queryService, runDoctor } from "./doctor.js";
 import { serviceInstall, serviceStatus, serviceUninstall } from "./service.js";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,7 @@ Usage:
   forewright serve                 run the background service in the foreground
   forewright status                say whether the service is running
   forewright doctor                check the service, data folder and every engine (--verbose, --json)
+  forewright config                show or set the company proxy and certificate file (forewright config --help)
   forewright service install       start the service at login (macOS launchd)
   forewright service uninstall     remove the login service
   forewright service status        show the login service state
@@ -98,6 +100,8 @@ async function main(argv: string[]): Promise<number> {
       return runDoctor(argv.slice(1), { includeFake: useTestDouble() });
     case "status":
       return status();
+    case "config":
+      return runConfig(argv.slice(1));
     case "service": {
       if (sub === "install") process.stdout.write(`${serviceInstall()}\n`);
       else if (sub === "uninstall") process.stdout.write(`${serviceUninstall()}\n`);

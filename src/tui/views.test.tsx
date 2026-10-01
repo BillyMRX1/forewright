@@ -70,7 +70,7 @@ describe("Tasks", () => {
     const { h } = await mount({ view: VIEW.tasks });
     const f = h.frame();
     assert.match(f, /● Planned\s+T-3\s+! Add CLI parsing/);
-    assert.match(f, /● Working\s+T-2\s+Implement tip calculation\s+Bo\s+\d+[hms]/);
+    assert.match(f, /● Working\s+T-2\s+Implement tip calculation\s+Bo\s+\d+[smhd]/);
     for (const title of ["Set up project", "Write tests", "Write README", "Old idea"]) assert.ok(f.includes(title), title);
   });
 

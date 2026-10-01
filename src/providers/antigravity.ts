@@ -5,7 +5,7 @@ import type {
   EngineId, McpServerSpec, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
 import { IsolationError, ProviderError } from "./errors.js";
-import { capture, resolveEngineBinary } from "./probe-util.js";
+import { capture, probeTimeoutMs, resolveEngineBinary } from "./probe-util.js";
 import { LinkManager } from "./links.js";
 import { isWindows, splitHomeDrive, type Platform } from "../core/platform.js";
 import { childEnv } from "./process.js";
@@ -349,8 +349,8 @@ export class AntigravityAdapter implements ProviderAdapter {
       }
       const [v, usage, models] = await Promise.all([
         capture(bin, ["--version"], env),
-        capture(bin, ["-p", "/usage"], env, 14_000),
-        capture(bin, ["models"], env, 14_000),
+        capture(bin, ["-p", "/usage"], env, probeTimeoutMs(14_000)),
+        capture(bin, ["models"], env, probeTimeoutMs(14_000)),
       ]);
       health.version = v.stdout.trim().split(/\s+/)[0] || null;
       const usageText = `${usage.stdout} ${usage.stderr}`;

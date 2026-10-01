@@ -23,6 +23,7 @@ const REDACTED = "[redacted]";
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, REDACTED],
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]*:[^\s/]*@/gi, "$1***:***@"], // a proxy or other URL with a login
   [/\bsk-ant-[A-Za-z0-9_-]+/g, REDACTED],
   [/\bsk-[A-Za-z0-9_-]{20,}/g, REDACTED],
   [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{10,}/g, REDACTED],

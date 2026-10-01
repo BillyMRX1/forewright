@@ -56,3 +56,9 @@ test("truncate leaves a visible marker", () => {
   assert.ok(out.startsWith("xxxxxxxxxx"));
   assert.match(out, /truncated 40 chars/);
 });
+
+test("redactSecrets hides the login of a proxy URL even when it is not a known secret", () => {
+  const out = redactSecrets('{"raw":"connect via http://alice:hunter2pw@proxy.corp:8080 failed"}');
+  assert.ok(!out.includes("hunter2pw") && !out.includes("alice"));
+  assert.ok(out.includes("http://***:***@proxy.corp:8080"));
+});

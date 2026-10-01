@@ -16,6 +16,6 @@ test("probeAll turns a slow or throwing probe into a health record with a proble
   const slow = { engine: "claude", isTestDouble: false, probe: () => new Promise(() => {}) } as unknown as ProviderAdapter;
   const boom = { engine: "codex", isTestDouble: false, probe: () => Promise.reject(new Error("kaput")) } as unknown as ProviderAdapter;
   const res = await probeAll(new Map([["claude", slow], ["codex", boom]]), 100);
-  assert.match(res[0]?.problems[0] ?? "", /did not finish/);
+  assert.match(res[0]?.problems[0] ?? "", /was slow to answer/);
   assert.match(res[1]?.problems[0] ?? "", /kaput/);
 });

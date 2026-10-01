@@ -1,6 +1,7 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
+import { hasProxyVar, isProxyUrlName, NETWORK_ENV_NAMES, NODE_USE_ENV_PROXY, proxySecrets, readNetworkConfig, resolveNetwork, type NetworkConfig } from "../core/network.js";
 import { envGet, isWindows, pathFor, WINDOWS_ENV_NAMES, type Platform } from "../core/platform.js";
 import type { OwnedProcess } from "../core/types.js";
 import { EnvPolicyError, SpawnError, TerminationError } from "./errors.js";
@@ -16,7 +17,8 @@ const SECRET_ENV_NAMES = [
   "AZURE_OPENAI_API_KEY",
 ] as const;
 
-const ALLOWED_ENV_NAMES = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR"];
+// Proxy and certificate variables pass through so an engine behind a company proxy can reach its API.
+const ALLOWED_ENV_NAMES = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", ...NETWORK_ENV_NAMES];
 
 export interface ChildEnv {
   env: Record<string, string>;
@@ -32,13 +34,17 @@ export interface ChildEnv {
 export function childEnv(
   base: NodeJS.ProcessEnv,
   extra: Record<string, string>,
-  opts: { allowApiBilling: boolean; platform?: Platform },
+  opts: { allowApiBilling: boolean; platform?: Platform; /** Proxy settings of the Forewright config; read from the data folder when left out. */ network?: NetworkConfig },
 ): ChildEnv {
   const win = isWindows(opts.platform ?? process.platform);
   // Windows spells variable names however it likes (`Path`, `SystemRoot`) and ignores case. Allowed names are
   // matched case-insensitively and re-emitted in one canonical spelling so a child never sees two copies.
   const canonical = new Map<string, string>();
-  if (win) for (const n of [...ALLOWED_ENV_NAMES, ...WINDOWS_ENV_NAMES, ...SECRET_ENV_NAMES]) canonical.set(n.toUpperCase(), n);
+  if (win) {
+    for (const n of [...ALLOWED_ENV_NAMES, ...WINDOWS_ENV_NAMES, ...SECRET_ENV_NAMES]) canonical.set(n.toUpperCase(), n);
+    // `https_proxy` and `HTTPS_PROXY` are one variable on Windows: the child gets it spelled in upper case.
+    for (const n of NETWORK_ENV_NAMES) canonical.set(n.toUpperCase(), n.toUpperCase());
+  }
   const env: Record<string, string> = {};
   const secrets: string[] = [];
   const set = (k: string, v: string): void => {
@@ -60,6 +66,10 @@ export function childEnv(
     }
   }
   set("TERM", "dumb");
+  // The Forewright config fills proxy and certificate variables only where the environment sets none.
+  const platform = opts.platform ?? process.platform;
+  const resolved = resolveNetwork(base, opts.network ?? readNetworkConfig(), platform);
+  for (const [k, v] of Object.entries(resolved.fromConfig)) if (!win || k === k.toUpperCase()) set(k, v);
   for (const [rawKey, v] of Object.entries(extra)) {
     const k = win ? (canonical.get(rawKey.toUpperCase()) ?? rawKey) : rawKey;
     if ((SECRET_ENV_NAMES as readonly string[]).includes(k)) {
@@ -70,8 +80,15 @@ export function childEnv(
     }
     set(k, v);
   }
+  // Node 24 fetch honors the proxy variables only with this switch; an explicit choice by the user is kept.
+  if (hasProxyVar(env, platform) && !has(env, NODE_USE_ENV_PROXY, win)) set(NODE_USE_ENV_PROXY, "1");
+  // A proxy URL can carry `user:password@`: its login must never reach a log or event.
+  for (const [k, v] of Object.entries(env)) if (isProxyUrlName(k, platform)) secrets.push(...proxySecrets(v));
   return { env, secrets };
 }
+
+const has = (env: Record<string, string>, name: string, win: boolean): boolean =>
+  win ? Object.keys(env).some((k) => k.toUpperCase() === name.toUpperCase()) : env[name] !== undefined;
 
 // ---------------------------------------------------------------- line splitting
 

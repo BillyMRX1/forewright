@@ -5,6 +5,8 @@ import { CodexAdapter } from "./codex.js";
 import { CopilotAdapter } from "./copilot.js";
 import { FakeAdapter } from "./fake.js";
 import { OpencodeAdapter } from "./opencode.js";
+import { isWindows } from "../core/platform.js";
+import { probeTimeoutMs } from "./probe-util.js";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -30,7 +32,7 @@ export function createAdapters(opts: CreateAdaptersOptions): Map<EngineId, Provi
 }
 
 /** Probes every adapter in parallel; a slow or crashing probe becomes a health record with a problem. */
-export async function probeAll(adapters: Map<EngineId, ProviderAdapter>, timeoutMs = 15_000): Promise<ProviderHealth[]> {
+export async function probeAll(adapters: Map<EngineId, ProviderAdapter>, timeoutMs = probeTimeoutMs(15_000) * (isWindows() ? 3 : 1)): Promise<ProviderHealth[]> {
   return Promise.all(
     [...adapters.values()].map(async (a) => {
       let timer: NodeJS.Timeout | undefined;
@@ -40,7 +42,7 @@ export async function probeAll(adapters: Map<EngineId, ProviderAdapter>, timeout
       try {
         const r = await Promise.race([a.probe(), timeout]);
         if (r !== "timeout") return withMinVersion(a, r);
-        return failedHealth(a, `Probe did not finish within ${timeoutMs} ms`);
+        return failedHealth(a, `${a.engine} was slow to answer (no result within ${Math.round(timeoutMs / 1000)} s). It may be installed but slow on this machine, or its network may be blocked`);
       } catch (err) {
         return failedHealth(a, `Probe failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {

@@ -9,7 +9,7 @@ import { isolatedCodexHome } from "./isolation.js";
 import { LinkManager, type LinkOps, type LinkResult } from "./links.js";
 import { isWindows, type Platform } from "../core/platform.js";
 import { WINDOWS_COMMAND_LINE_BUDGET, windowsCommandLineLength } from "./launch.js";
-import { capture, resolveEngineBinary } from "./probe-util.js";
+import { capture, probeTimeoutMs, resolveEngineBinary } from "./probe-util.js";
 import { childEnv } from "./process.js";
 import { truncate } from "./redact.js";
 import { decideOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo } from "./runner.js";
@@ -97,7 +97,7 @@ export class CodexAdapter implements ProviderAdapter {
       health.authenticated = login.code === 0 && /logged in/i.test(text);
       if (health.authenticated) health.authMethod = /chatgpt/i.test(text) ? "subscription" : /api key/i.test(text) ? "api_key" : "unknown";
       else health.problems.push("Codex is not logged in. Run codex login.");
-      const models = await capture(bin, ["debug", "models"], env, 12_000);
+      const models = await capture(bin, ["debug", "models"], env, probeTimeoutMs(12_000));
       this.links.afterRun();
       if (models.code === 0) {
         const list = (JSON.parse(models.stdout) as { models?: { slug?: string; visibility?: string }[] }).models ?? [];

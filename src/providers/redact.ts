@@ -2,6 +2,7 @@
 // this with the core redactor later.
 
 const PATTERNS: RegExp[] = [
+  /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]*:[^\s/]*@/gi, // a proxy or other URL with a login
   /\bsk-[A-Za-z0-9_-]{16,}/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, // JWT
@@ -17,6 +18,7 @@ export function redact(text: string, secrets: readonly string[] = []): string {
   }
   for (const p of PATTERNS) {
     out = out.replace(p, (m, ...groups) => {
+      if (typeof groups[0] === "string" && /^[a-z][a-z0-9+.-]*:\/\/$/i.test(groups[0])) return `${groups[0]}***:***@`;
       // keep the key name for the key=value pattern
       if (typeof groups[0] === "string" && typeof groups[1] === "string" && /^(api|token|secret|password)/i.test(groups[0])) {
         return `${groups[0]}${groups[1]}[REDACTED]`;

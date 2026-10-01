@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { resolveBinary, windowsExecutableExts } from "./probe-util.js";
+import { probeTimeoutMs, resolveBinary, windowsExecutableExts } from "./probe-util.js";
 import { tmpDir } from "./test-helpers.js";
 
 const files = (...names: string[]) => ({ platform: "win32" as const, pathExt: ".COM;.EXE;.BAT;.CMD;.VBS;.JS", isFile: (p: string) => names.includes(p) });
@@ -34,4 +34,11 @@ test("POSIX lookup is unchanged: exact name, executable regular files only", { s
   assert.equal(resolveBinary("tool", dir), path.join(dir, "tool"));
   assert.equal(resolveBinary("plain", dir), null);
   assert.equal(resolveBinary("tool", dir, { platform: "linux" }), path.join(dir, "tool"));
+});
+
+test("probe timeouts are at least 30 s on Windows (slow antivirus scans) and unchanged elsewhere", () => {
+  assert.equal(probeTimeoutMs(12_000, "win32"), 30_000);
+  assert.equal(probeTimeoutMs(45_000, "win32"), 45_000);
+  assert.equal(probeTimeoutMs(12_000, "darwin"), 12_000);
+  assert.equal(probeTimeoutMs(14_000, "linux"), 14_000);
 });

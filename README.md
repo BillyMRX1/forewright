@@ -101,6 +101,23 @@ Execution and state are local to this Mac. Prompts, code and context you give ag
 
 Agents run under your signed-in subscriptions (or, for OpenCode, free models and OAuth logins only). Environment variables such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `CODEX_API_KEY` are stripped from agent environments, so there is never a silent switch to pay-per-token billing. OpenCode models that would bill an API key are refused. Copilot runs are capped with `--max-ai-credits` and use your plan's premium requests. When a provider reports a usage limit, the affected work waits visibly until the reset instead of falling back.
 
+## Behind a company proxy
+
+Agents run with a small, fixed environment, but proxy and certificate settings are passed through to every engine: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (and their lowercase spellings), `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `NODE_USE_SYSTEM_CA`. When a proxy variable is set, Forewright also sets `NODE_USE_ENV_PROXY=1` for the engines (Node 24 only honors the proxy variables with it), unless you already set it. On Windows variable names ignore case, so `https_proxy` and `HTTPS_PROXY` are one variable there.
+
+If your proxy is configured only in the system settings (common on Windows), tell Forewright once. The settings are stored per user, not per project, in `config.json` in the data folder (a private file, because a proxy address can contain a password), and the background service reads them:
+
+```
+forewright config proxy http://proxy.example.com:8080
+forewright config proxy --no-proxy localhost,.corp.example.com
+forewright config ca C:\certs\company-root.pem
+forewright config proxy --clear
+forewright config ca --clear
+forewright config
+```
+
+Variables already set in the environment always win over these settings. A proxy address may include a login (`http://user:password@host:8080`); Forewright never prints it, and it is removed from logs, events and messages. To check the result, run `forewright doctor`: its Network section shows the proxy in use (login hidden) and where it came from, the certificate file, and whether the API host of each installed engine can be reached through the proxy ("reachable", "blocked by the proxy (HTTP 407: proxy needs a login)", "DNS failed", "timed out", "certificate not trusted"). On a slow company laptop, engine checks wait up to 30 seconds on Windows; a message that an engine "was slow to answer" means it is installed but slow, not missing.
+
 ## Known limitations
 
 - Work pauses when the Mac sleeps. Local processes do not continue during ordinary sleep, and `forewright` does not claim otherwise. The service reconciles when the Mac wakes.

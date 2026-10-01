@@ -10,9 +10,11 @@ import type { FallbackEntry } from "../core/store-types.js";
 import { LIVE_ENGINES, type EngineId, type ProviderCapabilities, type ProviderHealth } from "../core/types.js";
 import { forewrightHome, socketPath, tokenPath } from "../core/paths.js";
 import { isPipePath } from "../core/platform.js";
+import { maskProxyUrl, maskUrlsInText, readNetworkConfig, summarizeNetwork, type NetworkSetting, type NetworkSummary } from "../core/network.js";
 import { createAdapters, probeAll } from "../providers/registry.js";
 import { RpcClient } from "../runtime/client.js";
 import { asciiMode } from "../tui/theme.js";
+import { checkReachable, ENGINE_HOSTS, readCaText, type ReachResult } from "./network-check.js";
 
 // ---------------------------------------------------------------- service query (shared with `forewright status`)
 
@@ -64,6 +66,19 @@ export type FallbackInfo =
   | { status: "ok"; project: string; cto: FallbackEntry[]; workers: FallbackEntry[] }
   | { status: "unavailable"; reason: string };
 
+/** One engine host and whether it can be reached from this machine. */
+export interface NetworkCheck {
+  engine: EngineId;
+  host: string;
+  result: ReachResult;
+}
+
+/** Proxy and certificate settings in use (values already masked) and the reachability of each engine host. */
+export interface NetworkInfo {
+  settings: Omit<NetworkSummary, "httpsProxyForCheck">;
+  checks: NetworkCheck[];
+}
+
 export interface DoctorInput {
   version: string;
   node: string;
@@ -73,6 +88,8 @@ export interface DoctorInput {
   /** Left out by callers that do not look at a project; the section is then not shown. */
   fallback?: FallbackInfo;
   homeDir: string;
+  /** Left out by callers that do not test the network; the section is then not shown. */
+  network?: NetworkInfo;
   /** Windows only: whether symbolic links are allowed without admin rights. Left out on other platforms. */
   developerMode?: DeveloperMode;
 }
@@ -355,6 +372,8 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
   }
   out.push("");
 
+  if (input.network) out.push(...renderNetwork(input.network, st, mark, line), "");
+
   out.push(st.bold("Roles"));
   const roleLabel = "CTO or reviewer:";
   const roleList = (ids: EngineId[]): string => (ids.length > 0 ? ids.join(", ") : "none");
@@ -391,6 +410,29 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
   return `${out.join("\n")}\n`;
 }
 
+const REACH_STATUS: Record<ReachResult["kind"], CheckStatus> = {
+  reachable: "ok", proxy_login: "fail", blocked: "fail", dns: "fail", refused: "fail", certificate: "fail", timeout: "fail", unsupported: "warn", error: "fail",
+};
+
+/** Masks a setting value for display; defensive, since the input should already be masked. */
+const maskedSetting = (s: NetworkSetting): string => `${maskProxyUrl(s.value)} (${s.source})`;
+
+function renderNetwork(net: NetworkInfo, st: Style, mark: (s: CheckStatus) => string, line: (m: string, label: string, rest: string) => string): string[] {
+  const out: string[] = [st.bold("Network")];
+  const s = net.settings;
+  const proxies = [s.https && `https ${maskedSetting(s.https)}`, s.http && `http ${maskedSetting(s.http)}`, s.all && `all ${maskedSetting(s.all)}`].filter((x): x is string => typeof x === "string");
+  out.push(line(mark("ok"), "Proxy", proxies.length > 0 ? proxies.join("  ") : st.dim("none (direct connection)")));
+  if (s.noProxy) out.push(line(mark("ok"), "No proxy for", st.dim(`${s.noProxy.value} (${s.noProxy.source})`)));
+  out.push(line(mark("ok"), "Certificate file", s.caFile ? `${s.caFile.value} (${s.caFile.source})` : st.dim("none (system default)")));
+  for (const c of net.checks) {
+    const status = REACH_STATUS[c.result.kind];
+    const msg = maskUrlsInText(c.result.message);
+    const via = c.result.viaProxy && c.result.kind === "reachable" ? " through the proxy" : "";
+    out.push(line(mark(status), engineName(c.engine), `${c.host}  ${status === "ok" ? st.dim(`reachable${via}`) : status === "warn" ? st.yellow(msg) : st.red(msg)}`));
+  }
+  return out;
+}
+
 function notSupported(c: ProviderCapabilities): string[] {
   const list: string[] = [];
   if (!c.streaming) list.push("streaming");
@@ -406,6 +448,18 @@ function notSupported(c: ProviderCapabilities): string[] {
 
 // ---------------------------------------------------------------- JSON renderer
 
+function maskedNetwork(n: NetworkInfo): NetworkInfo {
+  const mask = (v: NetworkSetting | undefined): NetworkSetting | undefined => (v ? { ...v, value: maskProxyUrl(v.value) } : undefined);
+  const settings: NetworkInfo["settings"] = {};
+  for (const k of ["https", "http", "all"] as const) {
+    const v = mask(n.settings[k]);
+    if (v) settings[k] = v;
+  }
+  if (n.settings.noProxy) settings.noProxy = n.settings.noProxy;
+  if (n.settings.caFile) settings.caFile = n.settings.caFile;
+  return { settings, checks: n.checks.map((c) => ({ ...c, result: { ...c.result, message: maskUrlsInText(c.result.message) } })) };
+}
+
 export function renderDoctorJson(input: DoctorInput): string {
   const sum = summarize(input);
   const svc = input.service;
@@ -420,6 +474,7 @@ export function renderDoctorJson(input: DoctorInput): string {
           : { state: "not_answering", error: svc.error },
     dataFolder: { path: input.dataFolder.path, writable: input.dataFolder.writable },
     ...(input.developerMode !== undefined ? { developerMode: input.developerMode } : {}),
+    ...(input.network ? { network: maskedNetwork(input.network) } : {}),
     engines: sum.rows.map((r) => ({
       engine: r.input.health.engine,
       name: r.name,
@@ -456,7 +511,7 @@ export function renderDoctorJson(input: DoctorInput): string {
 
 // ---------------------------------------------------------------- command
 
-export const DOCTOR_HELP = `forewright doctor: check the service, the data folder and every engine.
+export const DOCTOR_HELP = `forewright doctor: check the service, the data folder, every engine and the network (proxy, certificates, reachability of each engine host).
 
 Usage:
   forewright doctor [--verbose] [--json]
@@ -483,6 +538,22 @@ function writable(dir: string): boolean {
   } catch {
     return false;
   }
+}
+
+const engines0 = (healths: ProviderHealth[]): EngineId[] => healths.filter((h) => h.binaryPath !== null && ENGINE_HOSTS[h.engine] !== undefined).map((h) => h.engine);
+
+/** Proxy and certificate settings in use, and a reachability check of the host of every installed engine. */
+export async function checkNetwork(engines: EngineId[], env: NodeJS.ProcessEnv = process.env, check: typeof checkReachable = checkReachable): Promise<NetworkInfo> {
+  const { httpsProxyForCheck, ...settings } = summarizeNetwork(env, readNetworkConfig());
+  const ca = readCaText(settings.caFile?.value);
+  const noProxy = settings.noProxy?.value;
+  const checks = await Promise.all(
+    engines.map(async (engine): Promise<NetworkCheck> => {
+      const host = ENGINE_HOSTS[engine] as string;
+      return { engine, host, result: await check({ host, proxy: httpsProxyForCheck, noProxy, ca }) };
+    }),
+  );
+  return { settings, checks };
 }
 
 /** Reads the fallback lists of the project in this folder from the running service. */
@@ -523,6 +594,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
   const adapters = createAdapters({ forewrightHome: home, includeFake: opts.includeFake });
   const [healths, service] = await Promise.all([probeAll(adapters), queryService()]);
   const fallback = await readFallback(service);
+  const network = await checkNetwork(engines0(healths));
   if (spinner) process.stdout.write("\r\x1b[2K");
 
   const order: EngineId[] = [...LIVE_ENGINES, "fake"];
@@ -537,6 +609,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
     engines,
     fallback,
     homeDir: homedir(),
+    network,
     ...(isWindows() ? { developerMode: detectDeveloperMode() } : {}),
   };
   process.stdout.write(

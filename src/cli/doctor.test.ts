@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { EngineId, ProviderCapabilities, ProviderHealth } from "../core/types.js";
-import { doctorExitCode, renderDoctor, renderDoctorJson, shouldColor, type DoctorInput, type EngineInput, type RenderOptions } from "./doctor.js";
+import { checkNetwork, doctorExitCode, renderDoctor, renderDoctorJson, shouldColor, type DoctorInput, type EngineInput, type NetworkInfo, type RenderOptions } from "./doctor.js";
 
 const SGR = /\x1b\[[0-9;]*m/;
 const plain: RenderOptions = { color: false, ascii: false, verbose: false, width: 100 };
@@ -241,4 +241,57 @@ test("doctor lists both fallback orders and flags entries that are not ready", (
   const empty = renderDoctor(input(good, { fallback: { status: "ok", project: "demo", cto: [], workers: [] } }), plain);
   assert.match(empty, /CTO:\s+none \(waits for the reset\)/);
   assert.doesNotMatch(renderDoctor(input(good), plain), /Fallback when/);
+});
+
+// ---------------------------------------------------------------- network section
+
+const net: NetworkInfo = {
+  settings: { https: { value: "http://alice:pw123456@proxy.corp:8080", source: "environment" }, noProxy: { value: "localhost", source: "Forewright config" }, caFile: { value: "C:\\certs\\corp.pem", source: "Forewright config" } },
+  checks: [
+    { engine: "claude", host: "api.anthropic.com", result: { kind: "reachable", message: "reachable", viaProxy: true } },
+    { engine: "codex", host: "api.openai.com", result: { kind: "proxy_login", message: "blocked by the proxy (HTTP 407: proxy needs a login)", viaProxy: true } },
+    { engine: "opencode", host: "opencode.ai", result: { kind: "dns", message: "DNS failed (could not find the proxy host)", viaProxy: true } },
+    { engine: "copilot", host: "api.githubcopilot.com", result: { kind: "timeout", message: "timed out", viaProxy: true } },
+  ],
+};
+
+test("the Network section shows the proxy masked with its source, the CA file and one plain line per engine host", () => {
+  const out = renderDoctor(input(good, { network: net }), plain);
+  assert.ok(out.includes("Network\n"));
+  assert.ok(out.includes("https http://***:***@proxy.corp:8080 (environment)"));
+  assert.ok(out.includes("localhost (Forewright config)"));
+  assert.ok(out.includes("C:\\certs\\corp.pem (Forewright config)"));
+  assert.match(out, /✓ Claude Code\s+api\.anthropic\.com\s+reachable through the proxy/);
+  assert.match(out, /✗ Codex\s+api\.openai\.com\s+blocked by the proxy \(HTTP 407: proxy needs a login\)/);
+  assert.match(out, /✗ OpenCode\s+opencode\.ai\s+DNS failed/);
+  assert.match(out, /✗ Copilot\s+api\.githubcopilot\.com\s+timed out/);
+  assert.ok(!out.includes("pw123456") && !out.includes("alice"));
+});
+
+test("with no proxy the section says direct connection and system default; without network input there is no section", () => {
+  const out = renderDoctor(input(good, { network: { settings: {}, checks: [] } }), plain);
+  assert.ok(out.includes("none (direct connection)"));
+  assert.ok(out.includes("none (system default)"));
+  assert.ok(!renderDoctor(input(good), plain).includes("Network"));
+});
+
+test("doctor JSON carries the network section masked, even if a value arrives unmasked", () => {
+  const unmasked: NetworkInfo = { ...net, checks: [{ engine: "claude", host: "h", result: { kind: "error", message: "via http://bob:hunter2pw@p:1 failed", viaProxy: true } }] };
+  const json = renderDoctorJson(input(good, { network: unmasked }));
+  assert.ok(!json.includes("pw123456") && !json.includes("hunter2pw") && !json.includes("alice") && !json.includes("bob"));
+  const parsed = JSON.parse(json) as { network: { settings: { https: { value: string } }; checks: Array<{ result: { kind: string } }> } };
+  assert.equal(parsed.network.settings.https.value, "http://***:***@proxy.corp:8080");
+  assert.equal(parsed.network.checks[0]?.result.kind, "error");
+});
+
+test("checkNetwork reads the environment and checks each engine host through the proxy, masking the settings", async () => {
+  const calls: Array<{ host: string; proxy: string | null }> = [];
+  const info = await checkNetwork(["claude", "codex"], { HTTPS_PROXY: "http://u:pw123456@proxy.corp:8080" }, async (o) => {
+    calls.push({ host: o.host, proxy: o.proxy });
+    return { kind: "reachable", message: "reachable", viaProxy: true };
+  });
+  assert.deepEqual(calls.map((c) => c.host), ["api.anthropic.com", "chatgpt.com"]);
+  assert.ok(calls.every((c) => c.proxy === "http://u:pw123456@proxy.corp:8080"), "the check itself uses the real login");
+  assert.equal(info.settings.https?.value, "http://***:***@proxy.corp:8080");
+  assert.ok(!JSON.stringify(info).includes("pw123456"));
 });

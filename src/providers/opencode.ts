@@ -6,7 +6,7 @@ import type {
 } from "../core/types.js";
 import { IsolationError, ProviderError } from "./errors.js";
 import { LinkManager, type LinkOps, type LinkResult } from "./links.js";
-import { capture, resolveEngineBinary } from "./probe-util.js";
+import { capture, probeTimeoutMs, resolveEngineBinary } from "./probe-util.js";
 import { childEnv } from "./process.js";
 import { redact, truncate } from "./redact.js";
 import { decideOutcome, emptyOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo } from "./runner.js";
@@ -327,7 +327,7 @@ export class OpencodeAdapter implements ProviderAdapter {
     if (!bin) throw new ProviderError("The opencode command was not found on PATH");
     if (this.catalog && Date.now() - this.catalog.at < CATALOG_TTL_MS) return this.catalog.models;
     const { env } = this.baseChildEnv({});
-    const res = await capture(bin, ["models", "--verbose"], env, 30_000);
+    const res = await capture(bin, ["models", "--verbose"], env, probeTimeoutMs(30_000));
     if (res.code !== 0) throw new ProviderError("opencode models failed", { code: res.code, stderr: truncate(res.stderr.trim(), 500) });
     this.links.afterRun();
     const auth = readAuthTypes(this.lastIso?.isolated === false ? this.realAuthPath() : path.join(env["XDG_DATA_HOME"] as string, "opencode", "auth.json"));

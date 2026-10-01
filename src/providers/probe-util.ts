@@ -59,12 +59,18 @@ export interface CaptureResult {
   stderr: string;
 }
 
-export function capture(bin: string, args: string[], env: Record<string, string>, timeoutMs = 12_000): Promise<CaptureResult> {
+/**
+ * How long a probe command may take. A company laptop can scan every process start with antivirus (about 3 s
+ * each), so Windows gets at least 30 s; elsewhere the base value stands.
+ */
+export const probeTimeoutMs = (baseMs: number, platform: Platform = process.platform): number => (isWindows(platform) ? Math.max(baseMs, 30_000) : baseMs);
+
+export function capture(bin: string, args: string[], env: Record<string, string>, timeoutMs = probeTimeoutMs(12_000)): Promise<CaptureResult> {
   return new Promise((resolve, reject) => {
     const launch = resolveLaunch(bin, args); // a Windows .cmd shim becomes node + script: no shell
     execFile(launch.bin, launch.args, { env, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: "utf8", windowsHide: true }, (err, stdout, stderr) => {
       if (err && (err as NodeJS.ErrnoException).code === "ENOENT") return reject(err);
-      if (err && (err as { killed?: boolean }).killed) return reject(new Error(`${bin} ${args.join(" ")} timed out after ${timeoutMs} ms`));
+      if (err && (err as { killed?: boolean }).killed) return reject(new Error(`${bin} ${args.join(" ")} was slow to answer (no reply within ${Math.round(timeoutMs / 1000)} s). It is installed, but this machine or its network is slow to respond.`));
       const code = err ? ((err as { code?: number }).code ?? 1) : 0;
       resolve({ code: typeof code === "number" ? code : 1, stdout, stderr });
     });
