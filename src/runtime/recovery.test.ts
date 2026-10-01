@@ -4,21 +4,20 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { openAndMigrate } from "../core/db.js";
-import { dbPath, socketPathFor } from "../core/paths.js";
+import { dbPath } from "../core/paths.js";
 import { Store } from "../core/store.js";
 import { FakeAdapter } from "../providers/fake.js";
 import type { OwnedProcess } from "../core/types.js";
 import { isOwnedAlive, pidAlive, readStartTime, terminateGroup } from "../providers/process.js";
-import { assertGroupGone, addTask, hire, isWork, poke, rule, seedPrd, sleep, startHarness, taskOf, waitFor, workRequests } from "./test-harness.js";
-import { startDaemon } from "./daemon.js";
-import { RpcClient } from "./client.js";
+import { assertGroupGone, addTask, connectClient, hire, isWork, poke, rule, seedPrd, sleep, startHarness, startSecondDaemon, taskOf, trackProcess, waitFor, workRequests } from "./test-harness.js";
+import type { Daemon } from "./daemon.js";
 
 test("restart reconciliation: an orphaned owned run is terminated, marked uncertain, its task returns to ready without a retry penalty, and its files survive", async () => {
   const adapter = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true, spawnGrandchild: true, writeFiles: { "wip.txt": "kept\n" } })] });
   const h = await startHarness({ adapter });
   const home = h.home;
   const repo = h.repo;
-  let second: Awaited<ReturnType<typeof startDaemon>> | null = null;
+  let second: Daemon | null = null;
   let orphan: OwnedProcess | null = null;
   try {
     seedPrd(h);
@@ -39,8 +38,8 @@ test("restart reconciliation: an orphaned owned run is terminated, marked uncert
     assert.equal(owned, true, `the orphan is still alive after the crash: ${await explain(proc)}`);
 
     const adapter2 = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true })] });
-    second = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", adapter2]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
-    const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
+    second = await startSecondDaemon(home, adapter2);
+    const client = await connectClient(home);
     await client.request("projects.open", { cwd: repo });
     const rt2 = second.runtimes.get(h.projectId)!;
 
@@ -59,8 +58,11 @@ test("restart reconciliation: an orphaned owned run is terminated, marked uncert
     assert.equal(resumed.resumeSessionId, sessionBefore, "the new run resumes the provider session");
     client.close();
   } finally {
-    await killOrphan(orphan);
-    await second?.close();
+    try {
+      await killOrphan(orphan);
+    } finally {
+      await second?.close();
+    }
   }
 });
 
@@ -70,9 +72,13 @@ async function explain(proc: OwnedProcess): Promise<string> {
   return JSON.stringify({ pid: proc.pid, pgid: proc.pgid, recorded: proc.startedAt, now: now.time, readError: now.error, pidAlive: pidAlive(proc.pid) });
 }
 
-/** A failed test must never leave the orphan running: it would keep the whole test process alive. Bounded. */
+/**
+ * A failed test must never leave the orphan running: it would keep the whole test process alive. Bounded.
+ * The check is on the whole group, not the root pid: the root can be gone while its sleeping grandchild
+ * (`spawnGrandchild`) is not, and a forced kill that fails is an error, not something to swallow.
+ */
 async function killOrphan(proc: OwnedProcess | null): Promise<void> {
-  if (proc && pidAlive(proc.pid)) await terminateGroup(proc, 300).catch(() => {});
+  if (proc) await terminateGroup(proc, 300); // does nothing when the group is already gone
 }
 
 test("a run record that points at an alive process that is not ours is never signalled", async () => {
@@ -81,7 +87,8 @@ test("a run record that points at an alive process that is not ours is never sig
   const repo = h.repo;
   const bystander = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: process.platform !== "win32", windowsHide: true, stdio: "ignore" });
   bystander.unref();
-  let second: Awaited<ReturnType<typeof startDaemon>> | null = null;
+  trackProcess(bystander.pid!);
+  let second: Daemon | null = null;
   try {
     seedPrd(h);
     const wren = hire(h, "Wren");
@@ -98,8 +105,8 @@ test("a run record that points at an alive process that is not ours is never sig
     store.markRunStarted(run.id, gen, { pid: bystander.pid!, pgid: bystander.pid!, processStartedAt: "Mon Jan  1 00:00:00 2001" });
     store.db.close();
 
-    second = await startDaemon({ forewrightHome: home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
-    const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
+    second = await startSecondDaemon(home, new FakeAdapter());
+    const client = await connectClient(home);
     await client.request("projects.open", { cwd: repo });
     const rt2 = second.runtimes.get(h.projectId)!;
     process.kill(bystander.pid!, 0); // throws if it was killed
@@ -128,7 +135,7 @@ test("with a slow OS start-time reader the process identity is complete before i
   };
   const adapter = new FakeAdapter({ readStartTime: slow, rules: [rule(isWork, { outcome: "succeeded", hangUntilCancelled: true, spawnGrandchild: true })] });
   const h = await startHarness({ adapter });
-  let second: Awaited<ReturnType<typeof startDaemon>> | null = null;
+  let second: Daemon | null = null;
   let orphan: OwnedProcess | null = null;
   try {
     seedPrd(h);
@@ -150,15 +157,18 @@ test("with a slow OS start-time reader the process identity is complete before i
     h.daemon.crash();
     h.client.close();
     assert.equal(await isOwnedAlive(proc), true, `the orphan is alive after the crash: ${await explain(proc)}`);
-    second = await startDaemon({ forewrightHome: h.home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
-    const client = await RpcClient.connect(socketPathFor(h.home), RpcClient.tokenFrom(path.join(h.home, "client.token")));
+    second = await startSecondDaemon(h.home, new FakeAdapter());
+    const client = await connectClient(h.home);
     await client.request("projects.open", { cwd: h.repo });
     assert.equal(await isOwnedAlive(proc), false, "the orphan was terminated");
     await assertGroupGone(proc.pgid);
     client.close();
   } finally {
-    await killOrphan(orphan);
-    await second?.close();
+    try {
+      await killOrphan(orphan);
+    } finally {
+      await second?.close();
+    }
   }
 });
 
@@ -166,7 +176,8 @@ test("an older run row with an empty process start time is never signalled: the 
   const h = await startHarness({ adapter: new FakeAdapter() });
   const bystander = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: process.platform !== "win32", windowsHide: true, stdio: "ignore" });
   bystander.unref();
-  let second: Awaited<ReturnType<typeof startDaemon>> | null = null;
+  trackProcess(bystander.pid!);
+  let second: Daemon | null = null;
   try {
     seedPrd(h);
     const wren = hire(h, "Wren");
@@ -183,8 +194,8 @@ test("an older run row with an empty process start time is never signalled: the 
     assert.throws(() => store.markRunStarted(run.id, gen, { pid: 1, pgid: 1, processStartedAt: "" }), /without the process start time/);
     store.db.close();
 
-    second = await startDaemon({ forewrightHome: h.home, adapters: new Map([["fake", new FakeAdapter()]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 });
-    const client = await RpcClient.connect(socketPathFor(h.home), RpcClient.tokenFrom(path.join(h.home, "client.token")));
+    second = await startSecondDaemon(h.home, new FakeAdapter());
+    const client = await connectClient(h.home);
     await client.request("projects.open", { cwd: h.repo });
     const rt2 = second.runtimes.get(h.projectId)!;
     process.kill(bystander.pid!, 0); // throws if it was signalled

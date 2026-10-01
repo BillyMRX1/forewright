@@ -240,6 +240,15 @@ async function processGroupId(pid: number): Promise<string> {
   }
 }
 
+/**
+ * Test seam: told about every child the moment it has a pid, before its identity is read, so a test harness
+ * can find and end a tree even when spawnOwned later fails. Never set outside tests.
+ */
+let spawnObserver: ((owned: OwnedProcess) => void) | null = null;
+export function setSpawnObserver(fn: ((owned: OwnedProcess) => void) | null): void {
+  spawnObserver = fn;
+}
+
 export async function spawnOwned(
   bin: string,
   args: string[],
@@ -316,6 +325,7 @@ export async function spawnOwned(
   });
   const pid = child.pid;
   if (pid === undefined) throw new SpawnError(`Spawned ${bin} without a pid`, { bin });
+  spawnObserver?.({ pid, pgid: pid, startedAt: "", command: [bin, ...args].join(" ").slice(0, 500) });
   if (opts.stdin !== "ignore" && child.stdin) {
     child.stdin.on("error", () => {
       // EPIPE when the child exits before reading; the exit status reports the real failure.
@@ -334,7 +344,13 @@ export async function spawnOwned(
       await sleep(200); // alive but unreadable: one more try before giving up
     }
   }
-  if (startedAt === "") throw new SpawnError(`Could not read the OS start time of pid ${pid}${readError ? `: ${readError}` : ""}`, { bin, pid, readError });
+  if (startedAt === "") {
+    // The caller never receives this child, so nobody else can end it: do it here rather than leave it running.
+    await terminateGroup({ pid, pgid: pid, startedAt: "", command: bin }, 300).catch((err: unknown) => {
+      readError += ` | and it could not be ended: ${err instanceof Error ? err.message : String(err)}`;
+    });
+    throw new SpawnError(`Could not read the OS start time of pid ${pid}${readError ? `: ${readError}` : ""}`, { bin, pid, readError });
+  }
   armFallback(); // the caller attaches its stream readers right after this returns
   // On Windows pgid is the pid of the tree root (there are no process groups); terminateGroup ends the whole tree under it.
   return { owned: { pid, pgid: pid, startedAt, command: [bin, ...args].join(" ").slice(0, 500) }, child, stdout, stderr, exited };

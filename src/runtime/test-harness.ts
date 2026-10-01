@@ -6,7 +6,9 @@ import path from "node:path";
 import { type Clock, systemClock } from "../core/clock.js";
 import { tempDir } from "../core/test-helpers.js";
 import type { EngineId, ProviderAdapter, RunRequest } from "../core/types.js";
-import { treeGone } from "../providers/process.js";
+import { after, beforeEach } from "node:test";
+import { defaultTreeBackend, setSpawnObserver, terminateGroup, treeGone } from "../providers/process.js";
+import type { OwnedProcess } from "../core/types.js";
 import { FakeAdapter, type FakeRule, type FakeScript } from "../providers/fake.js";
 import { RpcClient } from "./client.js";
 import { type Daemon, startDaemon } from "./daemon.js";
@@ -77,6 +79,8 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   if (open.status === "none") open = await client.request("projects.init", { cwd: repo });
   if (open.status !== "found") throw new Error("could not open the test project");
   const rt = daemon.runtimes.get(open.projectId)!;
+  trackDaemon(daemon);
+  trackClient(client);
   return {
     home,
     repo,
@@ -227,3 +231,88 @@ export async function assertGroupGone(pgid: number): Promise<void> {
 export const fileExists = (file: string): string => `node -e "process.exit(require('fs').existsSync('${file}') ? 0 : 1)"`;
 export const checkPasses = 'node -e "process.exit(0)"';
 export const checkFails = 'node -e "process.exit(1)"';
+
+// ---------------------------------------------------------------- leak tracking
+
+// A child that outlives its test keeps the whole test file from exiting, and per-test timeouts do not cover
+// that: the job just hangs. Every tree started during a file is recorded here (with the test that started it),
+// and a file-level hook ends whatever is still alive and FAILS the file with a list, so a leak is a clear
+// failure instead of a hang. It is deliberately not --test-force-exit: the leak is reported, not hidden.
+
+interface TrackedTree {
+  proc: OwnedProcess;
+  test: string;
+  /** Started by the test itself rather than by the runtime. */
+  external: boolean;
+}
+
+const trackedTrees: TrackedTree[] = [];
+const trackedDaemons = new Set<Daemon>();
+const trackedClients = new Set<RpcClient>();
+let currentTest = "(outside any test)";
+
+beforeEach((t) => {
+  currentTest = t.name;
+});
+
+setSpawnObserver((proc) => {
+  trackedTrees.push({ proc, test: currentTest, external: false });
+});
+
+export function trackDaemon<T extends Daemon>(d: T): T {
+  trackedDaemons.add(d);
+  return d;
+}
+
+export function trackClient<T extends RpcClient>(c: T): T {
+  trackedClients.add(c);
+  return c;
+}
+
+/** Records a process a test spawned itself (a bystander, an orphan). `pid` is also taken as the group id. */
+export function trackProcess(pid: number): void {
+  trackedTrees.push({ proc: { pid, pgid: pid, startedAt: "", command: "started by the test" }, test: currentTest, external: true });
+}
+
+/** A second daemon on the same home (a restart after a crash), closed at the end of the file at the latest. */
+export async function startSecondDaemon(home: string, adapter: ProviderAdapter): Promise<Daemon> {
+  return trackDaemon(await startDaemon({ forewrightHome: home, adapters: new Map([[adapter.engine, adapter]]), testMode: true, defaultCtoEngine: "fake", watchdogMs: 60_000 }));
+}
+
+export async function connectClient(home: string): Promise<RpcClient> {
+  return trackClient(await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token"))));
+}
+
+/** Ends every tracked tree that is still alive, bounded. Returns what it had to kill. Exported for the harness's own test. */
+export async function reapTrackedTrees(): Promise<string[]> {
+  for (const c of trackedClients) c.close();
+  trackedClients.clear();
+  const leaked: string[] = [];
+  for (const d of trackedDaemons) {
+    try {
+      await d.close(); // a crashed daemon is already closed: a no-op
+    } catch (err) {
+      leaked.push(`a daemon could not be closed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  trackedDaemons.clear();
+  const backend = defaultTreeBackend();
+  for (const t of trackedTrees.splice(0)) {
+    if (!backend.alive(t.proc)) continue;
+    let ended = "ended";
+    try {
+      await terminateGroup(t.proc, 300, backend);
+    } catch (err) {
+      ended = `COULD NOT BE ENDED: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    leaked.push(`pid ${t.proc.pid} (${t.external ? "test-spawned" : "runtime-spawned"}: ${t.proc.command.slice(0, 120)}) started by test "${t.test}": ${ended}`);
+  }
+  return leaked;
+}
+
+after(async () => {
+  const leaked = await reapTrackedTrees();
+  if (leaked.length > 0) {
+    throw new Error(`${leaked.length} process tree(s) were still alive when this test file finished and had to be killed:\n  ${leaked.join("\n  ")}`);
+  }
+});

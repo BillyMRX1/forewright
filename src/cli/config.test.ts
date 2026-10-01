@@ -82,7 +82,8 @@ test("config values reach a spawned engine child, the environment wins, and the 
     fs.readFileSync(path.join(dir, "env.txt"), "utf8").split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
   );
   assert.equal(env["HTTPS_PROXY"], "http://alice:topsecretpw@proxy.corp:8080");
-  assert.equal(env["https_proxy"], "http://alice:topsecretpw@proxy.corp:8080");
+  // On Windows environment names are case-insensitive, so https_proxy and HTTPS_PROXY are one variable.
+  if (process.platform !== "win32") assert.equal(env["https_proxy"], "http://alice:topsecretpw@proxy.corp:8080");
   assert.equal(env["HTTP_PROXY"], "http://envproxy:1", "environment wins over the config");
   assert.equal(env["NO_PROXY"], "localhost");
   assert.equal(env["NODE_EXTRA_CA_CERTS"], ca);
