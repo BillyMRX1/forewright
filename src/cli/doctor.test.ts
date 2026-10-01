@@ -152,3 +152,75 @@ test("roles list only MCP-capable usable engines for CTO or reviewer", () => {
   const none = renderDoctor(input([good[2]!]), plain);
   assert.match(none, /CTO or reviewer: {2}none\n/);
 });
+
+// ---------------------------------------------------------------- Windows: isolation and Developer Mode
+
+import { DEVELOPER_MODE_HINT, detectDeveloperMode, engineStatus, parseDeveloperModeReg } from "./doctor.js";
+import { compareVersions, withMinVersion } from "../providers/registry.js";
+
+test("Developer Mode is read from the registry value, with a real symlink attempt as the fallback", () => {
+  const reg = (v: string) => `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock\r\n    AllowDevelopmentWithoutDevLicense    REG_DWORD    ${v}\r\n`;
+  assert.equal(parseDeveloperModeReg(reg("0x1")), "on");
+  assert.equal(parseDeveloperModeReg(reg("0x0")), "off");
+  assert.equal(parseDeveloperModeReg("unrelated"), "off");
+  assert.equal(detectDeveloperMode({ run: () => reg("0x1") }), "on");
+  const calls: string[][] = [];
+  assert.equal(detectDeveloperMode({ run: (bin, args) => (calls.push([bin, ...args]), reg("0x0")) }), "off");
+  assert.deepEqual(calls[0]?.slice(0, 2), ["reg", "query"]);
+  assert.match(calls[0]?.[2] ?? "", /AppModelUnlock$/);
+  assert.equal(calls[0]?.[4], "AllowDevelopmentWithoutDevLicense");
+  const missing = (): string => { throw new Error("ERROR: The system was unable to find the specified registry key or value."); };
+  assert.equal(detectDeveloperMode({ run: missing, trySymlink: () => true }), "on", "the symlink itself is the real test");
+  assert.equal(detectDeveloperMode({ run: missing, trySymlink: () => false }), "off");
+  assert.equal(detectDeveloperMode({ run: missing, trySymlink: () => { throw new Error("odd"); } }), "unknown");
+});
+
+test("a hard link or no link is a warning with the Developer Mode hint; a symlink is fine; engines that need no link are fine", () => {
+  const e = (isolation: ProviderHealth["isolation"]): EngineInput => ({ health: health("codex", { isolation }), capabilities: caps() });
+  assert.equal(engineStatus(health("codex", { isolation: "symlink" })), "ok");
+  assert.equal(engineStatus(health("claude", { isolation: "n/a" })), "ok");
+  assert.equal(engineStatus(health("codex", { isolation: "hardlink" })), "warn");
+  assert.equal(engineStatus(health("codex", { isolation: "none", problems: ["x"] })), "warn");
+  const out = renderDoctor(input([e("hardlink")]), plain);
+  assert.match(out, /! Codex/);
+  assert.ok(out.includes(`Codex: ${DEVELOPER_MODE_HINT}.`), out);
+  assert.equal(doctorExitCode(input([e("hardlink")])), 0, "a warning is not a failure");
+});
+
+test("verbose shows each engine's isolation mode and note; JSON carries it too", () => {
+  const eng: EngineInput[] = [
+    { health: health("codex", { isolation: "hardlink", isolationNote: "Symbolic links need Developer Mode on Windows." }), capabilities: caps() },
+    { health: health("claude", { isolation: "n/a" }), capabilities: caps() },
+  ];
+  const v = renderDoctor(input(eng), { ...plain, verbose: true });
+  assert.match(v, /isolation: hardlink\s+\(turn on Developer Mode/);
+  assert.match(v, /isolation note: Symbolic links need Developer Mode on Windows\./);
+  assert.match(v, /isolation: n\/a/);
+  const json = JSON.parse(renderDoctorJson(input(eng))) as { engines: Array<{ engine: string; isolation: string | null; isolationNote: string | null }> };
+  assert.deepEqual(json.engines.map((x) => [x.engine, x.isolation]), [["codex", "hardlink"], ["claude", "n/a"]]);
+  assert.match(json.engines[0]?.isolationNote ?? "", /Developer Mode/);
+});
+
+test("the Developer Mode line appears only when the platform reports it (Windows)", () => {
+  assert.ok(!renderDoctor(input(good), plain).includes("Developer Mode"));
+  const off = renderDoctor(input(good, { developerMode: "off" }), plain);
+  assert.match(off, /! Developer Mode\s+off\s+turn on Developer Mode \(Settings, System, For developers\)/);
+  assert.match(renderDoctor(input(good, { developerMode: "on" }), plain), /✓ Developer Mode\s+on/);
+  assert.equal(JSON.parse(renderDoctorJson(input(good, { developerMode: "off" }))).developerMode, "off");
+  assert.equal("developerMode" in JSON.parse(renderDoctorJson(input(good))), false);
+});
+
+test("an engine older than its minimum version is a warning with 'update <engine>'", () => {
+  assert.equal(compareVersions("1.0.9", "1.0.51") < 0, true);
+  assert.equal(compareVersions("1.0.83", "1.0.51") > 0, true);
+  assert.equal(compareVersions("0.0.420", "1.0.51") < 0, true);
+  assert.equal(compareVersions("1.2.3.", "1.2.3"), 0);
+  const adapter = { engine: "copilot" as const, minVersion: "1.0.51" };
+  const old = withMinVersion(adapter, health("copilot", { version: "0.0.420", models: [] }));
+  assert.match(old.problems[0] ?? "", /copilot 0\.0\.420 is older than 1\.0\.51.*update copilot/);
+  assert.equal(engineStatus(old), "warn");
+  assert.equal(old.outdated, true);
+  assert.equal(withMinVersion(adapter, health("copilot", { version: "1.0.83" })).problems.length, 0);
+  assert.equal(withMinVersion(adapter, health("copilot", { version: null })).problems.length, 0, "an unknown version is not accused");
+  assert.equal(withMinVersion({ engine: "claude" as const }, health("claude")).minVersion, undefined);
+});

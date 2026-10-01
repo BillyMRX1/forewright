@@ -1,10 +1,14 @@
 // `forewright doctor`: checks the background service, the data folder and every engine, then prints a
 // compact report. The renderer is pure (no process state): color, ASCII mode, verbosity and width are
 // passed in, so tests never depend on the runner's terminal.
-import { accessSync, constants, existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import { isWindows } from "../core/platform.js";
 import { LIVE_ENGINES, type EngineId, type ProviderCapabilities, type ProviderHealth } from "../core/types.js";
 import { forewrightHome, socketPath, tokenPath } from "../core/paths.js";
+import { isPipePath } from "../core/platform.js";
 import { createAdapters, probeAll } from "../providers/registry.js";
 import { RpcClient } from "../runtime/client.js";
 import { asciiMode } from "../tui/theme.js";
@@ -27,12 +31,15 @@ export type ServiceQuery =
 /** Asks the background service for its status; the one implementation behind `status` and `doctor`. */
 export async function queryService(): Promise<ServiceQuery> {
   const sock = socketPath();
-  if (!existsSync(sock) || !existsSync(tokenPath())) return { state: "not_running" };
+  // A named pipe (Windows) is not a file on disk, so only a unix socket can be checked for existence.
+  if ((!isPipePath(sock) && !existsSync(sock)) || !existsSync(tokenPath())) return { state: "not_running" };
   let client: RpcClient;
   try {
     client = await RpcClient.connect(sock, RpcClient.tokenFrom(tokenPath()));
   } catch (err) {
-    return { state: "not_answering", error: err instanceof Error ? err.message : String(err) };
+    const message = err instanceof Error ? err.message : String(err);
+    if (isPipePath(sock) && /ENOENT/.test(message)) return { state: "not_running" }; // no pipe of that name: nobody is listening
+    return { state: "not_answering", error: message };
   }
   try {
     const status = (await client.requestRaw("daemon.status", {})) as ServiceStatus;
@@ -58,6 +65,53 @@ export interface DoctorInput {
   dataFolder: { path: string; writable: boolean };
   engines: EngineInput[];
   homeDir: string;
+  /** Windows only: whether symbolic links are allowed without admin rights. Left out on other platforms. */
+  developerMode?: DeveloperMode;
+}
+
+export type DeveloperMode = "on" | "off" | "unknown";
+
+export const DEVELOPER_MODE_HINT = "turn on Developer Mode (Settings, System, For developers) for the simplest setup";
+
+const weakIsolation = (h: ProviderHealth): boolean => h.isolation === "hardlink" || h.isolation === "none";
+
+/** Reads `reg query ...AppModelUnlock /v AllowDevelopmentWithoutDevLicense` output: REG_DWORD 0x1 means on. */
+export function parseDeveloperModeReg(text: string): DeveloperMode {
+  const m = /AllowDevelopmentWithoutDevLicense\s+REG_DWORD\s+(0x[0-9a-f]+)/i.exec(text);
+  if (!m) return "off"; // the value is absent until the setting has been turned on once
+  return Number.parseInt(m[1] as string, 16) === 1 ? "on" : "off";
+}
+
+/**
+ * Windows Developer Mode: the registry value first, then (if reg.exe is unusable) a real attempt to create a
+ * symbolic link in a temp folder, which is the thing that actually matters.
+ */
+export function detectDeveloperMode(deps: { run?: (bin: string, args: string[]) => string; trySymlink?: () => boolean } = {}): DeveloperMode {
+  const run = deps.run ?? ((bin: string, args: string[]) => execFileSync(bin, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, timeout: 10_000 }));
+  try {
+    return parseDeveloperModeReg(run("reg", ["query", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock", "/v", "AllowDevelopmentWithoutDevLicense"]));
+  } catch {
+    // reg.exe prints an error and exits 1 when the key or value does not exist; fall through to the real test.
+  }
+  try {
+    return (deps.trySymlink ?? canCreateSymlink)() ? "on" : "off";
+  } catch {
+    return "unknown";
+  }
+}
+
+function canCreateSymlink(): boolean {
+  const dir = mkdtempSync(path.join(tmpdir(), "forewright-symlink-"));
+  try {
+    writeFileSync(path.join(dir, "t"), "x");
+    symlinkSync(path.join(dir, "t"), path.join(dir, "l"), "file");
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EPERM") return false;
+    throw err;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 export interface RenderOptions {
@@ -82,8 +136,9 @@ export const engineName = (id: EngineId): string => DISPLAY_NAME[id] ?? id;
 
 export function engineStatus(h: ProviderHealth): CheckStatus {
   if (h.binaryPath === null || h.authenticated === false) return "fail";
+  if (h.outdated) return "warn"; // update it: the flags Forewright passes may be missing
   if (h.problems.length > 0 && h.models.length === 0) return "fail";
-  if (h.authenticated === "unknown" || h.problems.length > 0) return "warn";
+  if (h.authenticated === "unknown" || h.problems.length > 0 || weakIsolation(h)) return "warn";
   return "ok";
 }
 
@@ -196,7 +251,7 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
   };
   const gw = opts.ascii ? 4 : 1;
   const mark = (s: CheckStatus): string => GLYPH[s].paint(pad(GLYPH[s].text, gw));
-  const tilde = (p: string): string => (input.homeDir && p.startsWith(`${input.homeDir}/`) ? `~${p.slice(input.homeDir.length)}` : p);
+  const tilde = (p: string): string => (input.homeDir && (p.startsWith(`${input.homeDir}/`) || p.startsWith(`${input.homeDir}\\`)) ? `~${p.slice(input.homeDir.length)}` : p);
 
   const serviceDetail =
     input.service.state === "running"
@@ -206,7 +261,7 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
         : `not answering (${input.service.error})`;
   const serviceHint = input.service.state === "running" ? "" : "starts automatically when you run forewright";
 
-  const labelW = Math.max("Background service".length, "Data folder".length, ...sum.rows.map((r) => r.name.length));
+  const labelW = Math.max("Background service".length, "Data folder".length, "Developer Mode".length, ...sum.rows.map((r) => r.name.length));
   const versionW = Math.max("version".length, ...sum.rows.map((r) => (r.input.health.version ?? "-").length));
   const loginW = Math.max("login".length, ...sum.rows.map((r) => loginWords(r.input.health).length));
   const indent = 2;
@@ -225,7 +280,15 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
     line(mark(sum.serviceStatus), "Background service", input.service.state === "running" ? serviceDetail : `${st.yellow(serviceDetail)}${serviceHint ? `  ${st.dim(serviceHint)}` : ""}`),
   );
   const dataStatus: CheckStatus = input.dataFolder.writable ? "ok" : "warn";
+  const devMode = input.developerMode;
+  const pushDevMode = (): void => {
+    if (devMode === undefined) return;
+    const status: CheckStatus = devMode === "on" ? "ok" : "warn";
+    const words = devMode === "on" ? st.dim("on") : devMode === "off" ? `${st.yellow("off")}  ${st.dim(DEVELOPER_MODE_HINT)}` : st.yellow("could not be checked");
+    out.push(line(mark(status), "Developer Mode", words));
+  };
   out.push(line(mark(dataStatus), "Data folder", input.dataFolder.writable ? st.dim(tilde(input.dataFolder.path)) : `${st.dim(tilde(input.dataFolder.path))}  ${st.yellow("not writable")}`));
+  pushDevMode();
   out.push("");
 
   out.push(`${st.bold(pad("Engines", indent + gw + 1 + labelW + 2 - 0))}${st.dim(pad("version", versionW + 2))}${st.dim(pad("login", loginW + 2))}${st.dim("models")}`);
@@ -250,6 +313,9 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
         wrapped.forEach((l, i) => out.push(st.dim(`${sub}${i === 0 ? prefix : " ".repeat(prefix.length)}${l}`)));
       };
       emit("binary:", [h.binaryPath ?? "not found"]);
+      if (h.isolation !== undefined) emit("isolation:", [h.isolation, ...(weakIsolation(h) ? [`(${DEVELOPER_MODE_HINT})`] : [])]);
+      if (h.isolationNote) emit("isolation note:", h.isolationNote.split(/\s+/));
+      if (h.minVersion) emit("minimum version:", [h.minVersion]);
       if (h.models.length > 0) emit("models:", h.models.map((m, i, a) => (i < a.length - 1 ? `${m},` : m)));
       const ns = notSupported(r.input.capabilities);
       if (ns.length > 0) emit("not supported:", ns.map((m, i, a) => (i < a.length - 1 ? `${m},` : m)));
@@ -271,6 +337,7 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
     .filter((r) => r.status === "warn")
     .map((r) => {
       const h = r.input.health;
+      if (weakIsolation(h) && h.problems.length === 0) return `${r.name}: ${DEVELOPER_MODE_HINT}.`;
       if (h.authenticated === "unknown") return `${r.name} login is confirmed by its first run.`;
       return `${r.name}: ${h.problems[0] ?? "see --verbose"}${/[.!?]$/.test(h.problems[0] ?? "") ? "" : "."}`;
     });
@@ -307,6 +374,7 @@ export function renderDoctorJson(input: DoctorInput): string {
           ? { state: "not_running" }
           : { state: "not_answering", error: svc.error },
     dataFolder: { path: input.dataFolder.path, writable: input.dataFolder.writable },
+    ...(input.developerMode !== undefined ? { developerMode: input.developerMode } : {}),
     engines: sum.rows.map((r) => ({
       engine: r.input.health.engine,
       name: r.name,
@@ -317,6 +385,9 @@ export function renderDoctorJson(input: DoctorInput): string {
       models: r.input.health.models,
       modelsSource: r.input.health.modelsSource,
       problems: r.input.health.problems,
+      isolation: r.input.health.isolation ?? null,
+      isolationNote: r.input.health.isolationNote ?? null,
+      minVersion: r.input.health.minVersion ?? null,
       capabilities: r.input.capabilities,
     })),
     roles: sum.roles,
@@ -390,6 +461,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
     dataFolder: { path: home, writable: writable(home) },
     engines,
     homeDir: homedir(),
+    ...(isWindows() ? { developerMode: detectDeveloperMode() } : {}),
   };
   process.stdout.write(
     json ? renderDoctorJson(input) : renderDoctor(input, { color, ascii: asciiMode(), verbose, width: process.stdout.columns ?? 100 }),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeAdapter } from "../providers/fake.js";
-import { call, gitIn, isCto, isReview, isWork, rule, startHarness, waitFor } from "./test-harness.js";
+import { call, gitIn, isCto, isReview, isWork, rule, startHarness, waitFor, fileExists } from "./test-harness.js";
 
 test("happy path: message, PRD via the real MCP bridge, approval, tasks, work, review, integration, done", async () => {
   const adapter = new FakeAdapter({
@@ -24,8 +24,8 @@ test("happy path: message, PRD via the real MCP bridge, approval, tasks, work, r
         toolCalls: [
           call("hire_agent", { name: "Wren", role: "backend", engine: "fake" }),
           call("hire_agent", { name: "Rex", role: "review", engine: "fake" }),
-          call("create_task", { title: "Write hello.txt", description: "Create hello.txt", acceptance: "hello.txt exists", verify_commands: ["test -f hello.txt"], requirement_keys: ["R-001"], assignee: "Wren" }),
-          call("create_task", { title: "Write second.txt", description: "Create second.txt", acceptance: "second.txt exists", verify_commands: ["test -f second.txt"], requirement_keys: ["R-001"], assignee: "Wren" }),
+          call("create_task", { title: "Write hello.txt", description: "Create hello.txt", acceptance: "hello.txt exists", verify_commands: [fileExists("hello.txt")], requirement_keys: ["R-001"], assignee: "Wren" }),
+          call("create_task", { title: "Write second.txt", description: "Create second.txt", acceptance: "second.txt exists", verify_commands: [fileExists("second.txt")], requirement_keys: ["R-001"], assignee: "Wren" }),
         ],
       }),
       rule(isWork, (req) => {

@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import type { NormalizedEvent, PermissionProfile } from "../core/types.js";
 import { ClaudeAdapter } from "./claude.js";
-import { CodexAdapter } from "./codex.js";
+import { CodexAdapter, planCodexInvocation } from "./codex.js";
 import { isolatedCodexHome } from "./isolation.js";
-import { baseRequest, fakeBinary, tmpDir } from "./test-helpers.js";
+import { assertPrivateMode, baseRequest, dumpEnvJs, dumpModeJs, fakeBinary, linkKind, systemEnv, tmpDir } from "./test-helpers.js";
 
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
-const BASE_ENV = { PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(), ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000" };
+const BASE_ENV = { ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(), ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000" };
 
 function argvOf(file: string): string[] {
   return fs.readFileSync(file, "utf8").split("\n").slice(0, -1);
@@ -88,11 +88,15 @@ test("claude: permission profiles produce the documented flags and never bypass 
 
 test("claude: mcp servers go through a 0600 temp file that is deleted after the run; env has no API key", async () => {
   const dir = tmpDir();
-  const { bin, argvFile } = fakeBinary(dir, "claude", { stdoutLines: [] });
-  // record the file mode while the fake binary runs
-  fs.appendFileSync(bin, "");
-  const script = fs.readFileSync(bin, "utf8").replace("exit 0", `f=$(grep -A1 -- '--mcp-config' '${argvFile}' | tail -1); ls -l "$f" > '${dir}/mode.txt'; cp "$f" '${dir}/mcp-copy.json'; env > '${dir}/env.txt'; exit 0`);
-  fs.writeFileSync(bin, script, { mode: 0o755 });
+  const argvFile = path.join(dir, "claude.argv");
+  const { bin } = fakeBinary(dir, "claude", {
+    stdoutLines: [],
+    // record the MCP file's mode and content while the fake binary runs
+    extraJs: `const f = args[args.indexOf("--mcp-config") + 1];
+${dumpModeJs("f", path.join(dir, "mode.txt"))}
+fs.copyFileSync(f, ${JSON.stringify(path.join(dir, "mcp-copy.json"))});
+${dumpEnvJs(path.join(dir, "env.txt"))}`,
+  });
   await claudeAdapter(dir, bin).start(
     baseRequest({ cwd: dir, mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } }] }),
     () => {},
@@ -100,7 +104,7 @@ test("claude: mcp servers go through a 0600 temp file that is deleted after the 
   const argv = argvOf(argvFile);
   const mcpPath = argv[argv.indexOf("--mcp-config") + 1] as string;
   assert.ok(argv.includes("--strict-mcp-config"));
-  assert.match(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"), /^-rw-------/);
+  assertPrivateMode(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } } } });
   assert.equal(fs.existsSync(mcpPath), false);
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
@@ -110,8 +114,10 @@ test("claude: mcp servers go through a 0600 temp file that is deleted after the 
 
 test("claude: prompt is delivered on stdin", async () => {
   const dir = tmpDir();
-  const { bin } = fakeBinary(dir, "claude", { stdoutLines: [] });
-  fs.writeFileSync(bin, fs.readFileSync(bin, "utf8").replace("exit 0", `cat > '${dir}/stdin.txt'; exit 0`), { mode: 0o755 });
+  const { bin } = fakeBinary(dir, "claude", {
+    stdoutLines: [],
+    extraJs: `fs.writeFileSync(${JSON.stringify(path.join(dir, "stdin.txt"))}, fs.readFileSync(0, "utf8"));`,
+  });
   await claudeAdapter(dir, bin).start(baseRequest({ cwd: dir, prompt: "hello there" }), () => {}).done;
   assert.equal(fs.readFileSync(path.join(dir, "stdin.txt"), "utf8"), "hello there");
 });
@@ -163,8 +169,7 @@ test("codex: sandbox mapping for every profile", async () => {
 test("codex: resume form, mcp via -c with secrets in env not argv, CODEX_HOME isolated, stdin closed", async () => {
   const dir = tmpDir();
   const home = fakeRealHome();
-  const { bin, argvFile } = fakeBinary(dir, "codex", { stdoutLines: [] });
-  fs.writeFileSync(bin, fs.readFileSync(bin, "utf8").replace("exit 0", `env > '${dir}/env.txt'; exit 0`), { mode: 0o755 });
+  const { bin, argvFile } = fakeBinary(dir, "codex", { stdoutLines: [], extraJs: dumpEnvJs(path.join(dir, "env.txt")) });
   await codexAdapter(dir, bin, home).start(
     baseRequest({
       cwd: dir, resumeSessionId: "th-9", systemPrompt: "SYS",
@@ -200,18 +205,14 @@ test("codex: usage limit failure maps to quota_wait", async () => {
   assert.ok(o.retryAfter);
 });
 
-test("isolatedCodexHome links auth.json (never copies), owns config.toml, and refuses to clobber a real file", () => {
+test("isolatedCodexHome links auth.json (never copies), owns config.toml, and is idempotent", () => {
   const dir = tmpDir();
   const home = fakeRealHome();
-  const codexHome = isolatedCodexHome(dir, home);
-  const link = path.join(codexHome, "auth.json");
-  assert.ok(fs.lstatSync(link).isSymbolicLink());
-  assert.equal(fs.readlinkSync(link), path.join(home, ".codex", "auth.json"));
-  assert.match(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), /approval_policy = "never"/);
-  assert.equal(isolatedCodexHome(dir, home), codexHome); // idempotent
-  fs.rmSync(link);
-  fs.writeFileSync(link, "copied secret");
-  assert.throws(() => isolatedCodexHome(dir, home), /Refusing to replace/);
+  const iso = isolatedCodexHome(dir, home);
+  const link = path.join(iso.dir, "auth.json");
+  assert.equal(linkKind(link, path.join(home, ".codex", "auth.json")), iso.auth.mode);
+  assert.match(fs.readFileSync(path.join(iso.dir, "config.toml"), "utf8"), /approval_policy = "never"/);
+  assert.equal(isolatedCodexHome(dir, home).dir, iso.dir);
   assert.throws(() => isolatedCodexHome(tmpDir(), tmpDir()), /not logged in/);
 });
 
@@ -221,4 +222,75 @@ test("claude: every permission profile allows the tools of supplied MCP servers"
     assert.ok(permissionArgs(p, ["forewright"]).includes("mcp__forewright__*"), p);
     assert.ok(!permissionArgs(p).includes("mcp__forewright__*"), p);
   }
+});
+
+// ---------------------------------------------------------------- Windows behavior (platform injected, runs everywhere)
+
+test("codex on Windows: a prompt that would overflow the 32767 character command line goes to stdin as `-`", () => {
+  const long = "x".repeat(40_000);
+  const plan = planCodexInvocation(baseRequest({ prompt: long, systemPrompt: "SYS" }), "last.txt", { bin: "C:\\npm\\codex.cmd", platform: "win32" });
+  assert.equal(plan.args[plan.args.length - 2], "--");
+  assert.equal(plan.args[plan.args.length - 1], "-");
+  assert.equal(plan.stdin, `SYS\n\n${long}`);
+  assert.ok(!plan.args.join("").includes("xxxxxxxx"), "the prompt is not in argv");
+  const resumed = planCodexInvocation(baseRequest({ prompt: long, resumeSessionId: "th-1" }), "last.txt", { bin: "codex", platform: "win32" });
+  assert.deepEqual(resumed.args.slice(-3), ["--", "th-1", "-"]);
+});
+
+test("codex: short prompts stay arguments on Windows, and every prompt stays an argument on POSIX", () => {
+  const win = planCodexInvocation(baseRequest({ prompt: "short" }), "last.txt", { bin: "codex", platform: "win32" });
+  assert.equal(win.stdin, "ignore");
+  assert.equal(win.args[win.args.length - 1], "short");
+  const posix = planCodexInvocation(baseRequest({ prompt: "y".repeat(150_000) }), "last.txt", { bin: "codex", platform: "linux" });
+  assert.equal(posix.stdin, "ignore");
+  assert.equal(posix.args[posix.args.length - 1]?.length, 150_000);
+});
+
+test("codex without a usable auth link runs in the user's own Codex home, loudly, with the approval policy as a flag", async () => {
+  const dir = tmpDir();
+  const { bin, argvFile } = fakeBinary(dir, "codex", { stdoutLines: [], extraJs: dumpEnvJs(path.join(dir, "env.txt")) });
+  const adapter = new CodexAdapter({
+    forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV, realHome: fakeRealHome(),
+    linkOps: { symlink: () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, link: () => { throw Object.assign(new Error("EXDEV"), { code: "EXDEV" }); } },
+  });
+  const events: NormalizedEvent[] = [];
+  await adapter.start(baseRequest({ cwd: dir }), (e) => events.push(e)).done;
+  assert.ok(events.some((e) => e.kind === "diagnostic" && /without isolation/.test(e.text ?? "") && /Developer Mode/.test(e.text ?? "")), "a visible warning");
+  assert.ok(!fs.readFileSync(path.join(dir, "env.txt"), "utf8").includes("CODEX_HOME="), "the private home is not used");
+  assert.ok(argvOf(argvFile).includes('approval_policy="never"'));
+  assert.equal(fs.existsSync(path.join(dir, "provider-homes", "codex", "auth.json")), false, "no copy of the credentials");
+});
+
+test("codex probe reports its isolation mode and, for none, a problem", async () => {
+  const dir = tmpDir();
+  const { bin } = fakeBinary(dir, "codex", { stdoutLines: ["codex-cli 0.1.0"] });
+  const hard = await new CodexAdapter({
+    forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV, realHome: fakeRealHome(),
+    linkOps: { symlink: () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, link: (e, n) => fs.linkSync(e, n) },
+  }).probe();
+  assert.equal(hard.isolation, "hardlink");
+  assert.match(hard.isolationNote ?? "", /Developer Mode/);
+  const dir2 = tmpDir();
+  const none = await new CodexAdapter({
+    forewrightHome: dir2, binary: bin, runsDir: dir2, baseEnv: BASE_ENV, realHome: fakeRealHome(),
+    linkOps: { symlink: () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, link: () => { throw Object.assign(new Error("EXDEV"), { code: "EXDEV" }); } },
+  }).probe();
+  assert.equal(none.isolation, "none");
+  assert.match(none.problems.join(" "), /without isolation/);
+});
+
+test("codex: a token the engine refreshed during a run (replacing the linked auth file) is moved back to the real file", async () => {
+  const dir = tmpDir();
+  const home = fakeRealHome();
+  const realAuth = path.join(home, ".codex", "auth.json");
+  const past = new Date(Date.now() - 120_000);
+  fs.utimesSync(realAuth, past, past);
+  const { bin } = fakeBinary(dir, "codex", {
+    stdoutLines: [],
+    // what codex does on refresh: write a new file and rename it over auth.json inside CODEX_HOME
+    extraJs: `const ah = require("path").join(process.env.CODEX_HOME, "auth.json");\nfs.writeFileSync(ah + ".tmp", "REFRESHED-TOKEN");\nfs.renameSync(ah + ".tmp", ah);`,
+  });
+  await codexAdapter(dir, bin, home).start(baseRequest({ cwd: dir }), () => {}).done;
+  assert.equal(fs.readFileSync(realAuth, "utf8"), "REFRESHED-TOKEN");
+  assert.equal(linkKind(path.join(dir, "provider-homes", "codex", "auth.json"), realAuth).length > 0, true, "and the link is back");
 });

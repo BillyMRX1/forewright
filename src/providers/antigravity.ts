@@ -5,7 +5,9 @@ import type {
   EngineId, McpServerSpec, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
 import { IsolationError, ProviderError } from "./errors.js";
-import { capture, resolveBinary } from "./probe-util.js";
+import { capture, resolveEngineBinary } from "./probe-util.js";
+import { LinkManager } from "./links.js";
+import { isWindows, splitHomeDrive, type Platform } from "../core/platform.js";
 import { childEnv } from "./process.js";
 import { truncate } from "./redact.js";
 import { decideOutcome, emptyOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo } from "./runner.js";
@@ -42,6 +44,8 @@ export interface AntigravityAdapterOptions {
   baseEnv?: NodeJS.ProcessEnv;
   /** Override for tests; defaults to the real home directory. */
   realHome?: string;
+  /** Override for tests; defaults to the running platform. */
+  platform?: Platform;
 }
 
 // ---------------------------------------------------------------- isolated home and settings
@@ -97,9 +101,11 @@ export function agyMcpConfig(servers: readonly McpServerSpec[]): { mcpServers: R
   return { mcpServers: out };
 }
 
-function linkInto(target: string, source: string): void {
+/** Links `source` (a real credential file) at `target` when it exists; collects links that could not be made. */
+function linkInto(links: LinkManager, failures: string[], target: string, source: string): void {
   if (!fs.existsSync(source)) return;
-  fs.symlinkSync(source, target);
+  const r = links.linkFile(source, target);
+  if (r.mode === "none") failures.push(r.note ?? `Could not link ${path.basename(target)}`);
 }
 
 /** Path of the shared state store that keeps conversations between runs. */
@@ -118,17 +124,36 @@ export function requireAgyLogin(realHome: string): void {
 export interface PreparedHome {
   home: string;
   secrets: string[];
+  /** Owns the credential links of this home: call afterRun() when the run ends, then disposeDirs() before deleting it. */
+  links: LinkManager;
 }
 
 /** Builds <parent>/home with linked auth, shared conversation state and forewright-owned settings. */
-export function prepareAgyHome(opts: {
+export function prepareAgyHome(opts: AgyHomeOptions): PreparedHome {
+  const links = opts.links ?? new LinkManager();
+  try {
+    return buildAgyHome({ ...opts, links });
+  } catch (err) {
+    links.disposeDirs(); // the caller deletes the folder next; it must not walk into shared state through a half-built link
+    throw err;
+  }
+}
+
+interface AgyHomeOptions {
   parent: string;
   forewrightHome: string;
   realHome: string;
   settings: AgySettings;
   mcpServers?: RunRequest["mcpServers"];
   agentMode?: string;
-}): PreparedHome {
+  links?: LinkManager;
+  platform?: Platform;
+}
+
+function buildAgyHome(opts: AgyHomeOptions & { links: LinkManager }): PreparedHome {
+  const links = opts.links;
+  const failures: string[] = [];
+  const platform = opts.platform ?? process.platform;
   requireAgyLogin(opts.realHome);
   const home = path.join(opts.parent, "home");
   const gemini = path.join(home, ".gemini");
@@ -140,18 +165,30 @@ export function prepareAgyHome(opts: {
   // servers would silently disappear. The home is forewright-built, so there is nothing to migrate.
   fs.writeFileSync(path.join(gemini, "config", ".migrated"), "", { mode: 0o600 });
   const realGemini = path.join(opts.realHome, ".gemini");
-  for (const f of AUTH_FILES) linkInto(path.join(gemini, f), path.join(realGemini, f));
+  for (const f of AUTH_FILES) linkInto(links, failures, path.join(gemini, f), path.join(realGemini, f));
   // macOS finds the login keychain through $HOME/Library/Keychains. Without this link agy cannot reach
   // it and macOS shows a "Keychain Not Found" dialog on every run (whose "Reset To Defaults" button
   // would reset the user's keychain). This is the same keychain agy uses when Billy runs it directly.
-  fs.mkdirSync(path.join(home, "Library"), { recursive: true, mode: 0o700 });
-  linkInto(path.join(home, "Library", "Keychains"), path.join(opts.realHome, "Library", "Keychains"));
-  for (const f of CLI_AUTH_FILES) linkInto(path.join(cli, f), path.join(realGemini, "antigravity-cli", f));
+  if (platform === "darwin") {
+    fs.mkdirSync(path.join(home, "Library"), { recursive: true, mode: 0o700 });
+    const keychains = path.join(opts.realHome, "Library", "Keychains");
+    if (fs.existsSync(keychains)) {
+      const r = links.linkDir(keychains, path.join(home, "Library", "Keychains"));
+      if (r.mode === "none") failures.push(r.note ?? "Could not link the keychain folder");
+    }
+  }
+  for (const f of CLI_AUTH_FILES) linkInto(links, failures, path.join(cli, f), path.join(realGemini, "antigravity-cli", f));
   const state = agyStateDir(opts.forewrightHome);
   for (const d of SHARED_STATE_DIRS) {
     const shared = path.join(state, d);
     fs.mkdirSync(shared, { recursive: true, mode: 0o700 });
-    fs.symlinkSync(shared, path.join(cli, d));
+    const r = links.linkDir(shared, path.join(cli, d)); // a junction on Windows without Developer Mode
+    if (r.mode === "none") failures.push(r.note ?? `Could not link ${d}`);
+  }
+  if (failures.length > 0) {
+    // Unlike the other engines there is no safe unisolated mode: agy rewrites settings.json and mcp_config.json under its HOME,
+    // and the real HOME is the user's own. So the run is refused with the reason.
+    throw new IsolationError(`Antigravity cannot be isolated: ${failures[0]}`, { failures });
   }
   const settings: Record<string, unknown> = { ...opts.settings };
   if (opts.agentMode) settings["agentMode"] = opts.agentMode;
@@ -174,7 +211,7 @@ export function prepareAgyHome(opts: {
     }
     fs.writeFileSync(path.join(gemini, "config", "mcp_config.json"), JSON.stringify(agyMcpConfig(servers)), { mode: 0o600 });
   }
-  return { home, secrets };
+  return { home, secrets, links };
 }
 
 /** Reads only the auth type label from the real gemini settings, never a credential. */
@@ -190,6 +227,16 @@ export function declaredAuthType(realHome: string): string | null {
 
 export function isApiBilledAuthType(type: string | null): boolean {
   return type !== null && /api[-_ ]?key|vertex|gateway/i.test(type);
+}
+
+/**
+ * Environment that points an engine at a private home. POSIX tools read HOME; Windows programs read
+ * USERPROFILE (and older ones HOMEDRIVE plus HOMEPATH), so all of them are set there.
+ */
+export function homeEnv(home: string, platform: Platform = process.platform): Record<string, string> {
+  if (!isWindows(platform)) return { HOME: home };
+  const { drive, rest } = splitHomeDrive(home);
+  return { HOME: home, USERPROFILE: home, ...(drive ? { HOMEDRIVE: drive, HOMEPATH: rest } : {}) };
 }
 
 // ---------------------------------------------------------------- argv
@@ -248,15 +295,16 @@ export class AntigravityAdapter implements ProviderAdapter {
   }
 
   private resolveBin(): string | null {
-    return this.opts.binary ?? resolveBinary("agy", this.baseEnv["PATH"]);
+    return this.opts.binary ?? resolveEngineBinary("agy", this.baseEnv);
   }
 
   private runEnv(home: string, extra: Record<string, string>): ReturnType<typeof childEnv> {
     const gitConfig = path.join(this.realHome, ".gitconfig");
-    const env: Record<string, string> = { HOME: home, AGY_CLI_DISABLE_AUTO_UPDATE: "1", ...extra };
+    const platform = this.opts.platform ?? process.platform;
+    const env: Record<string, string> = { ...homeEnv(home, platform), AGY_CLI_DISABLE_AUTO_UPDATE: "1", ...extra };
     // The private home would hide the user's git identity from commands the worker runs.
     if (fs.existsSync(gitConfig)) env["GIT_CONFIG_GLOBAL"] = gitConfig;
-    return childEnv(this.baseEnv, env, { allowApiBilling: this.opts.allowApiBilling ?? false });
+    return childEnv(this.baseEnv, env, { allowApiBilling: this.opts.allowApiBilling ?? false, platform });
   }
 
   async probe(): Promise<ProviderHealth> {
@@ -271,6 +319,7 @@ export class AntigravityAdapter implements ProviderAdapter {
     }
     health.binaryPath = bin;
     let probeDir: string | null = null;
+    let probeLinks: LinkManager | null = null;
     try {
       const parent = path.join(this.opts.forewrightHome, "provider-homes", "antigravity", "probe");
       fs.rmSync(parent, { recursive: true, force: true });
@@ -287,7 +336,11 @@ export class AntigravityAdapter implements ProviderAdapter {
       const prepared = prepareAgyHome({
         parent, forewrightHome: this.opts.forewrightHome, realHome: this.realHome,
         settings: agySettings("read_only", os.tmpdir(), [], this.opts.allowApiBilling ?? false),
+        platform: this.opts.platform ?? process.platform,
       });
+      probeLinks = prepared.links;
+      health.isolation = prepared.links.isolation();
+      if (health.isolation === "hardlink") health.isolationNote = "Symbolic links need Developer Mode on Windows, so hard links are used for the login files. A token refresh is copied back after each run.";
       const { env } = this.runEnv(prepared.home, {});
       const declared = declaredAuthType(this.realHome);
       health.authMethod = isApiBilledAuthType(declared) ? "api_key" : "subscription";
@@ -317,6 +370,10 @@ export class AntigravityAdapter implements ProviderAdapter {
     } catch (err) {
       health.problems.push(`Could not read Antigravity status: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      if (probeLinks) {
+        probeLinks.afterRun();
+        probeLinks.disposeDirs(); // never let rmSync walk into the shared state a junction points at
+      }
       if (probeDir) fs.rmSync(probeDir, { recursive: true, force: true });
     }
     return health;
@@ -338,6 +395,7 @@ export class AntigravityAdapter implements ProviderAdapter {
         parent: runDir, forewrightHome: this.opts.forewrightHome, realHome: this.realHome,
         settings: agySettings(req.permission, realDir(req.cwd), (req.mcpServers ?? []).map((s) => s.name), this.opts.allowApiBilling ?? false),
         ...(req.mcpServers ? { mcpServers: req.mcpServers } : {}),
+        platform: this.opts.platform ?? process.platform,
       });
     } catch (err) {
       fs.rmSync(runDir, { recursive: true, force: true });
@@ -358,7 +416,11 @@ export class AntigravityAdapter implements ProviderAdapter {
     const parser = new AntigravityStreamParser(req, makeEmitter(req, onEvent, allSecrets), allSecrets);
     return runPlan(req, {
       bin, args, stdin: "ignore", cwd: req.cwd, env, timeoutMs: req.timeoutMs, parser,
-      cleanup: () => fs.rmSync(runDir, { recursive: true, force: true }),
+      cleanup: () => {
+        prepared.links.afterRun(); // a token agy refreshed during the run goes back to the real credential file
+        prepared.links.disposeDirs(); // never let rmSync walk into the shared state a junction points at
+        fs.rmSync(runDir, { recursive: true, force: true });
+      },
     });
   }
 }

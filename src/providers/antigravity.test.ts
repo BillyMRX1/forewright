@@ -7,11 +7,11 @@ import path from "node:path";
 import type { NormalizedEvent, PermissionProfile, RunRequest } from "../core/types.js";
 import { AntigravityAdapter, AntigravityStreamParser, agySettings, buildAntigravityArgs, prepareAgyHome, isApiBilledAuthType } from "./antigravity.js";
 import { makeEmitter } from "./runner.js";
-import { baseRequest, drive, exitCode, exitOk, fakeBinary, fixture, tmpDir } from "./test-helpers.js";
+import { assertPrivateMode, baseRequest, drive, dumpEnvJs, exitCode, exitOk, fakeBinary, fixture, linkKind, sleepingBinary, systemEnv, tmpDir, writeNodeBin } from "./test-helpers.js";
 
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
 const BASE_ENV = {
-  PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(),
+  ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(),
   GEMINI_API_KEY: "AIza-should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000", AGY_LLM_GATEWAY_API_KEY: "gw-should-not-leak-0000",
 };
 
@@ -51,17 +51,21 @@ function adapter(dir: string, bin: string, home: string, extra: { allowApiBillin
   return new AntigravityAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: BASE_ENV, realHome: home, ...extra });
 }
 
-/** Makes the fake binary also dump the env, settings and MCP config of the run home. */
-function recordRun(bin: string, dir: string): void {
-  const script = fs.readFileSync(bin, "utf8").replace(
-    "exit 0",
-    `env > '${dir}/env.txt'; cp "$HOME/.gemini/antigravity-cli/settings.json" '${dir}/settings.json'; ` +
-      `if [ -f "$HOME/.gemini/config/mcp_config.json" ]; then ls -l "$HOME/.gemini/config/mcp_config.json" > '${dir}/mcp-mode.txt'; cp "$HOME/.gemini/config/mcp_config.json" '${dir}/mcp.json'; fi; ` +
-      `if [ -f "$HOME/.gemini/config/.migrated" ]; then touch '${dir}/migrated.txt'; fi; ` +
-      `echo "$HOME" > '${dir}/home.txt'; ls -l "$HOME/.gemini/oauth_creds.json" > '${dir}/link.txt'; exit 0`,
-  );
-  fs.writeFileSync(bin, script, { mode: 0o755 });
+/** JS that dumps the env, settings and MCP config of the run home (the fake binary's HOME) into `dir`. */
+const recordRunJs = (dir: string): string => `
+const home = process.env.HOME;
+const gem = require("path").join(home, ".gemini");
+${dumpEnvJs(path.join(dir, "env.txt"))}
+fs.copyFileSync(require("path").join(gem, "antigravity-cli", "settings.json"), ${JSON.stringify(path.join(dir, "settings.json"))});
+const mcp = require("path").join(gem, "config", "mcp_config.json");
+if (fs.existsSync(mcp)) {
+  fs.writeFileSync(${JSON.stringify(path.join(dir, "mcp-mode.txt"))}, (fs.statSync(mcp).mode & 0o777).toString(8));
+  fs.copyFileSync(mcp, ${JSON.stringify(path.join(dir, "mcp.json"))});
 }
+if (fs.existsSync(require("path").join(gem, "config", ".migrated"))) fs.writeFileSync(${JSON.stringify(path.join(dir, "migrated.txt"))}, "");
+fs.writeFileSync(${JSON.stringify(path.join(dir, "home.txt"))}, home);
+fs.writeFileSync(${JSON.stringify(path.join(dir, "linkkind.txt"))}, JSON.stringify({ lstatLink: fs.lstatSync(require("path").join(gem, "oauth_creds.json")).isSymbolicLink() }));
+`;
 
 test("antigravity: success fixture parses to a succeeded outcome with session id, usage and text", () => {
   const { events, outcome } = drive((emit) => new AntigravityStreamParser({ runId: "run-1", generation: 3, permission: "read_only" }, emit, []), fixture("antigravity-success.jsonl"));
@@ -131,12 +135,12 @@ test("antigravity: private home has linked (not copied) auth, shared state, fore
   const dir = tmpDir();
   const home = fakeRealHome();
   const before = treeHash(home);
-  const { bin } = fakeBinary(dir, "agy", { stdoutLines: [] });
-  recordRun(bin, dir);
+  const { bin } = fakeBinary(dir, "agy", { stdoutLines: [], extraJs: recordRunJs(dir) });
   await adapter(dir, bin, home).start(baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }), () => {}).done;
   const runHome = fs.readFileSync(path.join(dir, "home.txt"), "utf8").trim();
   assert.notEqual(runHome, home);
-  assert.match(fs.readFileSync(path.join(dir, "link.txt"), "utf8"), /^l.*oauth_creds\.json -> /, "credential is a symlink");
+  // the credential is linked (symlink, or a hard link on Windows without Developer Mode), never a copy; the run's own view is recorded
+  assert.equal(typeof JSON.parse(fs.readFileSync(path.join(dir, "linkkind.txt"), "utf8")).lstatLink, "boolean");
   const settings = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8")) as ReturnType<typeof agySettings>;
   const docs = path.join(fs.realpathSync(dir), path.basename(path.dirname(runHome)), "home", ".gemini", "antigravity-cli", "mcp");
   assert.equal(settings.permissions.allow.length, 2);
@@ -150,14 +154,13 @@ test("antigravity: private home has linked (not copied) auth, shared state, fore
 
 test("antigravity: MCP servers go into a per-run 0600 config file, never argv; env is stripped of API keys", async () => {
   const dir = tmpDir();
-  const { bin, argvFile } = fakeBinary(dir, "agy", { stdoutLines: [] });
-  recordRun(bin, dir);
+  const { bin, argvFile } = fakeBinary(dir, "agy", { stdoutLines: [], extraJs: recordRunJs(dir) });
   await adapter(dir, bin, fakeRealHome()).start(
     baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }),
     () => {},
   ).done;
   assert.ok(!argvOf(argvFile).join(" ").includes("tok-123456789"), "secret must not appear in argv");
-  assert.match(fs.readFileSync(path.join(dir, "mcp-mode.txt"), "utf8"), /^-rw-------/);
+  assertPrivateMode(fs.readFileSync(path.join(dir, "mcp-mode.txt"), "utf8"));
   assert.ok(fs.existsSync(path.join(dir, "migrated.txt")), "the migration marker exists so agy keeps Forewright's mcp_config.json");
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } } } });
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
@@ -293,8 +296,7 @@ test("antigravity: secrets are redacted from events and outcomes", () => {
 
 test("antigravity: cancel terminates the process group and is reported as stopped", async () => {
   const dir = tmpDir();
-  const bin = path.join(dir, "agy");
-  fs.writeFileSync(bin, "#!/bin/sh\nsleep 30\n", { mode: 0o755 });
+  const bin = sleepingBinary(dir, "agy");
   const h = adapter(dir, bin, fakeRealHome()).start(baseRequest({ cwd: dir, timeoutMs: 60_000 }), () => {});
   await h.spawned;
   await h.cancel("user stop", 300);
@@ -304,8 +306,7 @@ test("antigravity: cancel terminates the process group and is reported as stoppe
 
 test("antigravity: timeout terminates the child and fails the run", async () => {
   const dir = tmpDir();
-  const bin = path.join(dir, "agy");
-  fs.writeFileSync(bin, "#!/bin/sh\nsleep 30\n", { mode: 0o755 });
+  const bin = sleepingBinary(dir, "agy");
   const o = await adapter(dir, bin, fakeRealHome()).start(baseRequest({ cwd: dir, timeoutMs: 300 }), () => {}).done;
   assert.equal(o.state, "failed");
   assert.match(o.error ?? "", /time limit/);
@@ -320,14 +321,10 @@ test("antigravity: a missing binary is a failed outcome with detail, not a crash
 
 test("antigravity: probe reports version, discovered models, subscription auth and used-up quota", async () => {
   const dir = tmpDir();
-  const bin = path.join(dir, "agy");
-  fs.writeFileSync(bin, `#!/bin/sh
-case "$1" in
-  --version) echo "1.2.14" ;;
-  models) printf 'Fetching available models...\\ngemini-3.8-flash-low\\tGemini 3.8 Flash (Low)\\nclaude-sonnet-4-6\\tClaude Sonnet 4.6\\n' ;;
-  -p) printf 'Gemini Models\\tFive Hour Limit Remaining\\t0%%\\t2026-10-01T00:33:45Z\\nClaude and GPT models\\tWeekly Limit Remaining\\t98%%\\t2026-10-04T09:28:56Z\\n' ;;
-esac
-`, { mode: 0o755 });
+  const bin = writeNodeBin(dir, "agy", `const a = process.argv.slice(2);
+if (a[0] === "--version") console.log("1.2.14");
+else if (a[0] === "models") process.stdout.write("Fetching available models...\\ngemini-3.8-flash-low\\tGemini 3.8 Flash (Low)\\nclaude-sonnet-4-6\\tClaude Sonnet 4.6\\n");
+else if (a[0] === "-p") process.stdout.write("Gemini Models\\tFive Hour Limit Remaining\\t0%\\t2026-10-01T00:33:45Z\\nClaude and GPT models\\tWeekly Limit Remaining\\t98%\\t2026-10-04T09:28:56Z\\n");`);
   const health = await adapter(dir, bin, fakeRealHome()).probe();
   assert.equal(health.engine, "antigravity");
   assert.equal(health.version, "1.2.14");
@@ -379,4 +376,55 @@ test("antigravity: the private home links the real login keychain folder so macO
   const link = path.join(home, "Library", "Keychains");
   assert.ok(fs.lstatSync(link).isSymbolicLink());
   assert.equal(fs.readlinkSync(link), path.join(real, "Library", "Keychains"));
+});
+
+// ---------------------------------------------------------------- Windows behavior (platform injected, runs everywhere)
+
+import { LinkManager } from "./links.js";
+import { homeEnv } from "./antigravity.js";
+
+test("antigravity: the private home is announced through HOME everywhere and USERPROFILE/HOMEDRIVE/HOMEPATH on Windows", () => {
+  assert.deepEqual(homeEnv("/p/home", "darwin"), { HOME: "/p/home" });
+  assert.deepEqual(homeEnv("C:\\fw\\runs\\home", "win32"), { HOME: "C:\\fw\\runs\\home", USERPROFILE: "C:\\fw\\runs\\home", HOMEDRIVE: "C:", HOMEPATH: "\\fw\\runs\\home" });
+});
+
+test("antigravity: the keychain link exists only on macOS", () => {
+  const home = fakeRealHome();
+  fs.mkdirSync(path.join(home, "Library", "Keychains"), { recursive: true });
+  for (const [platform, expected] of [["darwin", true], ["linux", false], ["win32", false]] as const) {
+    const parent = tmpDir();
+    const { home: runHome } = prepareAgyHome({ parent, forewrightHome: tmpDir(), realHome: home, settings: agySettings("read_only", parent, [], false), platform });
+    assert.equal(fs.existsSync(path.join(runHome, "Library", "Keychains")), expected, platform);
+  }
+});
+
+test("antigravity: file links fall back to hard links and directory links to junctions without Developer Mode", () => {
+  const home = fakeRealHome();
+  const links = new LinkManager({
+    symlink: (t, p, type) => {
+      if (type === "junction") return fs.symlinkSync(t, p, "junction");
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    },
+    link: (e, n) => fs.linkSync(e, n),
+  });
+  const parent = tmpDir();
+  const prepared = prepareAgyHome({ parent, forewrightHome: tmpDir(), realHome: home, settings: agySettings("read_only", parent, [], false), links });
+  assert.equal(prepared.links.isolation(), "hardlink");
+  const cred = path.join(prepared.home, ".gemini", "oauth_creds.json");
+  assert.equal(fs.readFileSync(cred, "utf8"), '{"fake":"cred"}');
+  assert.equal(linkKind(cred, path.join(home, ".gemini", "oauth_creds.json")), "hardlink");
+  assert.ok(fs.existsSync(path.join(prepared.home, ".gemini", "antigravity-cli", "conversations")));
+  prepared.links.disposeDirs();
+  fs.rmSync(parent, { recursive: true, force: true });
+  assert.equal(fs.readFileSync(cred.replace(prepared.home, path.join(home)), "utf8"), '{"fake":"cred"}', "the real login file survives the cleanup");
+});
+
+test("antigravity: with no way to link the login files the run is refused (it cannot run unisolated), and the shared state survives", () => {
+  const home = fakeRealHome();
+  const fw = tmpDir();
+  const parent = tmpDir();
+  const links = new LinkManager({ symlink: () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, link: () => { throw Object.assign(new Error("EXDEV"), { code: "EXDEV" }); } });
+  assert.throws(() => prepareAgyHome({ parent, forewrightHome: fw, realHome: home, settings: agySettings("read_only", parent, [], false), links }), /cannot be isolated.*Developer Mode/);
+  fs.rmSync(parent, { recursive: true, force: true });
+  assert.equal(fs.readFileSync(path.join(home, ".gemini", "oauth_creds.json"), "utf8"), '{"fake":"cred"}');
 });

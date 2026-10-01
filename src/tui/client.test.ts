@@ -4,6 +4,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { socketPathFor } from "../core/paths.js";
 import { ClientError, ForewrightClient } from "./client.js";
 
 let dir: string;
@@ -66,7 +67,7 @@ afterEach(async () => {
 });
 
 const mk = (opts: ConstructorParameters<typeof ForewrightClient>[0] = {}) => {
-  const c = new ForewrightClient({ socketPath: path.join(dir, "s.sock"), tokenPath: path.join(dir, "client.token"), backoffStartMs: 20, backoffMaxMs: 80, ...opts });
+  const c = new ForewrightClient({ socketPath: socketPathFor(dir), tokenPath: path.join(dir, "client.token"), backoffStartMs: 20, backoffMaxMs: 80, ...opts });
   clients.push(c);
   return c;
 };
@@ -81,7 +82,7 @@ async function until(cond: () => boolean, ms = 3000): Promise<void> {
 
 describe("ForewrightClient", () => {
   it("performs hello and request/response", async () => {
-    await startServer(path.join(dir, "s.sock"));
+    await startServer(socketPathFor(dir));
     const c = mk();
     await c.connect();
     assert.equal(hellos, 1);
@@ -89,14 +90,14 @@ describe("ForewrightClient", () => {
   });
 
   it("surfaces a rejected token as a plain ClientError", async () => {
-    await startServer(path.join(dir, "s.sock"));
+    await startServer(socketPathFor(dir));
     fs.writeFileSync(path.join(dir, "client.token"), "wrong");
     const c = mk();
     await assert.rejects(c.connect(), (e: unknown) => e instanceof ClientError && e.plain === "The client token was rejected." && e.detail === "token mismatch");
   });
 
   it("times out a request with a plain error", async () => {
-    await startServer(path.join(dir, "s.sock"));
+    await startServer(socketPathFor(dir));
     const c = mk({ requestTimeoutMs: 80 });
     await c.connect();
     await assert.rejects(c.call("slow" as never, {} as never), (e: unknown) => e instanceof ClientError && e.code === "timeout" && /did not answer/.test(e.plain));
@@ -108,7 +109,7 @@ describe("ForewrightClient", () => {
   });
 
   it("reconnects after the connection drops and re-subscribes from the last seen seq", async () => {
-    await startServer(path.join(dir, "s.sock"));
+    await startServer(socketPathFor(dir));
     const c = mk();
     await c.connect();
     const seen: number[] = [];
@@ -136,7 +137,7 @@ describe("ForewrightClient", () => {
   });
 
   it("keeps retrying while the service is down, then restores", async () => {
-    await startServer(path.join(dir, "s.sock"));
+    await startServer(socketPathFor(dir));
     const c = mk();
     await c.connect();
     const states: string[] = [];
@@ -147,7 +148,7 @@ describe("ForewrightClient", () => {
     await until(() => states.includes("lost"));
     await assert.rejects(c.call("state.runtime", { projectId: "p" }), (e: unknown) => e instanceof ClientError && e.code === "not_connected");
     await sleep(150); // several failed attempts
-    await startServer(path.join(dir, "s.sock"));
+    await startServer(socketPathFor(dir));
     await until(() => states.includes("restored"));
     assert.deepEqual(states, ["lost", "restored"]);
   });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { describe, it } from "node:test";
 import { SERVICE_LABEL, bootoutArgs, bootstrapArgs, buildPlist, parsePrint, plistPath, printArgs } from "./service.js";
 
@@ -35,7 +36,7 @@ describe("launchctl arguments", () => {
   });
 
   it("places the plist in ~/Library/LaunchAgents", () => {
-    assert.equal(plistPath(SERVICE_LABEL, "/Users/b"), "/Users/b/Library/LaunchAgents/local.forewright.daemon.plist");
+    assert.equal(plistPath(SERVICE_LABEL, "/Users/b"), path.join("/Users/b", "Library", "LaunchAgents", "local.forewright.daemon.plist"));
   });
 
   it("parses running state and pid from launchctl print", () => {

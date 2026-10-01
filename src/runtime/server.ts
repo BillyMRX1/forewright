@@ -1,10 +1,11 @@
-// Unix socket JSON-RPC 2.0 server (newline-delimited). The first message on a
+// Unix socket (named pipe on Windows) JSON-RPC 2.0 server (newline-delimited). The first message on a
 // connection must authenticate: `hello` with the client token, or `agent.hello`
 // with a scoped run token. Anything else closes the connection.
 import { createHash, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import net from "node:net";
 import { ForewrightError } from "../core/errors.js";
+import { isPipePath } from "../core/platform.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import { PROTOCOL_VERSION, type ErrorData } from "./protocol.js";
 import type { Notifier, ProjectRuntime } from "./project-runtime.js";
@@ -85,17 +86,26 @@ export class RpcServer {
   ) {}
 
   async listen(): Promise<void> {
-    if (existsSync(this.socketPath)) unlinkSync(this.socketPath); // stale: the single-instance lock is already ours
+    // A unix socket file can be left behind by a crashed service: the single-instance lock is already ours, so remove it.
+    // A named pipe has no file and vanishes with its process; EADDRINUSE on a pipe means a live service owns it.
+    const isPipe = isPipePath(this.socketPath);
+    if (!isPipe && existsSync(this.socketPath)) unlinkSync(this.socketPath);
     const server = net.createServer((socket) => this.accept(socket));
     this.server = server;
     await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
+      server.once("error", (err: NodeJS.ErrnoException) => {
+        if (isPipe && err.code === "EADDRINUSE") {
+          reject(new ForewrightError("service_already_running", `Another Forewright service is already listening on ${this.socketPath}. Stop it first, or use it.`, { socketPath: this.socketPath }));
+          return;
+        }
+        reject(err);
+      });
       server.listen(this.socketPath, () => {
         server.off("error", reject);
         resolve();
       });
     });
-    chmodSync(this.socketPath, 0o600);
+    if (!isPipe) chmodSync(this.socketPath, 0o600);
   }
 
   /** Stops accepting new connections; resolves once every existing connection is gone too. */

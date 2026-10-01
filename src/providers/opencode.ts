@@ -5,7 +5,8 @@ import type {
   EngineId, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
 import { IsolationError, ProviderError } from "./errors.js";
-import { capture, resolveBinary } from "./probe-util.js";
+import { LinkManager, type LinkOps, type LinkResult } from "./links.js";
+import { capture, resolveEngineBinary } from "./probe-util.js";
 import { childEnv } from "./process.js";
 import { redact, truncate } from "./redact.js";
 import { decideOutcome, emptyOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo } from "./runner.js";
@@ -111,39 +112,55 @@ const API_ENV = /(?:API_KEY|API_TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TO
 
 // ---------------------------------------------------------------- isolation
 
+export interface IsolatedOpencode {
+  env: Record<string, string>;
+  authLink: string;
+  dataDir: string;
+  /** How the credential file is reachable; null when the user has none (free models still work). */
+  auth: LinkResult | null;
+  /** False when the credential could not be linked: the run uses OpenCode's own folders (loudly). */
+  isolated: boolean;
+}
+
 /**
  * <forewrightHome>/provider-homes/opencode/{data,config,cache,state}, used through the
  * XDG_* variables so Billy's ~/.config/opencode (plugins, AGENTS.md, hooks) and
  * ~/.local/share/opencode (sessions, db) are never loaded or written. The
- * credential file is symlinked (never copied) when it exists; with no
- * credentials the isolated install still runs OpenCode's free models.
+ * credential file is linked (symlink, or hard link on Windows without Developer Mode; never a copy)
+ * when it exists; with no credentials the isolated install still runs OpenCode's free models.
  */
-export function isolatedOpencodeHome(forewrightHome: string, realAuthPath: string): { env: Record<string, string>; authLink: string; dataDir: string } {
+export function isolatedOpencodeHome(forewrightHome: string, realAuthPath: string, links: LinkManager = new LinkManager()): IsolatedOpencode {
   const root = path.join(forewrightHome, "provider-homes", "opencode");
   const dirs = { data: path.join(root, "data"), config: path.join(root, "config"), cache: path.join(root, "cache"), state: path.join(root, "state") };
   for (const d of Object.values(dirs)) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
   const dataDir = path.join(dirs.data, "opencode");
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const link = path.join(dataDir, "auth.json");
-  let existing: fs.Stats | null = null;
-  try {
-    existing = fs.lstatSync(link);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  let auth: LinkResult | null = null;
+  if (fs.existsSync(realAuthPath)) {
+    auth = links.linkFile(realAuthPath, link);
+  } else {
+    let existing: fs.Stats | null = null;
+    try {
+      existing = fs.lstatSync(link);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    if (existing?.isSymbolicLink()) fs.unlinkSync(link); // the user's file is gone: drop the dangling link
   }
-  if (existing && !existing.isSymbolicLink()) {
-    throw new IsolationError("Refusing to replace a real file with the auth symlink", { link });
-  }
-  if (existing) fs.unlinkSync(link);
-  if (fs.existsSync(realAuthPath)) fs.symlinkSync(realAuthPath, link);
+  const flags = {
+    OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_SHARE: "1", OPENCODE_DISABLE_CLAUDE_CODE: "1", OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+    OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
+  };
+  const isolated = auth?.mode !== "none";
   return {
-    env: {
-      XDG_DATA_HOME: dirs.data, XDG_CONFIG_HOME: dirs.config, XDG_CACHE_HOME: dirs.cache, XDG_STATE_HOME: dirs.state,
-      OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_SHARE: "1", OPENCODE_DISABLE_CLAUDE_CODE: "1", OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
-      OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
-    },
+    env: isolated
+      ? { XDG_DATA_HOME: dirs.data, XDG_CONFIG_HOME: dirs.config, XDG_CACHE_HOME: dirs.cache, XDG_STATE_HOME: dirs.state, ...flags }
+      : { ...flags },
     authLink: link,
     dataDir,
+    auth,
+    isolated,
   };
 }
 
@@ -229,6 +246,8 @@ export interface OpencodeAdapterOptions {
   baseEnv?: NodeJS.ProcessEnv;
   /** Override for tests; defaults to the real home directory. */
   realHome?: string;
+  /** Test seam: replaces the symlink and hard link calls (to simulate Windows without Developer Mode). */
+  linkOps?: LinkOps;
 }
 
 interface Catalog {
@@ -260,8 +279,14 @@ export class OpencodeAdapter implements ProviderAdapter {
   };
 
   private catalog: Catalog | null = null;
+  /** Owns the auth.json link of the shared private home: verified before each use, repaired after it. */
+  private readonly links: LinkManager;
+  /** Isolation state seen by the latest environment build (probe and runs report it). */
+  private lastIso: IsolatedOpencode | null = null;
 
-  constructor(private readonly opts: OpencodeAdapterOptions) {}
+  constructor(private readonly opts: OpencodeAdapterOptions) {
+    this.links = new LinkManager(opts.linkOps);
+  }
 
   private get baseEnv(): NodeJS.ProcessEnv {
     return this.opts.baseEnv ?? process.env;
@@ -272,7 +297,7 @@ export class OpencodeAdapter implements ProviderAdapter {
   }
 
   private resolveBin(): string | null {
-    return this.opts.binary ?? resolveBinary("opencode", this.baseEnv["PATH"]);
+    return this.opts.binary ?? resolveEngineBinary("opencode", this.baseEnv);
   }
 
   private realAuthPath(): string {
@@ -289,7 +314,8 @@ export class OpencodeAdapter implements ProviderAdapter {
   }
 
   private baseChildEnv(extra: Record<string, string>) {
-    const iso = isolatedOpencodeHome(this.opts.forewrightHome, this.realAuthPath());
+    const iso = isolatedOpencodeHome(this.opts.forewrightHome, this.realAuthPath(), this.links);
+    this.lastIso = iso;
     const api = this.apiEnv();
     const built = childEnv(this.baseEnv, { ...iso.env, ...api, ...extra }, { allowApiBilling: this.allowApiBilling });
     return { ...built, secrets: [...built.secrets, ...Object.values(api)] };
@@ -303,7 +329,8 @@ export class OpencodeAdapter implements ProviderAdapter {
     const { env } = this.baseChildEnv({});
     const res = await capture(bin, ["models", "--verbose"], env, 30_000);
     if (res.code !== 0) throw new ProviderError("opencode models failed", { code: res.code, stderr: truncate(res.stderr.trim(), 500) });
-    const auth = readAuthTypes(path.join(env["XDG_DATA_HOME"] as string, "opencode", "auth.json"));
+    this.links.afterRun();
+    const auth = readAuthTypes(this.lastIso?.isolated === false ? this.realAuthPath() : path.join(env["XDG_DATA_HOME"] as string, "opencode", "auth.json"));
     const models = parseVerboseModels(res.stdout).map((m): OpencodeModelBilling => {
       const billing = classifyBilling(m, auth);
       return { ...m, billing, allowed: billing !== "api_key" || this.allowApiBilling };
@@ -325,6 +352,10 @@ export class OpencodeAdapter implements ProviderAdapter {
     health.binaryPath = bin;
     try {
       const { env } = this.baseChildEnv({});
+      const iso = this.lastIso;
+      health.isolation = iso?.auth ? iso.auth.mode : "n/a";
+      if (iso?.auth?.note) health.isolationNote = iso.auth.note;
+      if (iso && !iso.isolated) health.problems.push(`OpenCode would run without isolation (your own OpenCode folders): ${iso.auth?.note ?? "auth link failed"}`);
       const v = await capture(bin, ["--version"], env);
       health.version = v.stdout.trim() || null;
       this.catalog = null;
@@ -381,8 +412,11 @@ export class OpencodeAdapter implements ProviderAdapter {
       throw new ProviderError("Prompt is too large to pass to opencode as an argument", { bytes: Buffer.byteLength(prompt), limit: MAX_PROMPT_ARG_BYTES });
     }
     const { env, secrets } = this.baseChildEnv(extra);
+    this.links.beforeRun();
+    const startIso = this.lastIso;
     const allSecrets = [...secrets, ...Object.values(mcpEnv)];
     const emit = makeEmitter(req, onEvent, allSecrets);
+    if (startIso && !startIso.isolated) emit({ kind: "diagnostic", text: `Running OpenCode without isolation, in your own OpenCode folders: ${startIso.auth?.note ?? "the auth link failed"}` });
 
     let cancelled = false;
     let cancelReason: string | null = null;
@@ -419,7 +453,7 @@ export class OpencodeAdapter implements ProviderAdapter {
       if (req.model === undefined) emit({ kind: "diagnostic", text: `No model requested, using ${model}` });
       const args = buildOpencodeArgs(req, model, prompt);
       const parser = new OpencodeJsonParser(req, emit, allSecrets);
-      inner = runPlan(req, { bin, args, stdin: "ignore", cwd: req.cwd, env, timeoutMs: req.timeoutMs, parser });
+      inner = runPlan(req, { bin, args, stdin: "ignore", cwd: req.cwd, env, timeoutMs: req.timeoutMs, parser, cleanup: () => this.links.afterRun() });
       void inner.spawned?.then((p) => {
         handle.process = p;
         markSpawned(p);

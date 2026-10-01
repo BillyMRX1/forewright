@@ -9,7 +9,7 @@ import { DuplicateProjectIdError, NotFoundError } from "../core/errors.js";
 import { initProject, openProject, readRegistry, resolveProject } from "../core/identity.js";
 import { ensureDir, socketPathFor } from "../core/paths.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
-import { psField } from "../providers/process.js";
+import { processStartTime } from "../providers/process.js";
 import { ClientApi } from "./api.js";
 import { DaemonLockError } from "./errors.js";
 import { ProviderHealthCache } from "./health.js";
@@ -44,9 +44,9 @@ function lockAlive(rec: LockRecord): boolean {
   try {
     process.kill(rec.pid, 0);
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM" ? psField(rec.pid, "lstart") === rec.startedAt : false;
+    return (err as NodeJS.ErrnoException).code === "EPERM" ? processStartTime(rec.pid) === rec.startedAt : false;
   }
-  return psField(rec.pid, "lstart") === rec.startedAt; // pid reuse changes the start time
+  return processStartTime(rec.pid) === rec.startedAt; // pid reuse changes the start time
 }
 
 export class Daemon {
@@ -210,7 +210,7 @@ export class Daemon {
 
 function acquireLock(home: string): string {
   const file = path.join(home, "forewright.pid");
-  const mine: LockRecord = { pid: process.pid, startedAt: psField(process.pid, "lstart") };
+  const mine: LockRecord = { pid: process.pid, startedAt: processStartTime(process.pid) };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(file, JSON.stringify(mine), { flag: "wx", mode: 0o600 });

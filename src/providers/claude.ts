@@ -5,7 +5,7 @@ import type {
   EngineId, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
 import { claudeIsolation } from "./isolation.js";
-import { capture, resolveBinary } from "./probe-util.js";
+import { capture, resolveEngineBinary } from "./probe-util.js";
 import { childEnv } from "./process.js";
 import { truncate } from "./redact.js";
 import { decideOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo } from "./runner.js";
@@ -92,13 +92,13 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   private resolveBin(): string | null {
-    return this.opts.binary ?? resolveBinary("claude", this.baseEnv["PATH"]);
+    return this.opts.binary ?? resolveEngineBinary("claude", this.baseEnv);
   }
 
   async probe(): Promise<ProviderHealth> {
     const health: ProviderHealth = {
       engine: "claude", binaryPath: null, version: null, authenticated: "unknown", authMethod: null,
-      models: CLAUDE_ALIASES, modelsSource: "aliases", problems: [], checkedAt: new Date().toISOString(), isTestDouble: false,
+      models: CLAUDE_ALIASES, modelsSource: "aliases", problems: [], checkedAt: new Date().toISOString(), isTestDouble: false, isolation: "n/a",
     };
     const bin = this.resolveBin();
     if (!bin) {

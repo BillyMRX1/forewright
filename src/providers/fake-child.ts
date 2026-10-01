@@ -26,7 +26,8 @@ if (!raw) {
 const script = JSON.parse(raw) as ChildScript;
 
 if (script.ignoreSigterm) process.on("SIGTERM", () => {});
-if (script.spawnGrandchild) spawn("sleep", ["300"], { stdio: "ignore" }).unref();
+// A long-lived grandchild in the same tree. A node process, because `sleep` does not exist on Windows.
+if (script.spawnGrandchild) spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true }).unref();
 
 for (const [rel, content] of Object.entries(script.writeFiles)) {
   const target = path.resolve(process.cwd(), rel);

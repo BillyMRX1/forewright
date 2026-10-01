@@ -72,6 +72,14 @@ export interface ProviderHealth {
   problems: string[]; // plain language
   checkedAt: string; // ISO time
   isTestDouble: boolean; // true only for the fake adapter
+  /** How the private engine home reaches the user's login files. "n/a" when the engine needs no link. */
+  isolation?: "symlink" | "hardlink" | "none" | "n/a";
+  /** Plain-language detail for a weaker isolation mode. */
+  isolationNote?: string;
+  /** Oldest engine version Forewright's flags work with, when known. */
+  minVersion?: string;
+  /** True when the CLI is older than minVersion (a warning: the engine may still work for some runs). */
+  outdated?: boolean;
 }
 
 export interface McpServerSpec {
@@ -156,6 +164,8 @@ export interface ProviderAdapter {
   readonly engine: EngineId;
   readonly capabilities: ProviderCapabilities;
   readonly isTestDouble: boolean;
+  /** Oldest engine CLI version that has every flag the adapter passes (checked by doctor and probes). */
+  readonly minVersion?: string;
   probe(): Promise<ProviderHealth>;
   start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle;
 }

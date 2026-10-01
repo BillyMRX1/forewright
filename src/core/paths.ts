@@ -3,10 +3,12 @@ import { existsSync, lstatSync, mkdirSync, renameSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import path from "node:path";
 import { ValidationError } from "./errors.js";
+import { isWindows, windowsDataDir, windowsPipeName } from "./platform.js";
 
 export function forewrightHome(): string {
   const env = process.env["FOREWRIGHT_HOME"];
   if (env) return path.resolve(env);
+  if (isWindows(platform())) return windowsDataDir(process.env, homedir());
   if (platform() === "darwin") return path.join(homedir(), "Library", "Application Support", "forewright");
   const xdg = process.env["XDG_DATA_HOME"];
   return path.join(xdg && xdg.length > 0 ? xdg : path.join(homedir(), ".local", "share"), "forewright");
@@ -15,6 +17,7 @@ export function forewrightHome(): string {
 /** The pre-rename default data dir, or null when FOREWRIGHT_HOME overrides the location. */
 export function legacyHome(): string | null {
   if (process.env["FOREWRIGHT_HOME"]) return null;
+  if (isWindows(platform())) return null; // the old default never existed on Windows
   if (platform() === "darwin") return path.join(homedir(), "Library", "Application Support", "dept");
   const xdg = process.env["XDG_DATA_HOME"];
   return path.join(xdg && xdg.length > 0 ? xdg : path.join(homedir(), ".local", "share"), "dept");
@@ -58,7 +61,12 @@ export const socketPath = () => socketPathFor(forewrightHome());
 // socket lives in a private per-user directory under /tmp named by a hash of
 // FOREWRIGHT_HOME, so each home still gets its own socket.
 const MAX_SOCKET_BYTES = 103;
-export function socketPathFor(home: string): string {
+/**
+ * Where the service listens. Windows has no unix sockets for files, so it gets a named pipe whose
+ * name is derived from the home (access control there is the pipe's default ACL plus the token handshake).
+ */
+export function socketPathFor(home: string, os: NodeJS.Platform = platform()): string {
+  if (isWindows(os)) return windowsPipeName(home, os);
   const preferred = path.join(home, "forewright.sock");
   if (Buffer.byteLength(preferred) <= MAX_SOCKET_BYTES) return preferred;
   const uid = process.getuid?.() ?? 0;

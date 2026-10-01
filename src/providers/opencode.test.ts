@@ -7,7 +7,8 @@ import {
   buildOpencodeArgs, buildOpencodeConfig, buildPermission, classifyBilling, isolatedOpencodeHome, mcpToolPrefix, OpencodeAdapter,
   OpencodeJsonParser, parseVerboseModels, readAuthTypes,
 } from "./opencode.js";
-import { baseRequest, drive, exitCode, fixture, tmpDir } from "./test-helpers.js";
+import { baseRequest, drive, exitCode, fixture, linkKind, systemEnv, tmpDir, writeNodeBin } from "./test-helpers.js";
+import { LinkManager } from "./links.js";
 
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
 
@@ -50,21 +51,24 @@ function rig(opts: { stdoutFile?: string; stdoutLines?: string[]; stderr?: strin
   const envFile = path.join(dir, "run.env");
   const cfgFile = path.join(dir, "run.cfg");
   const ranFile = path.join(dir, "ran");
-  const out = opts.stdoutFile ? `cat '${opts.stdoutFile}'` : (opts.stdoutLines ?? []).map((l) => `printf '%s\\n' '${l.replace(/'/g, "'\\''")}'`).join("\n");
-  const bin = path.join(dir, "opencode");
-  fs.writeFileSync(bin, `#!/bin/sh
-if [ "$1" = "--version" ]; then echo 1.18.30; exit 0; fi
-if [ "$1" = "models" ]; then cat '${catalog}'; exit 0; fi
-touch '${ranFile}'
-printf '%s\\n' "$@" > '${argvFile}'
-env > '${envFile}'
-printf '%s' "$OPENCODE_CONFIG_CONTENT" > '${cfgFile}'
-${opts.sleep ? "sleep 30" : ""}
+  const out = opts.stdoutFile
+    ? `process.stdout.write(fs.readFileSync(${JSON.stringify(opts.stdoutFile)}));`
+    : (opts.stdoutLines ?? []).map((l) => `process.stdout.write(${JSON.stringify(l + "\n")});`).join("\n");
+  const bin = writeNodeBin(dir, "opencode", `const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("1.18.30"); return; }
+if (args[0] === "models") { process.stdout.write(fs.readFileSync(${JSON.stringify(catalog)})); return; }
+fs.writeFileSync(${JSON.stringify(ranFile)}, "");
+fs.writeFileSync(${JSON.stringify(argvFile)}, args.length ? args.map((a) => a + "\\n").join("") : "\\n");
+fs.writeFileSync(${JSON.stringify(envFile)}, Object.entries(process.env).map(([k, v]) => k + "=" + v).join("\\n") + "\\n");
+fs.writeFileSync(${JSON.stringify(cfgFile)}, process.env.OPENCODE_CONFIG_CONTENT || "");
+const rest = () => {
 ${out}
-${opts.stderr ? `printf '%s\\n' '${opts.stderr}' >&2` : ""}
-exit ${opts.exitCode ?? 0}
-`, { mode: 0o755 });
-  const baseEnv = { PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: home, OPENAI_API_KEY: "sk-openai-should-not-leak", GEMINI_API_KEY: "gem-should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000" };
+${opts.stderr ? `process.stderr.write(${JSON.stringify(opts.stderr + "\n")});` : ""}
+process.exitCode = ${opts.exitCode ?? 0};
+};
+${opts.sleep ? "setTimeout(rest, 30000);" : "rest();"}`);
+  const baseEnv = { ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: home, OPENAI_API_KEY: "sk-openai-should-not-leak", GEMINI_API_KEY: "gem-should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000" };
   return {
     dir, home, bin, argvFile, envFile, cfgFile, ranFile,
     adapter: (over = {}) => new OpencodeAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv, realHome: home, ...over }),
@@ -105,23 +109,22 @@ test("opencode: readAuthTypes returns only the type field, never credential valu
   assert.deepEqual(readAuthTypes(path.join(dir, "missing.json")), {});
 });
 
-test("opencode: isolated home links auth.json (never copies), owns every XDG dir, and refuses to clobber a real file", () => {
+test("opencode: isolated home links auth.json (never copies) and owns every XDG dir", () => {
   const forewright = tmpDir();
   const real = path.join(tmpDir(), "auth.json");
   fs.writeFileSync(real, "{}");
   const iso = isolatedOpencodeHome(forewright, real);
-  assert.ok(fs.lstatSync(iso.authLink).isSymbolicLink());
-  assert.equal(fs.readlinkSync(iso.authLink), real);
+  assert.equal(linkKind(iso.authLink, real), iso.auth?.mode);
+  assert.equal(iso.isolated, true);
   for (const k of ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]) {
     assert.ok((iso.env[k] ?? "").startsWith(path.join(forewright, "provider-homes", "opencode")), k);
   }
   assert.equal(iso.env["OPENCODE_DISABLE_CLAUDE_CODE"], "1");
   assert.equal(iso.env["OPENCODE_DISABLE_AUTOUPDATE"], "1");
-  // no credentials: the link is removed, the isolated install still exists
+  // no credentials: the dangling link is removed, the isolated install still exists
   const none = isolatedOpencodeHome(forewright, path.join(tmpDir(), "none.json"));
   assert.equal(fs.existsSync(none.authLink), false);
-  fs.writeFileSync(none.authLink, "copied secret");
-  assert.throws(() => isolatedOpencodeHome(forewright, real), /Refusing to replace/);
+  assert.equal(none.auth, null);
 });
 
 // ---------------------------------------------------------------- argv, config, env
@@ -443,4 +446,27 @@ test("opencode: secrets in events and outcomes are redacted", async () => {
   ).done;
   assert.ok(!JSON.stringify(events).includes("tok-123456789"));
   assert.ok(!JSON.stringify(o).includes("tok-123456789"));
+});
+
+// ---------------------------------------------------------------- Windows behavior
+
+test("opencode: without a usable auth link the XDG overrides are dropped (own folders) and the home reports it", () => {
+  const forewright = tmpDir();
+  const realAuth = path.join(tmpDir(), "auth.json");
+  fs.writeFileSync(realAuth, "{}");
+  const links = new LinkManager({ symlink: () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, link: () => { throw Object.assign(new Error("EXDEV"), { code: "EXDEV" }); } });
+  const iso = isolatedOpencodeHome(forewright, realAuth, links);
+  assert.equal(iso.isolated, false);
+  assert.equal(iso.auth?.mode, "none");
+  assert.equal(iso.env["XDG_DATA_HOME"], undefined);
+  assert.equal(iso.env["OPENCODE_DISABLE_AUTOUPDATE"], "1", "the other safety flags stay");
+  assert.equal(fs.existsSync(iso.authLink), false, "no copy of the credentials");
+});
+
+test("opencode: a hard link is reported as the isolation mode, and probe says so", async () => {
+  const r = rig({ auth: { "github-copilot": { type: "oauth", refresh: "r", access: "a" } } });
+  const hard = r.adapter({ linkOps: { symlink: () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, link: (e, n) => fs.linkSync(e, n) } });
+  const h = await hard.probe();
+  assert.equal(h.isolation, "hardlink");
+  assert.match(h.isolationNote ?? "", /Developer Mode/);
 });

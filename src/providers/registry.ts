@@ -39,7 +39,7 @@ export async function probeAll(adapters: Map<EngineId, ProviderAdapter>, timeout
       });
       try {
         const r = await Promise.race([a.probe(), timeout]);
-        if (r !== "timeout") return r;
+        if (r !== "timeout") return withMinVersion(a, r);
         return failedHealth(a, `Probe did not finish within ${timeoutMs} ms`);
       } catch (err) {
         return failedHealth(a, `Probe failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -55,4 +55,27 @@ function failedHealth(a: ProviderAdapter, problem: string): ProviderHealth {
     engine: a.engine, binaryPath: null, version: null, authenticated: "unknown", authMethod: null, models: [],
     modelsSource: "none", problems: [problem], checkedAt: new Date().toISOString(), isTestDouble: a.isTestDouble,
   };
+}
+
+/** Flags an engine CLI older than the adapter's minimum as a problem with a plain fix. */
+export function withMinVersion(a: Pick<ProviderAdapter, "minVersion" | "engine">, h: ProviderHealth): ProviderHealth {
+  if (!a.minVersion) return h;
+  const out: ProviderHealth = { ...h, minVersion: a.minVersion };
+  if (h.version !== null && compareVersions(h.version, a.minVersion) < 0) {
+    out.outdated = true;
+    out.problems = [...h.problems, `${a.engine} ${h.version} is older than ${a.minVersion}, which Forewright needs: update ${a.engine}`];
+  }
+  return out;
+}
+
+/** Numeric dotted-version comparison (1.0.51 vs 1.0.9); non-numeric suffixes are ignored. Negative when a is older. */
+export function compareVersions(a: string, b: string): number {
+  const nums = (v: string) => (/\d+(?:\.\d+)*/.exec(v)?.[0] ?? "0").split(".").map(Number);
+  const x = nums(a);
+  const y = nums(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
 }

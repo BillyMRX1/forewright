@@ -63,7 +63,7 @@ test("a run record that points at an alive process that is not ours is never sig
   const h = await startHarness({ adapter: new FakeAdapter() });
   const home = h.home;
   const repo = h.repo;
-  const bystander = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+  const bystander = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: process.platform !== "win32", windowsHide: true, stdio: "ignore" });
   bystander.unref();
   let second: Awaited<ReturnType<typeof startDaemon>> | null = null;
   try {
@@ -96,7 +96,8 @@ test("a run record that points at an alive process that is not ours is never sig
     await sleep(50);
   } finally {
     try {
-      process.kill(-bystander.pid!, "SIGKILL");
+      if (process.platform === "win32") bystander.kill();
+      else process.kill(-bystander.pid!, "SIGKILL");
     } catch {
       // already gone
     }

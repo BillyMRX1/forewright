@@ -6,7 +6,10 @@ import type {
 } from "../core/types.js";
 import { ProviderError } from "./errors.js";
 import { isolatedCodexHome } from "./isolation.js";
-import { capture, resolveBinary } from "./probe-util.js";
+import { LinkManager, type LinkOps, type LinkResult } from "./links.js";
+import { isWindows, type Platform } from "../core/platform.js";
+import { WINDOWS_COMMAND_LINE_BUDGET, windowsCommandLineLength } from "./launch.js";
+import { capture, resolveEngineBinary } from "./probe-util.js";
 import { childEnv } from "./process.js";
 import { truncate } from "./redact.js";
 import { decideOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo } from "./runner.js";
@@ -27,6 +30,10 @@ export interface CodexAdapterOptions {
   baseEnv?: NodeJS.ProcessEnv;
   /** Override for tests; defaults to the real home directory. */
   realHome?: string;
+  /** Test seam: replaces the symlink and hard link calls (to simulate Windows without Developer Mode). */
+  linkOps?: LinkOps;
+  /** Override for tests; defaults to the running platform. */
+  platform?: Platform;
 }
 
 export class CodexAdapter implements ProviderAdapter {
@@ -50,14 +57,19 @@ export class CodexAdapter implements ProviderAdapter {
     ],
   };
 
-  constructor(private readonly opts: CodexAdapterOptions) {}
+  /** Owns the auth.json link of the shared private home: verified before each run, repaired after it. */
+  private readonly links: LinkManager;
+
+  constructor(private readonly opts: CodexAdapterOptions) {
+    this.links = new LinkManager(opts.linkOps);
+  }
 
   private get baseEnv(): NodeJS.ProcessEnv {
     return this.opts.baseEnv ?? process.env;
   }
 
   private resolveBin(): string | null {
-    return this.opts.binary ?? resolveBinary("codex", this.baseEnv["PATH"]);
+    return this.opts.binary ?? resolveEngineBinary("codex", this.baseEnv);
   }
 
   async probe(): Promise<ProviderHealth> {
@@ -72,8 +84,12 @@ export class CodexAdapter implements ProviderAdapter {
     }
     health.binaryPath = bin;
     try {
-      const home = isolatedCodexHome(this.opts.forewrightHome, this.opts.realHome);
-      const { env } = childEnv(this.baseEnv, { CODEX_HOME: home }, { allowApiBilling: this.opts.allowApiBilling ?? false });
+      const iso = isolatedCodexHome(this.opts.forewrightHome, this.opts.realHome, this.links);
+      this.links.afterRun(); // a probe is a run too: a token the CLI refreshed here goes back to the real file
+      health.isolation = iso.auth.mode;
+      if (iso.auth.note) health.isolationNote = iso.auth.note;
+      if (iso.auth.mode === "none") health.problems.push(`Codex would run without isolation (your own Codex home): ${iso.auth.note ?? "auth link failed"}`);
+      const { env } = childEnv(this.baseEnv, iso.auth.mode === "none" ? {} : { CODEX_HOME: iso.dir }, { allowApiBilling: this.opts.allowApiBilling ?? false });
       const v = await capture(bin, ["--version"], env);
       health.version = v.stdout.trim().replace(/^codex(-cli)?\s+/i, "") || null;
       const login = await capture(bin, ["login", "status"], env);
@@ -82,6 +98,7 @@ export class CodexAdapter implements ProviderAdapter {
       if (health.authenticated) health.authMethod = /chatgpt/i.test(text) ? "subscription" : /api key/i.test(text) ? "api_key" : "unknown";
       else health.problems.push("Codex is not logged in. Run codex login.");
       const models = await capture(bin, ["debug", "models"], env, 12_000);
+      this.links.afterRun();
       if (models.code === 0) {
         const list = (JSON.parse(models.stdout) as { models?: { slug?: string; visibility?: string }[] }).models ?? [];
         health.models = list.filter((m) => m.visibility === "list" && typeof m.slug === "string").map((m) => m.slug as string);
@@ -97,28 +114,34 @@ export class CodexAdapter implements ProviderAdapter {
 
   start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {
     const bin = this.resolveBin() ?? "codex";
-    const home = isolatedCodexHome(this.opts.forewrightHome, this.opts.realHome);
+    const iso = isolatedCodexHome(this.opts.forewrightHome, this.opts.realHome, this.links);
+    this.links.beforeRun();
+    const unisolated = iso.auth.mode === "none";
     const mcpEnv: Record<string, string> = {};
     for (const s of req.mcpServers ?? []) Object.assign(mcpEnv, s.env);
-    const { env, secrets } = childEnv(this.baseEnv, { ...mcpEnv, ...(req.env ?? {}), CODEX_HOME: home }, { allowApiBilling: this.opts.allowApiBilling ?? false });
+    const { env, secrets } = childEnv(this.baseEnv, { ...mcpEnv, ...(req.env ?? {}), ...(unisolated ? {} : { CODEX_HOME: iso.dir }) }, { allowApiBilling: this.opts.allowApiBilling ?? false });
 
     const runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "forewright-codex-run-"));
     fs.chmodSync(runDir, 0o700);
     const lastMessageFile = path.join(runDir, "last-message.txt");
-    let args: string[];
+    let plan: { args: string[]; stdin: string | "ignore" };
     try {
-      args = buildCodexArgs(req, lastMessageFile);
+      plan = planCodexInvocation(req, lastMessageFile, { bin, unisolated, platform: this.opts.platform ?? process.platform });
     } catch (err) {
       fs.rmSync(runDir, { recursive: true, force: true });
       throw err;
     }
+    const { args } = plan;
     const allSecrets = [...secrets, ...Object.values(mcpEnv)];
-    const parser = new CodexJsonlParser(req, makeEmitter(req, onEvent, allSecrets), allSecrets, lastMessageFile);
+    const emit = makeEmitter(req, onEvent, allSecrets);
+    if (unisolated) emit({ kind: "diagnostic", text: `Running Codex without isolation, in your own Codex home: ${iso.auth.note ?? "the auth link failed"}` });
+    const parser = new CodexJsonlParser(req, emit, allSecrets, lastMessageFile);
     return runPlan(req, {
-      bin, args, stdin: "ignore", cwd: req.cwd, env, timeoutMs: req.timeoutMs, parser,
+      bin, args, stdin: plan.stdin, cwd: req.cwd, env, timeoutMs: req.timeoutMs, parser,
       cleanup: () => {
         parser.readLastMessage(); // read before the directory goes away
         fs.rmSync(runDir, { recursive: true, force: true });
+        this.links.afterRun(); // a token Codex refreshed during the run goes back to the real auth file
       },
     });
   }
@@ -126,15 +149,42 @@ export class CodexAdapter implements ProviderAdapter {
 
 const tomlString = (s: string): string => JSON.stringify(s);
 
-export function buildCodexArgs(req: RunRequest, lastMessageFile: string): string[] {
-  const prompt = req.systemPrompt ? `${req.systemPrompt}\n\n${req.prompt}` : req.prompt;
-  if (Buffer.byteLength(prompt) > MAX_PROMPT_ARG_BYTES) {
+export interface CodexArgOptions {
+  /** Pass `-` and send the prompt on stdin (Codex reads it from there). */
+  promptViaStdin?: boolean;
+  /** No private CODEX_HOME: Forewright's approval_policy has to travel as a flag. */
+  unisolated?: boolean;
+}
+
+const codexPrompt = (req: RunRequest): string => (req.systemPrompt ? `${req.systemPrompt}\n\n${req.prompt}` : req.prompt);
+
+/**
+ * Arguments plus stdin. On Windows a command line is limited to 32767 characters, so a long prompt
+ * goes to stdin (`codex exec -` reads it there); elsewhere the prompt stays an argument.
+ */
+export function planCodexInvocation(
+  req: RunRequest,
+  lastMessageFile: string,
+  o: { bin: string; platform: Platform; unisolated?: boolean },
+): { args: string[]; stdin: string | "ignore" } {
+  const extra = o.unisolated ? { unisolated: true } : {};
+  const inline = buildCodexArgs(req, lastMessageFile, extra);
+  if (isWindows(o.platform) && windowsCommandLineLength(o.bin, inline) > WINDOWS_COMMAND_LINE_BUDGET) {
+    return { args: buildCodexArgs(req, lastMessageFile, { ...extra, promptViaStdin: true }), stdin: codexPrompt(req) };
+  }
+  return { args: inline, stdin: "ignore" };
+}
+
+export function buildCodexArgs(req: RunRequest, lastMessageFile: string, o: CodexArgOptions = {}): string[] {
+  const prompt = codexPrompt(req);
+  if (!o.promptViaStdin && Buffer.byteLength(prompt) > MAX_PROMPT_ARG_BYTES) {
     throw new ProviderError("Prompt is too large to pass to codex as an argument", { bytes: Buffer.byteLength(prompt), limit: MAX_PROMPT_ARG_BYTES });
   }
   const resume = req.resumeSessionId !== undefined;
   const args = resume ? ["exec", "resume"] : ["exec"];
   args.push("--json", "--skip-git-repo-check", "-o", lastMessageFile);
   if (req.model) args.push("-m", req.model);
+  if (o.unisolated) args.push("-c", 'approval_policy="never"');
   // `codex exec resume` accepts neither -s nor -C: the sandbox goes through -c
   // and the working directory is the spawn cwd.
   if (resume) args.push("-c", `sandbox_mode=${tomlString(SANDBOX[req.permission])}`);
@@ -153,7 +203,7 @@ export function buildCodexArgs(req: RunRequest, lastMessageFile: string): string
   }
   args.push("--");
   if (resume) args.push(req.resumeSessionId as string);
-  args.push(prompt);
+  args.push(o.promptViaStdin ? "-" : prompt);
   return args;
 }
 

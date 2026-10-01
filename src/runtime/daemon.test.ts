@@ -10,7 +10,7 @@ import { FakeAdapter } from "../providers/fake.js";
 import { RpcClient } from "./client.js";
 import { startDaemon } from "./daemon.js";
 import type { ForewrightEvent } from "../core/store.js";
-import { addTask, call, gitIn, hire, isCto, isWork, poke, rule, seedPrd, settle, sleep, startHarness, taskOf, toolResults, waitFor, ctoRequests, workRequests } from "./test-harness.js";
+import { addTask, call, gitIn, hire, isCto, isWork, poke, rule, seedPrd, settle, sleep, startHarness, taskOf, toolResults, waitFor, ctoRequests, workRequests, fileExists } from "./test-harness.js";
 
 test("reconnect: a client that disconnected gets exactly the events it missed, once, then live events", async () => {
   const h = await startHarness();
@@ -201,7 +201,7 @@ test("state.messages, channels, task detail and diff read models answer for a fi
     seedPrd(h);
     hire(h, "Rex", "review");
     const wren = hire(h, "Wren");
-    addTask(h, { title: "Read models", assignee: wren, verify: ["test -f z.txt"] });
+    addTask(h, { title: "Read models", assignee: wren, verify: [fileExists("z.txt")] });
     poke(h);
     await waitFor(() => taskOf(h, "T-1").state === "done", "done");
     const detail = await h.client.request("state.task", { projectId: h.projectId, taskId: "T-1" });

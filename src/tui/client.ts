@@ -295,7 +295,7 @@ export async function ensureDaemon(opts: { waitMs?: number; mainPath?: string } 
   const mainPath = opts.mainPath ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../cli/main.js");
   const fd = openSync(logPath, "a", 0o600);
   try {
-    const child = spawn(process.execPath, [mainPath, "serve"], { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+    const child = spawn(process.execPath, [mainPath, "serve"], { detached: true, windowsHide: true, stdio: ["ignore", fd, fd], env: process.env });
     child.unref();
   } finally {
     closeSync(fd);

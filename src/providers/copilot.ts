@@ -6,7 +6,7 @@ import type {
   EngineId, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
 import { ProviderError } from "./errors.js";
-import { capture, resolveBinary } from "./probe-util.js";
+import { capture, resolveEngineBinary } from "./probe-util.js";
 import { childEnv } from "./process.js";
 import { truncate } from "./redact.js";
 import { decideOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo } from "./runner.js";
@@ -101,6 +101,8 @@ const BYOK_ENV = /^COPILOT_PROVIDER_/;
 export class CopilotAdapter implements ProviderAdapter {
   readonly engine: EngineId = "copilot";
   readonly isTestDouble = false;
+  /** `--session-id` arrived in 1.0.51 (release notes); `--additional-mcp-config` in 0.0.343. Tested with 1.0.83. */
+  readonly minVersion = "1.0.51";
   readonly capabilities: ProviderCapabilities = {
     streaming: true,
     resume: true,
@@ -131,13 +133,13 @@ export class CopilotAdapter implements ProviderAdapter {
   }
 
   private resolveBin(): string | null {
-    return this.opts.binary ?? resolveBinary("copilot", this.baseEnv["PATH"]);
+    return this.opts.binary ?? resolveEngineBinary("copilot", this.baseEnv);
   }
 
   async probe(): Promise<ProviderHealth> {
     const health: ProviderHealth = {
       engine: "copilot", binaryPath: null, version: null, authenticated: "unknown", authMethod: null,
-      models: [], modelsSource: "none", problems: [], checkedAt: new Date().toISOString(), isTestDouble: false,
+      models: [], modelsSource: "none", problems: [], checkedAt: new Date().toISOString(), isTestDouble: false, isolation: "n/a",
     };
     const bin = this.resolveBin();
     if (!bin) {

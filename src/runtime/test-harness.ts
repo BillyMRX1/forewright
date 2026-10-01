@@ -6,6 +6,7 @@ import path from "node:path";
 import { type Clock, systemClock } from "../core/clock.js";
 import { tempDir } from "../core/test-helpers.js";
 import type { EngineId, ProviderAdapter, RunRequest } from "../core/types.js";
+import { treeGone } from "../providers/process.js";
 import { FakeAdapter, type FakeRule, type FakeScript } from "../providers/fake.js";
 import { RpcClient } from "./client.js";
 import { type Daemon, startDaemon } from "./daemon.js";
@@ -203,14 +204,15 @@ export function toolResults(h: Harness, runId: string): LoggedToolResult[] {
 
 export const tokenOf = (req: RunRequest): string => req.mcpServers![0]!.env["FOREWRIGHT_AGENT_TOKEN"]!;
 
-/** The process group is gone: signalling it reports ESRCH (polled briefly, zombies are reaped asynchronously). */
+/**
+ * The process group (POSIX) or tree root (Windows) is gone, polled briefly because zombies are reaped
+ * asynchronously. Uses the platform's own backend: `kill(-pgid)` reports ESRCH for every pid on Windows.
+ */
 export async function assertGroupGone(pgid: number): Promise<void> {
-  await waitFor(() => {
-    try {
-      process.kill(-pgid, 0);
-      return false;
-    } catch (err) {
-      return (err as NodeJS.ErrnoException).code === "ESRCH";
-    }
-  }, `process group ${pgid} to be gone`, 3000);
+  await waitFor(() => treeGone({ pid: pgid, pgid }), `process group ${pgid} to be gone`, 3000);
 }
+
+/** Portable check commands: `test -f`, `true` and `false` do not exist in cmd.exe, node does everywhere. */
+export const fileExists = (file: string): string => `node -e "process.exit(require('fs').existsSync('${file}') ? 0 : 1)"`;
+export const checkPasses = 'node -e "process.exit(0)"';
+export const checkFails = 'node -e "process.exit(1)"';

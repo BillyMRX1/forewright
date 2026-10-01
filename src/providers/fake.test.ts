@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { NormalizedEvent } from "../core/types.js";
 import { FakeAdapter } from "./fake.js";
-import { isOwnedAlive } from "./process.js";
+import { isOwnedAlive, treeGone } from "./process.js";
 import { baseRequest, tmpDir } from "./test-helpers.js";
 
 test("fake adapter is labelled as a test double", async () => {
@@ -63,7 +63,7 @@ test("fake: hang until cancelled resolves stopped and leaves no process behind",
   const out = await h.done;
   assert.equal(out.state, "stopped");
   assert.equal(isOwnedAlive(proc), false);
-  assert.throws(() => process.kill(-proc.pgid, 0), /ESRCH/);
+  assert.equal(treeGone(proc), true, "the whole tree is gone");
 });
 
 test("fake: run timeout fails with a plain message", async () => {

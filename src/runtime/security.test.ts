@@ -147,9 +147,12 @@ test("the socket refuses unauthenticated clients, wrong tokens and oversized lin
   const h = await startHarness();
   try {
     const sock = socketPathFor(h.home);
-    assert.equal(statSync(sock).mode & 0o777, 0o600, "socket 0600");
-    assert.equal(statSync(path.join(h.home, "client.token")).mode & 0o777, 0o600, "token 0600");
-    assert.equal(statSync(h.home).mode & 0o777, 0o700, "home 0700");
+    if (process.platform !== "win32") {
+      // POSIX permission bits do not exist on Windows (the pipe uses its default ACL plus the token handshake).
+      assert.equal(statSync(sock).mode & 0o777, 0o600, "socket 0600");
+      assert.equal(statSync(path.join(h.home, "client.token")).mode & 0o777, 0o600, "token 0600");
+      assert.equal(statSync(h.home).mode & 0o777, 0o700, "home 0700");
+    }
     const token = readFileSync(path.join(h.home, "client.token"), "utf8").trim();
     assert.equal(token.length, 64);
 

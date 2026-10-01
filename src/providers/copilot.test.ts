@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import type { NormalizedEvent, PermissionProfile } from "../core/types.js";
 import { CopilotAdapter, CopilotJsonParser, MAX_AI_CREDITS, parseModelCatalog, permissionArgs } from "./copilot.js";
-import { baseRequest, drive, fakeBinary, fixture, tmpDir } from "./test-helpers.js";
+import { assertPrivateMode, baseRequest, drive, dumpEnvJs, dumpModeJs, fakeBinary, fixture, sleepingBinary, systemEnv, tmpDir, writeNodeBin } from "./test-helpers.js";
 import { makeEmitter } from "./runner.js";
 
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
 const BASE_ENV = {
-  PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(),
+  ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(),
   ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000", GH_TOKEN: "gh-should-not-leak-0000", COPILOT_PROVIDER_API_KEY: "byok-should-not-leak-0000",
 };
 const SID = "15fd3316-170d-4437-9e2c-a73b7be29260";
@@ -119,8 +119,7 @@ test("copilot: exit codes, missing binary and stderr errors map to outcomes", as
 
 test("copilot: a cancelled run is stopped", async () => {
   const dir = tmpDir();
-  const bin = path.join(dir, "copilot");
-  fs.writeFileSync(bin, "#!/bin/sh\nsleep 30\n", { mode: 0o755 });
+  const bin = sleepingBinary(dir, "copilot");
   const handle = adapter(dir, bin).start(baseRequest({ cwd: dir }), () => {});
   await handle.spawned;
   await handle.cancel("test", 200);
@@ -164,8 +163,13 @@ test("copilot: every profile pre-approves exactly the supplied MCP servers", () 
 
 test("copilot: mcp goes through a 0600 file with the secret, not argv or copilot's env; isolated home; no API or BYOK env", async () => {
   const dir = tmpDir();
-  const { bin, argvFile } = fakeBinary(dir, "copilot", { stdoutLines: [] });
-  fs.writeFileSync(bin, fs.readFileSync(bin, "utf8").replace("exit 0", `f=$(grep -- '--additional-mcp-config=@' '${argvFile}' | sed 's/^[^@]*@//'); ls -l "$f" > '${dir}/mode.txt'; cp "$f" '${dir}/mcp-copy.json'; env > '${dir}/env.txt'; exit 0`), { mode: 0o755 });
+  const { bin, argvFile } = fakeBinary(dir, "copilot", {
+    stdoutLines: [],
+    extraJs: `const f = args.find((a) => a.startsWith("--additional-mcp-config=@")).replace(/^[^@]*@/, "");
+${dumpModeJs("f", path.join(dir, "mode.txt"))}
+fs.copyFileSync(f, ${JSON.stringify(path.join(dir, "mcp-copy.json"))});
+${dumpEnvJs(path.join(dir, "env.txt"))}`,
+  });
   const userHome = tmpDir();
   fs.mkdirSync(path.join(userHome, ".copilot"));
   fs.writeFileSync(path.join(userHome, ".copilot", "mcp-config.json"), "{}");
@@ -177,7 +181,7 @@ test("copilot: mcp goes through a 0600 file with the secret, not argv or copilot
   const flag = argv.find((a) => a.startsWith("--additional-mcp-config=@")) as string;
   assert.ok(flag);
   assert.ok(!argv.join(" ").includes("tok-123456789"), "secret must not appear in argv");
-  assert.match(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"), /^-rw-------/);
+  assertPrivateMode(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), {
     mcpServers: { forewright: { type: "local", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" }, tools: ["*"] } },
   });
@@ -205,23 +209,21 @@ test("copilot: oversized prompts are refused", () => {
 
 test("copilot: probe reads the version and the documented model catalog; login is unknown, never claimed", async () => {
   const dir = tmpDir();
-  const bin = path.join(dir, "copilot");
-  fs.writeFileSync(bin, `#!/bin/sh
-if [ "$1" = "--version" ]; then echo "GitHub Copilot CLI 1.2.3."; exit 0; fi
-if [ "$1" = "help" ]; then cat <<'EOT'
-Configuration Settings:
+  const help = `Configuration Settings:
 
   \`model\`: AI model to use for Copilot CLI.
     - "claude-sonnet-5"
     - "gpt-5.4"
 
   \`contextTier\`: context window tier.
-EOT
-exit 0; fi
-exit 9
-`, { mode: 0o755 });
+`;
+  const bin = writeNodeBin(dir, "copilot", `const a = process.argv.slice(2);
+if (a[0] === "--version") console.log("GitHub Copilot CLI 1.2.3.");
+else if (a[0] === "help") process.stdout.write(${JSON.stringify(help)});
+else process.exitCode = 9;`);
   const h = await adapter(dir, bin).probe();
   assert.equal(h.version, "1.2.3");
+  assert.equal(h.isolation, "n/a");
   assert.deepEqual(h.models, ["auto", "claude-sonnet-5", "gpt-5.4"]);
   assert.equal(h.modelsSource, "aliases");
   assert.equal(h.authenticated, "unknown");

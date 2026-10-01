@@ -7,8 +7,7 @@ import { LeaseConflictError, StaleApprovalError, ValidationError } from "../core
 import { FakeAdapter } from "../providers/fake.js";
 import { ProjectRuntime } from "./project-runtime.js";
 import {
-  addTask, call, ctoRequests, eventsOf, gitIn, hire, isCto, isReview, isWork, poke, reviewRequests, rule, seedPrd, settle, sleep, startHarness, taskOf, waitFor, workRequests,
-} from "./test-harness.js";
+  addTask, call, ctoRequests, eventsOf, gitIn, hire, isCto, isReview, isWork, poke, reviewRequests, rule, seedPrd, settle, sleep, startHarness, taskOf, waitFor, workRequests, fileExists, checkPasses, checkFails } from "./test-harness.js";
 import { startWork } from "./workers.js";
 
 const passReview = rule(isReview, { outcome: "succeeded", finalText: "ok", toolCalls: [call("submit_review", { verdict: "pass", notes: "Fine." })] });
@@ -85,7 +84,7 @@ test("approving a new PRD revision notifies the affected worker, marks its evide
   try {
     seedPrd(h, { "R-001": "Old wording", "R-002": "Unrelated" });
     const wren = hire(h, "Wren");
-    addTask(h, { title: "Scoped", assignee: wren, verify: ["test -f a.txt"], keys: ["R-001"] });
+    addTask(h, { title: "Scoped", assignee: wren, verify: [fileExists("a.txt")], keys: ["R-001"] });
     poke(h);
     await waitFor(() => taskOf(h, "T-1").state === "review", "the task to reach review with no reviewer");
     const before = h.rt.store.listVerifications(taskOf(h, "T-1").id);
@@ -170,7 +169,7 @@ test("a stale worker result after reassignment is fenced: run.fenced is recorded
     seedPrd(h);
     const wren = hire(h, "Wren");
     const wes = hire(h, "Wes");
-    addTask(h, { title: "Contested", assignee: wren, verify: ["true"] });
+    addTask(h, { title: "Contested", assignee: wren, verify: [checkPasses] });
     poke(h);
     const oldRun = await waitFor(() => [...h.rt.active.values()].find((a) => a.kind === "work"), "the first worker run");
     // A reassignment made behind the runtime's back (for example by another process): the old run is not stopped.
@@ -210,7 +209,7 @@ test("malformed provider output ends the run as uncertain and never advances the
   const h = await startHarness({ adapter });
   try {
     seedPrd(h);
-    addTask(h, { title: "Garbage", assignee: hire(h, "Wren"), verify: ["true"] });
+    addTask(h, { title: "Garbage", assignee: hire(h, "Wren"), verify: [checkPasses] });
     poke(h);
     await waitFor(() => taskOf(h, "T-1").blockReason === "exhausted_recovery", "retries to run out");
     const runs = h.rt.store.listRuns({ taskId: taskOf(h, "T-1").id });
@@ -266,8 +265,8 @@ test("a merge conflict in integration is aborted cleanly, the task goes back wit
     const wren = hire(h, "Wren");
     const wes = hire(h, "Wes");
     hire(h, "Rex", "review");
-    addTask(h, { title: "Wren edits shared", assignee: wren, verify: ["test -f shared.txt"] });
-    addTask(h, { title: "Wes edits shared", assignee: wes, verify: ["test -f shared.txt"] });
+    addTask(h, { title: "Wren edits shared", assignee: wren, verify: [fileExists("shared.txt")] });
+    addTask(h, { title: "Wes edits shared", assignee: wes, verify: [fileExists("shared.txt")] });
     poke(h);
     const conflict = await waitFor(() => eventsOf(h, "task.integration_conflict")[0], "an integration conflict");
     const loser = h.rt.store.getTask(conflict.entityId);
@@ -294,7 +293,7 @@ test("a failing verify command sends the task back with the output; repeated fai
   const h = await startHarness({ adapter });
   try {
     seedPrd(h);
-    addTask(h, { title: "Never passes", assignee: hire(h, "Wren"), verify: ["echo CHECK-OUTPUT-MARKER && false"] });
+    addTask(h, { title: "Never passes", assignee: hire(h, "Wren"), verify: [`echo CHECK-OUTPUT-MARKER && ${checkFails}`] });
     poke(h);
     await waitFor(() => taskOf(h, "T-1").blockReason === "failed_verification", "the repair limit");
     const t = taskOf(h, "T-1");
@@ -328,7 +327,7 @@ test("a failing review sends the task back with the reviewer's notes, then a sec
   try {
     seedPrd(h);
     hire(h, "Rex", "review");
-    addTask(h, { title: "Reviewed twice", assignee: hire(h, "Wren"), verify: ["test -f r.txt"] });
+    addTask(h, { title: "Reviewed twice", assignee: hire(h, "Wren"), verify: [fileExists("r.txt")] });
     poke(h);
     await waitFor(() => taskOf(h, "T-1").state === "done", "the task to finish after the second review");
     assert.equal(taskOf(h, "T-1").repairLoops, 1);
@@ -371,7 +370,7 @@ test("a reviewer that never submits a verdict is set aside and a newly hired rev
   try {
     seedPrd(h);
     hire(h, "Mute", "review");
-    addTask(h, { title: "Silent reviewer", assignee: hire(h, "Wren"), verify: ["test -f v.txt"] });
+    addTask(h, { title: "Silent reviewer", assignee: hire(h, "Wren"), verify: [fileExists("v.txt")] });
     poke(h);
     await waitFor(() => h.rt.store.listMessages({ channel: "cto" }).some((m) => m.body.includes("without a verdict twice")), "the CTO to hear the review is stuck");
     assert.equal(reviewRequests(h).length, 2);
