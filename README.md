@@ -111,15 +111,9 @@ Agents run under your signed-in subscriptions (or, for OpenCode, free models and
 - Three authority settings are stored but not enforced yet: `autoLocalEdits` and `autoChecks` (agents always edit and run checks inside their own worktree), and `allowApiBilling` (API keys are always stripped from agent environments, so billing stays on your subscriptions). `autoIntegrateToForewrightBranch` set to false stops integration and tells the CTO, but does not yet create an approval request.
 - Wide characters (CJK, emoji) are not measured for width in the TUI, so columns can drift.
 
-## Docs
+## Examples
 
-- `docs/PRD.md`: product requirements
-- `docs/architecture.md`: modules, data flow, task lifecycle, leases and fencing
-- `docs/providers.md`: how Claude Code and Codex are driven; `docs/providers-antigravity.md`, `docs/providers-opencode.md`, `docs/providers-copilot.md` for the other engines
-- `docs/troubleshooting.md`: when something goes wrong, and moving over from the old name (dept)
-- `docs/demo.md`: a reproducible demonstration
-- `docs/adr/`: decisions and their reasons
-- `examples/`: a disposable sample product, example roles and authority settings
+`examples/` holds a disposable sample product, example roles and authority settings.
 
 ## Development
 
