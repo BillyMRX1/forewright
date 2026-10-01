@@ -26,6 +26,7 @@ for (const engine of ["claude", "codex"] as const satisfies readonly EngineId[])
       assert.equal(open.status, "found");
       if (open.status !== "found") return;
       const rt = daemon.runtimes.get(open.projectId)!;
+      rt.store.setSetting("runTimeoutMs", 150_000, { kind: "human" }); // below the test limit, so a stuck run fails clearly
       assert.equal(rt.ctoAgent().engine, engine);
       const calls = () => rt.store.recentEvents(0, 100_000).filter((e) => e.type === "tool.called" && e.payload["tool"] === "get_project_state" && e.payload["ok"] === true).length;
       const before = calls();

@@ -35,3 +35,7 @@ API key environment variables are stripped unless `allowApiBilling` is true. Pro
 ## Known limits
 
 No turn limit and no system prompt flag (the system prompt is prepended). Prompts travel in argv (200 KB cap). Refreshing an OAuth token may write through the auth symlink or replace it.
+
+## Latency of free models
+
+OpenCode's free models are shared and can queue before they answer. A one-word reply has taken anywhere from 5 seconds to 4 minutes, including one run that produced no output for 3 minutes and then succeeded. Forewright waits up to the run time limit in Settings (30 minutes by default), so slow runs still finish. The live tests give OpenCode runs an 8 minute limit, below the test's own limit, so a provider that never answers fails with a clear time limit error instead of a cancelled test.

@@ -14,7 +14,10 @@ import { makeRepo } from "./test-harness.js";
 
 const live = process.env["FOREWRIGHT_LIVE"] === "1";
 
-test("live: a real opencode CTO turn calls get_project_state through the daemon and bridge", { skip: !live, timeout: 240_000 }, async () => {
+// OpenCode's free models can queue for minutes before answering (seen live: 3 minutes before the first
+// event, 4 minutes in total). The run gets its own limit below the test's, so a stuck provider fails with
+// a clear "time limit" error instead of the test runner cancelling the test.
+test("live: a real opencode CTO turn calls get_project_state through the daemon and bridge", { skip: !live, timeout: 540_000 }, async () => {
   const home = tempDir("forewright-live-home-");
   const repo = makeRepo();
   const adapters = new Map<EngineId, ProviderAdapter>([["opencode", new OpencodeAdapter({ forewrightHome: home })]]);
@@ -26,6 +29,7 @@ test("live: a real opencode CTO turn calls get_project_state through the daemon 
     assert.equal(open.status, "found");
     if (open.status !== "found") return;
     const rt = daemon.runtimes.get(open.projectId)!;
+    rt.store.setSetting("runTimeoutMs", 480_000, { kind: "human" });
     assert.equal(rt.ctoAgent().engine, "opencode");
     const calls = () => rt.store.recentEvents(0, 100_000).filter((e) => e.type === "tool.called" && e.payload["tool"] === "get_project_state" && e.payload["ok"] === true).length;
     const before = calls();

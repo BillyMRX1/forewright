@@ -8,7 +8,8 @@ import { baseRequest, tmpDir } from "./test-helpers.js";
 const live = process.env["FOREWRIGHT_LIVE"] === "1";
 const skip = live ? false : "live provider test skipped: set FOREWRIGHT_LIVE=1 to run it";
 
-test("live opencode: tiny OK prompt succeeds through the real adapter on a non-API-billed model", { skip, timeout: 180_000 }, async () => {
+// Free models can queue for minutes; the run limit sits below the test limit so a stuck provider fails clearly.
+test("live opencode: tiny OK prompt succeeds through the real adapter on a non-API-billed model", { skip, timeout: 540_000 }, async () => {
   const forewrightHome = tmpDir("forewright-live-home-");
   const adapter = new OpencodeAdapter({ forewrightHome });
   const health = await adapter.probe();
@@ -18,7 +19,7 @@ test("live opencode: tiny OK prompt succeeds through the real adapter on a non-A
   assert.ok(health.models.every((m) => report.find((r) => r.id === m)?.billing !== "api_key"), "probe never offers an API billed model");
   console.log(`live opencode: authMethod ${health.authMethod}, ${health.models.length} usable of ${report.length} models, version ${health.version}`);
   const cwd = tmpDir("forewright-live-cwd-");
-  const out = await adapter.start(baseRequest({ cwd, timeoutMs: 150_000 }), () => {}).done;
+  const out = await adapter.start(baseRequest({ cwd, timeoutMs: 480_000 }), () => {}).done;
   assert.equal(out.state, "succeeded", JSON.stringify(out));
   assert.ok(out.sessionId);
   assert.match(out.finalText ?? "", /OK/);
