@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 // The `forewright` command: `forewright` (interface), `forewright serve`, `forewright mcp-bridge`,
 // `forewright doctor`, `forewright status`, `forewright service install|uninstall|status`.
-import { existsSync } from "node:fs";
 import { ForewrightError } from "../core/errors.js";
-import { forewrightHome, migrateLegacyHome, socketPath, tokenPath } from "../core/paths.js";
-import { createAdapters, probeAll } from "../providers/registry.js";
-import { RpcClient } from "../runtime/client.js";
+import { forewrightHome, migrateLegacyHome, socketPath } from "../core/paths.js";
+import { createAdapters } from "../providers/registry.js";
 import { startDaemon } from "../runtime/daemon.js";
 import { runBridge } from "../runtime/mcp-bridge.js";
+import { queryService, runDoctor } from "./doctor.js";
 import { serviceInstall, serviceStatus, serviceUninstall } from "./service.js";
 import { fileURLToPath } from "node:url";
 
@@ -17,7 +16,7 @@ Usage:
   forewright                       open the interface for the project in the current folder
   forewright serve                 run the background service in the foreground
   forewright status                say whether the service is running
-  forewright doctor                check that Claude Code and Codex are installed and signed in
+  forewright doctor                check the service, data folder and every engine (--verbose, --json)
   forewright service install       start the service at login (macOS launchd)
   forewright service uninstall     remove the login service
   forewright service status        show the login service state
@@ -67,53 +66,20 @@ async function serve(): Promise<number> {
 }
 
 async function status(): Promise<number> {
-  const sock = socketPath();
-  if (!existsSync(sock) || !existsSync(tokenPath())) {
+  const q = await queryService();
+  if (q.state === "not_running") {
     process.stdout.write("The Forewright service is not running.\n");
     return 1;
   }
-  let client: RpcClient;
-  try {
-    client = await RpcClient.connect(sock, RpcClient.tokenFrom(tokenPath()));
-  } catch (err) {
-    process.stdout.write(`The Forewright service is not answering (${err instanceof Error ? err.message : String(err)}).\n`);
+  if (q.state === "not_answering") {
+    process.stdout.write(`The Forewright service is not answering (${q.error}).\n`);
     return 1;
   }
-  try {
-    const s = (await client.requestRaw("daemon.status", {})) as {
-      pid: number;
-      startedAt: string;
-      socket: string;
-      clients: number;
-      projects: Array<{ projectId: string; root: string; name: string; activeRuns: number }>;
-    };
-    process.stdout.write(`The Forewright service is running (pid ${s.pid}, since ${s.startedAt}).\nSocket: ${s.socket}\nConnected clients: ${s.clients}\n`);
-    if (s.projects.length === 0) process.stdout.write("No projects are open.\n");
-    for (const p of s.projects) process.stdout.write(`Project ${p.name}: ${p.root} (${p.activeRuns} active run${p.activeRuns === 1 ? "" : "s"})\n`);
-    return 0;
-  } finally {
-    client.close();
-  }
-}
-
-async function doctor(): Promise<number> {
-  const adapters = createAdapters({ forewrightHome: forewrightHome(), includeFake: useTestDouble() });
-  const list = await probeAll(adapters);
-  let problems = 0;
-  process.stdout.write("forewright doctor\n\n");
-  for (const h of list) {
-    const label = h.isTestDouble ? `${h.engine} (Test double)` : h.engine;
-    const auth = h.authenticated === true ? `signed in${h.authMethod ? ` (${h.authMethod})` : ""}` : h.authenticated === false ? "NOT signed in" : "sign-in state unknown";
-    process.stdout.write(`${label}: ${h.binaryPath ? `found at ${h.binaryPath}${h.version ? `, version ${h.version}` : ""}` : "NOT found"}, ${auth}.\n`);
-    if (h.models.length > 0) process.stdout.write(`  Models (${h.modelsSource === "discovered" ? "discovered" : "documented aliases"}): ${h.models.join(", ")}\n`);
-    for (const p of h.problems) {
-      problems++;
-      process.stdout.write(`  Problem: ${p}\n`);
-    }
-    if (h.isTestDouble) process.stdout.write("  This is a scripted test double, not a live provider.\n");
-  }
-  process.stdout.write(problems === 0 ? "\nEverything looks usable.\n" : `\n${problems} problem${problems === 1 ? "" : "s"} found. Fix them before starting real work.\n`);
-  return problems === 0 ? 0 : 1;
+  const s = q.status;
+  process.stdout.write(`The Forewright service is running (pid ${s.pid}, since ${s.startedAt}).\nSocket: ${s.socket}\nConnected clients: ${s.clients}\n`);
+  if (s.projects.length === 0) process.stdout.write("No projects are open.\n");
+  for (const p of s.projects) process.stdout.write(`Project ${p.name}: ${p.root} (${p.activeRuns} active run${p.activeRuns === 1 ? "" : "s"})\n`);
+  return 0;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -129,7 +95,7 @@ async function main(argv: string[]): Promise<number> {
       await runBridge({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, env: process.env });
       return 0;
     case "doctor":
-      return doctor();
+      return runDoctor(argv.slice(1), { includeFake: useTestDouble() });
     case "status":
       return status();
     case "service": {
