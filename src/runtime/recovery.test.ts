@@ -124,6 +124,8 @@ test("a run record that points at an alive process that is not ours is never sig
     } catch {
       // already gone
     }
+    // A kill is asynchronous: wait until the bystander is really gone, or the file-level leak check sees it.
+    for (let i = 0; i < 100 && pidAlive(bystander.pid!); i++) await sleep(20);
     await second?.close();
   }
 });
@@ -211,6 +213,8 @@ test("an older run row with an empty process start time is never signalled: the 
     } catch {
       // already gone
     }
+    // A kill is asynchronous: wait until the bystander is really gone, or the file-level leak check sees it.
+    for (let i = 0; i < 100 && pidAlive(bystander.pid!); i++) await sleep(20);
     await second?.close();
     await h.close().catch(() => {});
   }
