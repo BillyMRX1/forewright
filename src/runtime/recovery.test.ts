@@ -29,8 +29,8 @@ test("restart reconciliation: an orphaned owned run is terminated, marked uncert
     await waitFor(() => existsSync(path.join(worktree, "wip.txt")), "the file to be written");
     const proc = active.process!;
     orphan = proc;
-    const sessionBefore = h.rt.store.getAgent(wren.id).providerSessionId;
-    assert.ok(sessionBefore, "the provider session id was recorded");
+    // The fake engine reports its session as a separate event, which can land after the file is written.
+    const sessionBefore = await waitFor(() => h.rt.store.getAgent(wren.id).providerSessionId, "the provider session id to be recorded");
 
     h.daemon.crash(); // the child keeps running, its pipes belong to nobody
     h.client.close();
