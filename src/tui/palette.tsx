@@ -49,6 +49,7 @@ export function buildEntries(tasks: Task[], agents: TeamMember[], decisions: Dec
   act("terminate", "Terminate the team");
   act("next", "Jump to the next thing that needs you", "ctrl+n");
   act("sidebar", "Show or hide the sidebar");
+  act("setup", "Run setup again");
   act("help", "Show every key and command", "?");
   act("quit", "Quit", "ctrl+c");
   for (const d of decisions) if (d.status === "open") entries.push({ id: `decision:${d.id}`, kind: "decision", label: `Decision: ${oneLine(d.title)}`, target: { view: VIEW.inbox, decisionId: d.id } });

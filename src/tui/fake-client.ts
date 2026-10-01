@@ -2,9 +2,9 @@
 
 import type { ClientApi, ConnectionState, Subscription } from "./client.js";
 import type { EngineUse, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
-import type { Agent, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Task, Verification } from "../core/store-types.js";
+import type { Agent, Authority, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
-import { TASK_STATES, type TaskState } from "../core/types.js";
+import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
 
 const NOW = "2026-09-30T10:00:00.000Z";
 
@@ -191,6 +191,15 @@ export class FakeClient implements ClientApi {
   paused = false;
   /** Fallback lists returned by state.settings and changed by settings.set. */
   fallback: { cto: FallbackEntry[]; workers: FallbackEntry[] } = { cto: [], workers: [] };
+  /** Engines the CTO may hire on (empty = any). Changed by settings.set. */
+  workersEngines: EngineId[] = [];
+  /** Setup bookkeeping, as state.settings reports it. Changed by settings.set. */
+  setup: { completedAt: string | null; skippedAt: string | null } = { completedAt: null, skippedAt: null };
+  authority: Authority = { ...DEFAULT_AUTHORITY };
+  ctoEngine = "claude";
+  ctoModel: string | null = null;
+  /** Makes the next settings.set for this key fail, with this message. */
+  failSetting: { key: string; message: string } | null = null;
   /** Problems reported per fallback entry engine (a missing key means the entry is ready). */
   fallbackProblems: Record<string, string> = {};
   /** Engine actually in use per agent id, as the service reports it in state.team. */
@@ -207,6 +216,10 @@ export class FakeClient implements ClientApi {
   failWith: Error | null = null;
   private connListeners = new Set<(s: ConnectionState) => void>();
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
+
+  settings(): Settings {
+    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup } };
+  }
 
   runtime(): RuntimeStatus {
     return { paused: this.paused, activeRuns: this.noRuns ? [] : [{ runId: this.data.run.id, kind: "work", agentId: "a2", taskId: "t2", startedAt: NOW }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
@@ -291,10 +304,10 @@ export class FakeClient implements ClientApi {
           return { base: "1111111aaaa", head: "2222222bbbb", diff: "@@ -1 +1 @@\n-old line\n+new line", truncated: false };
         case "state.settings":
           return {
-            settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: this.fallback },
+            settings: this.settings(),
             providers: d.providers,
-            ctoEngine: "claude",
-            ctoModel: null,
+            ctoEngine: this.ctoEngine,
+            ctoModel: this.ctoModel,
             fallbackStatus: {
               cto: this.fallback.cto.map((e) => ({ engine: e.engine, model: e.model ?? null, problem: this.fallbackProblems[e.engine] ?? null })),
               workers: this.fallback.workers.map((e) => ({ engine: e.engine, model: e.model ?? null, problem: this.fallbackProblems[e.engine] ?? null })),
@@ -324,7 +337,14 @@ export class FakeClient implements ClientApi {
           if (p["key"] === "fallback.cto" || p["key"] === "fallback.workers") {
             this.fallback = { ...this.fallback, [String(p["key"]).slice("fallback.".length)]: p["value"] as FallbackEntry[] };
           }
-          return { settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: this.fallback } };
+          if (this.failSetting && this.failSetting.key === p["key"]) throw new Error(this.failSetting.message);
+          if (p["key"] === "workers.engines") this.workersEngines = p["value"] as EngineId[];
+          if (p["key"] === "setup.completedAt") this.setup = { ...this.setup, completedAt: p["value"] as string };
+          if (p["key"] === "setup.skippedAt") this.setup = { ...this.setup, skippedAt: p["value"] as string };
+          if (p["key"] === "ctoEngine") this.ctoEngine = p["value"] as string;
+          if (p["key"] === "ctoModel") this.ctoModel = p["value"] as string | null;
+          if (typeof p["key"] === "string" && p["key"].startsWith("authority.")) this.authority = { ...this.authority, [p["key"].slice("authority.".length)]: p["value"] };
+          return { settings: this.settings() };
         case "agents.update":
           return { agent: d.agents[0] };
         default:

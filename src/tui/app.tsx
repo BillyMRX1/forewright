@@ -27,6 +27,7 @@ import { TeamView } from "./views/team.js";
 import { EvidenceView } from "./views/evidence.js";
 import { SettingsView } from "./views/settings.js";
 import { LogViewer } from "./views/log.js";
+import { SetupWizard } from "./setup.js";
 
 export interface AppProps {
   api: ClientApi;
@@ -44,6 +45,8 @@ export interface AppProps {
   branch?: string | null;
   /** How long the connection may stay lost before the title bar says offline instead of reconnecting. */
   offlineAfterMs?: number;
+  /** Show the one-line offer to run setup (an existing project that never ran or skipped it). */
+  setupOffer?: boolean;
 }
 
 interface ErrorInfo {
@@ -133,6 +136,8 @@ export function App(props: AppProps) {
   const [help, setHelp] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [prdOpen, setPrdOpen] = useState(false);
+  const [wizard, setWizard] = useState(false);
+  const [offer, setOffer] = useState(props.setupOffer === true);
   const [logRun, setLogRun] = useState<string | null>(null);
   const [jump, setJump] = useState<JumpTarget | null>(null);
   const [confirm, setConfirm] = useState<{ text: string; onYes: () => Promise<void> | void; quit?: boolean } | null>(null);
@@ -350,7 +355,8 @@ export function App(props: AppProps) {
   const sidebarW = cols >= 120 ? 26 : 24;
   const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 6).slice(0, 3) : [];
   const errorRows = error ? 1 + detailLines.length : 0;
-  const contentH = Math.max(3, rows - 2 - errorRows);
+  const offerRows = offer ? 1 : 0;
+  const contentH = Math.max(3, rows - 2 - errorRows - offerRows);
   const paneOuterW = sidebarMode === "full" ? cols - sidebarW : cols;
   const paneOuterH = sidebarMode === "tabs" ? contentH - 1 : contentH;
   const bodyWidth = Math.max(8, paneOuterW - 4);
@@ -358,7 +364,8 @@ export function App(props: AppProps) {
 
   // ---- focus
   const focus: Zone = rawFocus === "sidebar" && sidebarMode === "none" ? "main" : rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
-  const modal = help || confirm !== null || logRun !== null || paletteOpen || prdOpen;
+  const overlay = help || confirm !== null || logRun !== null || paletteOpen || prdOpen || wizard;
+  const modal = overlay || offer;
 
   const ask = useCallback((text: string, onYes: () => Promise<void> | void) => setConfirm({ text, onYes }), []);
   const claimInput = useCallback(() => {
@@ -532,6 +539,9 @@ export function App(props: AppProps) {
       case "help":
         setHelp(true);
         return;
+      case "setup":
+        setWizard(true);
+        return;
       case "quit":
         return quit();
       case "next":
@@ -578,7 +588,17 @@ export function App(props: AppProps) {
       if (key.escape || input === "?") setHelp(false);
       return;
     }
-    if (paletteOpen || logRun !== null || prdOpen) return; // they own their keys
+    if (offer) {
+      if (key.return) {
+        setOffer(false);
+        setWizard(true);
+      } else if (key.escape) {
+        setOffer(false);
+        api.call("settings.set", { projectId, key: "setup.skippedAt", value: new Date().toISOString() }).then(() => notify("Setup skipped. Run it any time with /setup."), fail);
+      }
+      return;
+    }
+    if (paletteOpen || logRun !== null || prdOpen || wizard) return; // they own their keys
     if (key.ctrl && (input === "p" || input === "k")) return setPaletteOpen(true);
     if (key.ctrl && input === "n") return goNextNeed();
     if (key.ctrl && input === "g") {
@@ -663,7 +683,7 @@ export function App(props: AppProps) {
   const typing = focus === "input" || inputClaims > 0;
   const hintText = footerHints(scope, cols - 4, { needs: needs.length, toast: shown?.target != null, typing });
   const paneBorder = modal || focus === "main";
-  const showView = !modal;
+  const showView = !overlay;
 
   return (
     <Ctx.Provider value={ctx}>
@@ -703,6 +723,23 @@ export function App(props: AppProps) {
                   <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
                 </Ctx.Provider>
               ) : null}
+              {wizard ? (
+                <SetupWizard
+                  api={api}
+                  projectId={projectId}
+                  root={props.root}
+                  isGit={props.isGit}
+                  width={bodyWidth}
+                  height={bodyHeight}
+                  onCancel={() => setWizard(false)}
+                  onFinish={() => {
+                    setWizard(false);
+                    setTick((n) => n + 1);
+                    goto(VIEW.cto, "input");
+                    notify("Setup saved. Tell the CTO what you want to build.");
+                  }}
+                />
+              ) : null}
               {paletteOpen ? (
                 <Ctx.Provider value={overlayCtx}>
                   <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} />
@@ -715,6 +752,14 @@ export function App(props: AppProps) {
               ) : null}
             </Box>
           </Box>
+          {offer ? (
+            <Box height={1} flexShrink={0} paddingX={1}>
+              <SafeText color={colors.attention} bold>
+                {"Set up engines for this project?"}
+              </SafeText>
+              <Text dimColor>{"  enter to start, esc to skip"}</Text>
+            </Box>
+          ) : null}
           {error ? (
             <Box flexDirection="column" height={errorRows} flexShrink={0} paddingX={1}>
               <Box height={1}>
@@ -737,7 +782,7 @@ export function App(props: AppProps) {
               {shown.target ? <Text dimColor>{"  ctrl+g go"}</Text> : null}
             </>
           ) : (
-            <SafeText dimColor>{hintText}</SafeText>
+            <SafeText dimColor>{wizard || offer ? "" : hintText}</SafeText>
           )}
         </Box>
       </Box>

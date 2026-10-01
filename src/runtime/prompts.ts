@@ -165,6 +165,8 @@ export function buildStateDigest(store: Store): string {
   if (proposed) lines.push(`Proposed PRD revision ${proposed.revision} awaits Billy's approval: ${proposed.title}`);
   const agents = store.listAgents();
   lines.push(`Team:\n${agents.map((a) => `- ${a.name} (${a.role}, ${a.engine}${a.model ? `/${a.model}` : ""}, ${a.lifecycle})`).join("\n")}`);
+  const allowedEngines = store.getSettings().workers.engines;
+  if (allowedEngines.length > 0) lines.push(`Engines you may hire agents on (Billy's choice, hire_agent rejects others): ${allowedEngines.join(", ")}.`);
   const tasks = store.listTasks();
   const nameOf = new Map(agents.map((a) => [a.id, a.name]));
   lines.push(

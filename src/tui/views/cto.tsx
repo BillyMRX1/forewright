@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Box } from "ink";
+import { Box, type Key } from "ink";
 import { Chip, PaneHeader, ScrollLines, boxLines, useSpinner, type DLine } from "../components.js";
 import { ComposeBox, composeHeight } from "../compose.js";
 import { useCtx, useDraft, useHintScope, useKeys, useLoad } from "../context.js";
@@ -96,6 +96,24 @@ export function CtoView() {
     if (input === "d") return ctx.run("prd");
   });
 
+  // With an empty box in an empty conversation, the arrows and Enter pick one of the example briefs.
+  const exampleKeys = (_input: string, key: Key): boolean => {
+    if (!empty || draft.value.length > 0) return false;
+    if (key.downArrow) {
+      setExIdx((i) => Math.min(EXAMPLES.length - 1, i + 1));
+      return true;
+    }
+    if (key.upArrow && exIdx > 0) {
+      setExIdx((i) => i - 1);
+      return true;
+    }
+    if (key.return) {
+      draft.setValue(EXAMPLES[exIdx]!);
+      return true;
+    }
+    return false;
+  };
+
   const conv: DLine[] = [];
   if (empty) {
     conv.push(...boxLines([{ text: "Welcome", bold: true }], [...wrapText("Tell the CTO what you want to build. It will propose a PRD for you to approve.", Math.max(10, Math.min(w, 84) - 4)).map((text) => ({ text }))], Math.min(w, 84), palette.accent));
@@ -125,7 +143,7 @@ export function CtoView() {
     <Box flexDirection="column" height={h} width={w}>
       <PaneHeader title="CTO" {...(cto ? { context: titleCase(cto.engine) } : {})} pill={pill} width={w} />
       <ScrollLines lines={conv} height={convH} width={w} anchor="bottom" arrows={!empty} zones={["main", "input"]} />
-      <ComposeBox value={draft.value} onChange={draft.setValue} onClear={draft.clear} onSend={(t) => void send(t)} scope="cto.input" placeholder={`Message the CTO${sym().ellipsis}`} width={w} maxRows={maxRows} compact={compact} paneHeight={h} onUp={() => ctx.setFocus("main")} />
+      <ComposeBox value={draft.value} onChange={draft.setValue} onClear={draft.clear} onSend={(t) => void send(t)} scope="cto.input" placeholder={`Message the CTO${sym().ellipsis}`} width={w} maxRows={maxRows} compact={compact} paneHeight={h} onUp={() => ctx.setFocus("main")} onKey={exampleKeys} />
     </Box>
   );
 }

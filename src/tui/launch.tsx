@@ -1,30 +1,67 @@
 // Entry used by `forewright` (wired in src/cli/main.ts): start the service if needed,
 // open or create the project for a folder, then show the interface.
 
-import { render } from "ink";
+import { render, useWindowSize } from "ink";
 import { ForewrightError } from "../core/errors.js";
 import { ForewrightClient, ensureDaemon } from "./client.js";
 import { App } from "./app.js";
-import { Welcome } from "./welcome.js";
+import { SetupWizard } from "./setup.js";
 import type { ProjectOpenResult } from "../runtime/protocol.js";
 
 const ALT_ON = "\x1b[?1049h";
 const ALT_OFF = "\x1b[?1049l";
 
-async function askToCreate(root: string, isGit: boolean): Promise<boolean> {
+function SetupScreen({
+  client,
+  root,
+  isGit,
+  projectId,
+  create,
+  onDone,
+}: {
+  client: ForewrightClient;
+  root: string;
+  isGit: boolean;
+  projectId: string | null;
+  create?: () => Promise<string>;
+  onDone: (finished: boolean) => void;
+}) {
+  const win = useWindowSize();
+  return (
+    <SetupWizard
+      api={client}
+      projectId={projectId}
+      root={root}
+      isGit={isGit}
+      width={win.columns || 80}
+      height={win.rows || 24}
+      standalone
+      {...(create ? { create } : {})}
+      onFinish={() => onDone(true)}
+      onCancel={() => onDone(false)}
+    />
+  );
+}
+
+/** Runs the setup wizard on its own screen (the folder has no workspace yet). Resolves true when it was finished. */
+async function runSetup(client: ForewrightClient, root: string, isGit: boolean, create: () => Promise<string>): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let answered = false;
     const app = render(
-      <Welcome
+      <SetupScreen
+        client={client}
         root={root}
         isGit={isGit}
-        onAnswer={(create) => {
+        projectId={null}
+        create={create}
+        onDone={(finished) => {
           if (answered) return;
           answered = true;
           app.unmount();
-          resolve(create);
+          resolve(finished);
         }}
       />,
+      { exitOnCtrlC: false },
     );
   });
 }
@@ -40,24 +77,39 @@ export async function launchTui({ cwd }: { cwd: string }): Promise<void> {
   await client.connect();
   try {
     let open: ProjectOpenResult = await client.call("projects.open", { cwd });
-    if (open.status === "none") {
-      const create = await askToCreate(open.suggestedRoot, open.isGit);
-      if (!create) {
-        process.stdout.write("No workspace was created.\n");
-        return;
-      }
-      open = await client.call("projects.init", { cwd });
-    }
-    if (open.status !== "found") throw new ForewrightError("project_open_failed", "The Forewright service could not open this folder as a project.", { cwd });
-    if (open.moved) process.stdout.write(`Project folder moved: ${open.moved.from} -> ${open.moved.to}. Updated.\n`);
-
+    let created: ProjectOpenResult | null = null;
+    let setupOffer = false;
     process.stdout.write(ALT_ON);
     let quit = false;
+    let farewell: string | null = null;
     try {
-      const app = render(<App api={client} projectId={open.projectId} projectName={open.name} root={open.root} isGit={open.isGit} onQuit={() => (quit = true)} />, { exitOnCtrlC: false });
+      if (open.status === "none") {
+        // A new folder: the setup wizard starts with the welcome page and creates the workspace itself.
+        const finished = await runSetup(client, open.suggestedRoot, open.isGit, async () => {
+          created = await client.call("projects.init", { cwd });
+          if (created.status !== "found") throw new ForewrightError("project_open_failed", "The Forewright service could not create a workspace in this folder.", { cwd });
+          return created.projectId;
+        });
+        if (!finished) {
+          farewell = created ? "Setup stopped before it was saved. Run forewright again to finish it.\n" : "No workspace was created.\n";
+          return;
+        }
+        open = created ?? open;
+      } else if (open.status === "found") {
+        const current = await client.call("state.settings", { projectId: open.projectId });
+        setupOffer = current.settings.setup.completedAt === null && current.settings.setup.skippedAt === null;
+      }
+      if (open.status !== "found") throw new ForewrightError("project_open_failed", "The Forewright service could not open this folder as a project.", { cwd });
+      if (open.moved) process.stdout.write(`Project folder moved: ${open.moved.from} -> ${open.moved.to}. Updated.\n`);
+
+      const app = render(
+        <App api={client} projectId={open.projectId} projectName={open.name} root={open.root} isGit={open.isGit} setupOffer={setupOffer} onQuit={() => (quit = true)} />,
+        { exitOnCtrlC: false },
+      );
       await app.waitUntilExit();
     } finally {
       process.stdout.write(ALT_OFF);
+      if (farewell !== null) process.stdout.write(farewell);
     }
     process.stdout.write(quit ? "Closed the Forewright screen. The Forewright service keeps running in the background.\n" : "The Forewright service keeps running in the background.\n");
   } finally {

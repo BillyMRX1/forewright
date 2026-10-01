@@ -216,7 +216,21 @@ export interface FallbackSettings {
 
 export const FALLBACK_KEYS = ["fallback.cto", "fallback.workers"] as const;
 
-export type Settings = Limits & { authority: Authority; fallback: FallbackSettings };
+/** Engines the CTO may hire agents on. Empty means any usable engine (the default for older projects). */
+export interface WorkerSettings {
+  engines: EngineId[];
+}
+
+/** First-run setup bookkeeping: when the wizard was finished or skipped (ISO time), or null. */
+export interface SetupSettings {
+  completedAt: string | null;
+  skippedAt: string | null;
+}
+
+export const WORKER_ENGINES_KEY = "workers.engines";
+export const SETUP_KEYS = ["setup.completedAt", "setup.skippedAt"] as const;
+
+export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings };
 
 export const DEFAULT_LIMITS: Limits = {
   maxConcurrentWorkers: 2,

@@ -5,7 +5,7 @@ import type { AgentRole, ProviderAdapter } from "../core/types.js";
  * submit_review, ...), so an engine without working MCP support cannot fill
  * those roles. Returns a plain reason, or null when the engine fits the role.
  */
-export function engineRoleProblem(adapter: ProviderAdapter, role: AgentRole): string | null {
+export function engineRoleProblem(adapter: Pick<ProviderAdapter, "engine" | "capabilities">, role: AgentRole): string | null {
   if ((role === "cto" || role === "review") && adapter.capabilities.coordinationTools !== "mcp") {
     const what = role === "cto" ? "be the CTO" : "review work";
     return `${adapter.engine} cannot ${what}: it cannot call Forewright's coordination tools. Pick an engine with MCP support.`;

@@ -37,6 +37,8 @@ import {
   type DecisionKind,
   type FallbackEntry,
   type FallbackSettings,
+  type WorkerSettings,
+  type SetupSettings,
   type DecisionOption,
   type ForewrightEvent,
   type Limits,
@@ -1617,7 +1619,12 @@ export class Store {
       cto: (stored.get("fallback.cto") as FallbackEntry[] | undefined) ?? [],
       workers: (stored.get("fallback.workers") as FallbackEntry[] | undefined) ?? [],
     };
-    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback };
+    const workers: WorkerSettings = { engines: (stored.get("workers.engines") as EngineId[] | undefined) ?? [] };
+    const setup: SetupSettings = {
+      completedAt: (stored.get("setup.completedAt") as string | undefined) ?? null,
+      skippedAt: (stored.get("setup.skippedAt") as string | undefined) ?? null,
+    };
+    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup };
   }
 
   /** Authority keys are written as `authority.<name>` and only a human may change them. */
@@ -1639,6 +1646,13 @@ export class Store {
       // The fallback lists decide which other engines may spend Billy's usage, so only a human writes them.
       authorize(by, "change_authority", {}, this.getSettings().authority);
       value = validateFallbackList(key, value);
+    } else if (key === "workers.engines") {
+      // Which engines the CTO may hire on spends Billy's usage, so only a human writes it.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      value = validateWorkerEngines(key, value);
+    } else if (key === "setup.completedAt" || key === "setup.skippedAt") {
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new ValidationError(`${key} must be a time.`, { key, value });
     } else if (key === "ctoEngine") {
       if (typeof value !== "string" || ![...LIVE_ENGINES, "fake"].includes(value)) {
         throw new ValidationError(`ctoEngine must be one of ${LIVE_ENGINES.join(", ")}.`, { key, value });
@@ -1909,6 +1923,18 @@ export class Store {
     const all = this.listDecisions();
     return { open: all.filter((d) => d.status === "open"), recent: all.filter((d) => d.status !== "open").slice(-20).reverse() };
   }
+}
+
+/** The worker engine list: known live engines, each at most once. Empty is allowed and means "any usable engine". */
+function validateWorkerEngines(key: string, value: unknown): EngineId[] {
+  if (!Array.isArray(value)) throw new ValidationError(`${key} must be a list of engines.`, { key });
+  const seen = new Set<string>();
+  for (const e of value) {
+    if (typeof e !== "string" || !(LIVE_ENGINES as readonly string[]).includes(e)) throw new ValidationError(`Each entry of ${key} must be one of ${LIVE_ENGINES.join(", ")}.`, { key, entry: e });
+    if (seen.has(e)) throw new ValidationError(`${e} is listed twice in ${key}.`, { key, engine: e });
+    seen.add(e);
+  }
+  return value as EngineId[];
 }
 
 /** A fallback list is an ordered array of known live engines, each at most once, with an optional model name. */

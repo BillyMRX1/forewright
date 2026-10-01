@@ -16,6 +16,7 @@ export interface MountOptions {
   toastMs?: Partial<Record<ToastKind, number>>;
   onQuit?: () => void;
   offlineAfterMs?: number;
+  setupOffer?: boolean;
 }
 
 const open: Harness[] = [];
@@ -43,6 +44,7 @@ export async function mount(opts: MountOptions = {}) {
       {...(opts.toastMs ? { toastMs: opts.toastMs } : {})}
       {...(opts.onQuit ? { onQuit: opts.onQuit } : {})}
       {...(opts.offlineAfterMs !== undefined ? { offlineAfterMs: opts.offlineAfterMs } : {})}
+      {...(opts.setupOffer ? { setupOffer: true } : {})}
     />,
     cols,
     rows,

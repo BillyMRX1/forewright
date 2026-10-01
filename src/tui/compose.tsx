@@ -1,7 +1,7 @@
 // The message box used by CTO and Chat: a bordered input with slash command suggestions above it.
 
 import { useEffect, useState } from "react";
-import { Box } from "ink";
+import { Box, type Key } from "ink";
 import { InputBox, ListRow, inputBoxHeight } from "./components.js";
 import { useCtx, useHintScope } from "./context.js";
 import { parseSlash, slashSuggestions } from "./commands.js";
@@ -33,6 +33,7 @@ export function ComposeBox({
   compact,
   paneHeight,
   onUp,
+  onKey,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -48,6 +49,8 @@ export function ComposeBox({
   /** Height of the pane, to decide how many suggestions to list. */
   paneHeight: number;
   onUp: () => void;
+  /** Sees keys the slash suggestions did not take. Return true when it handled the key. */
+  onKey?: (input: string, key: Key) => boolean;
 }) {
   const ctx = useCtx();
   const focus = ctx.focus === "input";
@@ -72,8 +75,8 @@ export function ComposeBox({
     ctx.run(slash.command.action);
   };
 
-  const intercept = (_input: string, key: { upArrow: boolean; downArrow: boolean; tab: boolean; return: boolean }): boolean => {
-    if (!open) return false;
+  const intercept = (input: string, key: Key): boolean => {
+    if (!open) return onKey?.(input, key) ?? false;
     if (key.upArrow) {
       setSel(Math.max(0, at - 1));
       return true;

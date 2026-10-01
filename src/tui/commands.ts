@@ -21,6 +21,7 @@ export type ActionId =
   | "terminate"
   | "sidebar"
   | "help"
+  | "setup"
   | "quit"
   | "next";
 
@@ -56,6 +57,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "team", description: "open the Team", action: "go.team" },
   { name: "settings", description: "open Settings", action: "go.settings" },
   { name: "help", description: "show every key and command", action: "help" },
+  { name: "setup", description: "run the setup again: tools, CTO, workers, limits, control", action: "setup" },
   { name: "overview", description: "open the Overview", action: "go.overview" },
   { name: "chat", description: "open Chat", action: "go.chat" },
   { name: "evidence", description: "open Evidence", action: "go.evidence" },

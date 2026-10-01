@@ -286,6 +286,10 @@ const TOOLS: ToolDef[] = [
       const model = optStr(a, "model", 100);
       const adapter = rt.deps.adapters.get(engine);
       if (!adapter) throw new ToolError(`The ${engine} provider is not available on this machine.`);
+      const allowed = rt.store.getSettings().workers.engines;
+      if (allowed.length > 0 && !allowed.includes(engine)) {
+        throw new ToolError(`Billy did not allow ${engine} for agents in this project. Allowed engines: ${allowed.join(", ")}. Hire on one of those.`);
+      }
       if (adapter.isTestDouble && !rt.deps.testMode) throw new ToolError("Test doubles cannot be hired outside test mode.");
       const roleProblem = engineRoleProblem(adapter, role);
       if (roleProblem) throw new ToolError(roleProblem);
