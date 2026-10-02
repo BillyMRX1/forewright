@@ -5,12 +5,10 @@ import type { BlockReason, RunState, TaskState } from "../core/types.js";
 import { sanitizeTerminal } from "../core/safety.js";
 import { TASK_STATE_COLOR, sym } from "./theme.js";
 
-/** The four numbered tabs (keys 1 to 4), then Settings, which is reached with `,` or the palette and is not a tab. */
-export const VIEW_NAMES = ["Home", "CTO", "Tasks", "Inbox", "Settings"] as const;
+/** What the sidebar can show in the main pane. Settings is reached with `,` or the bottom sidebar entry. */
+export const VIEW_NAMES = ["Overview", "CTO", "Tasks", "Inbox", "Settings", "Team chat", "Agent"] as const;
 /** View indexes, matching VIEW_NAMES. */
-export const VIEW = { home: 0, cto: 1, tasks: 2, inbox: 3, settings: 4 } as const;
-/** How many views are tabs. */
-export const TAB_COUNT = 4;
+export const VIEW = { home: 0, cto: 1, tasks: 2, inbox: 3, settings: 4, chat: 5, agent: 6 } as const;
 
 /** Clean untrusted text for one-line display: sanitized, tabs to spaces, newlines to spaces. */
 export function oneLine(text: string): string {

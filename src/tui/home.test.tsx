@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { FakeClient } from "./fake-client.js";
 import { describeEvent, homeBudget, latestLines, needRows } from "./home-model.js";
-import { VIEW, closeAll, down, enter, esc, hints, left, lines, mount, release, right, up } from "./test-support.js";
+import { VIEW, closeAll, down, enter, esc, hints, left, lines, mount, pane, paneLines, release, right, up } from "./test-support.js";
 
 afterEach(closeAll);
 
-const row = (h: Parameters<typeof lines>[0], re: RegExp) => lines(h).find((l) => re.test(l)) ?? "";
+const row = (h: Parameters<typeof lines>[0], re: RegExp) => paneLines(h).find((l) => re.test(l)) ?? "";
 
-describe("Home", () => {
+describe("Overview", () => {
   it("shows NEEDS YOU, WORKERS, PROGRESS and LATEST, filled from the service", async () => {
     const { h } = await mount({ cols: 140, rows: 40 });
     const f = h.frame();
@@ -28,7 +28,7 @@ describe("Home", () => {
     assert.match(row(h, /^   Bo\b/), /Bo\s+Codex\s+gpt-x\s+T-2 Implement tip calculation\s+●\s+\d+[smh]( \d+[ms])?\s+Started/);
     assert.match(row(h, /^   Cy\b/), /Cy\s+Claude\s+default\s+idle\s+○/);
     assert.match(row(h, /^   Ada\b/), /Ada\s+Claude\s+default\s+idle\s+!\s+Waiting for you: Which rounding rule\?/);
-    const order = ["Ada", "Bo", "Cy"].map((n) => lines(h).findIndex((l) => new RegExp(`^   ${n}\\b`).test(l)));
+    const order = ["Ada", "Bo", "Cy"].map((n) => paneLines(h).findIndex((l) => new RegExp(`^   ${n}\\b`).test(l)));
     assert.ok(order[0]! < order[1]! && order[1]! < order[2]!, "most urgent first");
   });
 
@@ -49,12 +49,12 @@ describe("Home", () => {
   });
 
   it("drops the model, then the engine, and trims the rest on narrow terminals", async () => {
-    const wide = await mount({ cols: 120, rows: 30 });
+    const wide = await mount({ cols: 140, rows: 30 });
     assert.match(row(wide.h, /^   Bo\b/), /Codex\s+gpt-x/);
-    const mid = await mount({ cols: 80, rows: 24 });
+    const mid = await mount({ cols: 100, rows: 30 });
     assert.match(row(mid.h, /^   Bo\b/), /Bo\s+Codex\s+T-2/);
     assert.doesNotMatch(row(mid.h, /^   Bo\b/), /gpt-x/);
-    const narrow = await mount({ cols: 50, rows: 20 });
+    const narrow = await mount({ cols: 72, rows: 20 });
     assert.doesNotMatch(row(narrow.h, /^   Bo\b/), /Codex/);
     assert.match(row(narrow.h, /^   Bo\b/), /Bo\s+T-2/);
   });
@@ -76,7 +76,7 @@ describe("Home", () => {
     assert.match(hints(h), /enter open/);
     await enter(h);
     await h.settle(250);
-    assert.match(lines(h)[0]!, /4 Inbox/);
+    assert.match(lines(h)[0]!, /Inbox/);
     assert.match(h.frame(), /Open 2/);
     assert.match(h.frame(), /▸ Which rounding rule\?/);
     assert.match(h.frame(), /Should tips round up or to the nearest cent\?/);
@@ -87,33 +87,35 @@ describe("Home", () => {
     await down(h);
     await enter(h);
     await h.settle(250);
-    assert.match(h.frame(), /to: CTO/);
+    assert.match(lines(h)[0]!, /CTO/);
+    assert.match(h.frame(), /PRD r2 . proposed/);
     assert.match(hints(h), /a approve prd/);
   });
 
-  it("Enter on a worker row opens that worker: task, latest activity, live output, and keys to edit it", async () => {
+  it("Enter on a worker row opens that agent's pane: task, latest activity, live output, and keys to edit it", async () => {
     const { h } = await mount({ cols: 100, rows: 30 });
     for (let i = 0; i < 3; i++) await down(h); // two needs-you rows, then Ada, then Bo
     await enter(h);
     await h.settle(300);
     const f = h.frame();
-    assert.match(f, /Home > Bo/);
-    assert.match(f, /● working\s+Codex gpt-x\s+backend/);
+    assert.match(lines(h)[0]!, /Bo/);
+    assert.match(f, /▸6 . Bo/);
+    assert.match(pane(h), /Bo\s+\S working\s+Codex gpt-x\s+backend/);
     assert.match(f, /Task\s+T-2 Implement tip calculation/);
     assert.match(f, /Now\s+Started/);
     assert.match(f, /Live output, run run-abcd/);
     assert.match(f, /line one red/);
-    assert.match(hints(h), /e edit · t task · l log · esc back/);
+    assert.match(hints(h), /enter message · e edit · t task · l log · esc sidebar/);
     await esc(h);
-    assert.match(h.frame(), /NEEDS YOU/);
+    assert.match(hints(h), /↑↓ move/);
+    assert.match(h.frame(), /Live output/, "the pane stays while the sidebar has the keyboard");
   });
 
-  it("edits a worker's engine, model and permission from its details", async () => {
+  it("edits an agent's engine, model and permission from its pane", async () => {
     const { h, api } = await mount({ cols: 140, rows: 40 });
     for (let i = 0; i < 3; i++) await down(h);
     await enter(h);
     await h.send("e");
-    assert.match(h.frame(), /Home > Bo > edit/);
     assert.match(h.frame(), /▸ Engine\s+< codex >/);
     assert.match(hints(h), /↑↓ field · ←→ change · enter save · esc cancel/);
     await right(h); // engine to the next one
@@ -128,13 +130,12 @@ describe("Home", () => {
     assert.notEqual(call.engine, "codex");
     assert.equal(call.model, null);
     assert.equal(call.permission, "coordinator");
-    assert.match(h.frame(), /Home > Bo\n/);
+    assert.match(h.frame(), /Message Bo directly/);
   });
 
   it("shows what the engine supports while editing, and Esc leaves without saving", async () => {
     const { h, api } = await mount({ cols: 140, rows: 40 });
-    await down(h);
-    await down(h); // Ada, the CTO on Claude
+    for (let i = 0; i < 4; i++) await down(h); // Cy, the idle worker
     await enter(h);
     await h.send("e");
     await up(h);
@@ -143,10 +144,10 @@ describe("Home", () => {
     assert.match(h.frame(), /supports: /);
     await esc(h);
     assert.equal(api.callsTo("agents.update").length, 0);
-    assert.match(h.frame(), /Home > Ada\n/);
+    assert.match(h.frame(), /Message Cy directly/);
   });
 
-  it("t opens the worker's task and l its raw log", async () => {
+  it("t opens the agent's task and l its raw log", async () => {
     const { h } = await mount({ cols: 100, rows: 30 });
     for (let i = 0; i < 3; i++) await down(h);
     await enter(h);
@@ -183,12 +184,12 @@ describe("Home", () => {
     assert.match(hints(h), /enter keep filter · esc clear/);
     await h.send("codex");
     assert.match(h.frame(), /filter: codex/);
-    assert.doesNotMatch(h.frame(), /\bCy\b/);
-    assert.match(h.frame(), /\bBo\b/);
+    assert.doesNotMatch(pane(h), /\bCy\b/);
+    assert.match(pane(h), /\bBo\b/);
     await enter(h);
     assert.match(h.frame(), /filter: codex \(esc clears\)/);
     await esc(h);
-    assert.match(h.frame(), /\bCy\b/);
+    assert.match(pane(h), /\bCy\b/);
     assert.doesNotMatch(h.frame(), /filter:/);
   });
 
@@ -202,7 +203,7 @@ describe("Home", () => {
     const { h } = await mount({ api });
     assert.match(h.frame(), /NEEDS YOU\s+nothing right now/);
     assert.match(h.frame(), /No workers yet\./);
-    assert.match(h.frame(), /No tasks yet\. Press 2 and tell the CTO/);
+    assert.match(h.frame(), /No tasks yet\. Press 1 and tell the CTO/);
     assert.match(h.frame(), /Nothing yet\./);
   });
 
@@ -213,7 +214,7 @@ describe("Home", () => {
     await down(h);
     api.emitEvent("task.completed", "task", "t4");
     await h.settle(500);
-    assert.match(lines(h).find((l) => /▸/.test(l)) ?? "", /Bo/);
+    assert.match(paneLines(h).find((l) => /▸/.test(l)) ?? "", /Bo/);
   });
 });
 

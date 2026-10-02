@@ -197,6 +197,10 @@ export class FakeClient implements ClientApi {
   /** Setup bookkeeping, as state.settings reports it. Changed by settings.set. */
   setup: { completedAt: string | null; skippedAt: string | null } = { completedAt: null, skippedAt: null };
   authority: Authority = { ...DEFAULT_AUTHORITY };
+  /** state.settings reports it; false offers the initial commit in setup. Changed by projects.initialCommit. */
+  hasCommits = true;
+  /** Messages returned by state.messages for a non-CTO channel, keyed `channel` or `channel:agentId`. Others get one generic message. */
+  chatMessages: Record<string, Message[]> = {};
   ctoEngine = "claude";
   ctoModel: string | null = null;
   /** Makes the next settings.set for this key fail, with this message. */
@@ -246,7 +250,7 @@ export class FakeClient implements ClientApi {
     const d = this.data;
     const p = params as Record<string, unknown>;
     const out = ((): unknown => {
-      switch (method) {
+      switch (method as string) {
         case "state.runtime":
         case "control.pauseAll":
         case "control.resume":
@@ -292,6 +296,8 @@ export class FakeClient implements ClientApi {
         case "state.messages": {
           const ch = p["channel"];
           if (ch === "cto") return { messages: d.messages };
+          const custom = this.chatMessages[typeof p["agentId"] === "string" ? `${String(ch)}:${p["agentId"]}` : String(ch)];
+          if (custom) return { messages: custom };
           return { messages: [{ ...d.messages[0]!, id: "c1", channel: ch, body: `hello in ${String(ch)}` }] };
         }
         case "state.events":
@@ -317,6 +323,7 @@ export class FakeClient implements ClientApi {
             providers: d.providers,
             ctoEngine: this.ctoEngine,
             ctoModel: this.ctoModel,
+            hasCommits: this.hasCommits,
             fallbackStatus: {
               cto: this.fallback.cto.map((e) => ({ engine: e.engine, model: e.model ?? null, problem: this.fallbackProblems[e.engine] ?? null })),
               workers: this.fallback.workers.map((e) => ({ engine: e.engine, model: e.model ?? null, problem: this.fallbackProblems[e.engine] ?? null })),
@@ -328,6 +335,9 @@ export class FakeClient implements ClientApi {
           return { body: this.drafts.get(`${String(p["view"])}/${String(p["key"])}`) ?? null };
         case "drafts.save":
           this.drafts.set(`${String(p["view"])}/${String(p["key"])}`, String(p["body"]));
+          return { ok: true };
+        case "projects.initialCommit":
+          this.hasCommits = true;
           return { ok: true };
         case "cto.send":
         case "chat.send":

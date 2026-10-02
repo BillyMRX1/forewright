@@ -57,7 +57,7 @@ describe("CTO message box", () => {
     await h.settle(150);
     const saved = api.callsTo("drafts.save").filter((c) => (c.params as { body: string }).body === "hello draft");
     assert.ok(saved.length >= 1, "draft was not sent to drafts.save");
-    await h.send("2");
+    await h.send("1");
     await h.settle(250);
     assert.match(h.frame(), /hello draft/);
   });
@@ -67,7 +67,7 @@ describe("CTO message box", () => {
     const f = h.frame();
     assert.match(f, /╭─ PRD r2 · proposed/);
     assert.match(f, /R-001 Compute a tip from a bill/);
-    assert.match(f, /ctrl\+a approve\s+ctrl\+r read the full PRD/);
+    assert.match(f, /ctrl\+y approve\s+ctrl\+o read the full PRD/);
     assert.match(f, /PRD r2 waiting for you/);
     const lineOf = (re: RegExp) => lines(h).findIndex((l) => re.test(l));
     assert.ok(lineOf(/Sure\. I drafted a PRD\./) < lineOf(/╭─ PRD r2/), "the card sits under the CTO message");
@@ -118,28 +118,51 @@ describe("CTO message box", () => {
     assert.equal(api.callsTo("cto.send").length, 0);
   });
 
-  it("Ctrl+A approves the PRD from the box after asking; Ctrl+R reads it", async () => {
+  it("Ctrl+Y approves the PRD from the box after asking; Ctrl+O reads it (raw control bytes)", async () => {
     const { h, api } = await mount({ view: VIEW.cto });
     await h.send("typing");
-    await ctrl(h, "a");
+    await h.send("\x19"); // ctrl+y as a terminal sends it
     await h.settle(150);
     assert.match(h.frame(), /Approve PRD revision 2\?/);
     assert.equal(api.callsTo("prd.approve").length, 0);
     await h.send("y");
     await h.settle(100);
     assert.deepEqual(api.callsTo("prd.approve")[0]?.params, { projectId: "p1", revision: 2 });
-    assert.match(h.frame(), /typing/, "ctrl+a did not move the cursor or change the text");
-    await ctrl(h, "r");
+    assert.match(h.frame(), /typing/, "ctrl+y did not change the text");
+    await h.send("\x0f"); // ctrl+o
     await h.settle(200);
     assert.match(h.frame(), /Changes against approved revision 1/);
     await esc(h);
     assert.doesNotMatch(h.frame(), /Changes against approved revision/);
+    assert.match(h.frame(), /typing/, "the draft is still there");
   });
 
-  it("with the conversation focused, a approves, r reads the PRD and m changes the recipient", async () => {
+  it("Ctrl+A and Ctrl+E keep moving the cursor in the box and never approve or read", async () => {
     const { h, api } = await mount({ view: VIEW.cto });
-    await esc(h);
-    assert.match(hints(h), /a approve prd · r read prd · m recipient/);
+    await h.send("abc");
+    await h.send("\x01"); // line start
+    await h.send("Z");
+    assert.match(h.frame(), /Zabc/);
+    await h.send("\x05"); // line end
+    await h.send("!");
+    assert.match(h.frame(), /Zabc!/);
+    await h.send("\x12"); // ctrl+r is not used by the box either
+    assert.doesNotMatch(h.frame(), /Approve PRD|Changes against/);
+    assert.equal(api.callsTo("prd.approve").length, 0);
+  });
+
+  it("Ctrl+Y and Ctrl+O also work from an empty box, and the PRD card lists them", async () => {
+    const { h } = await mount({ view: VIEW.cto });
+    assert.match(hints(h), /ctrl\+y approve prd/);
+    await h.send("\x19");
+    await h.settle(150);
+    assert.match(h.frame(), /Approve PRD revision 2\?/);
+  });
+
+  it("with the conversation focused, a approves, r reads the PRD and esc goes to the sidebar", async () => {
+    const { h, api } = await mount({ view: VIEW.cto });
+    await up(h);
+    assert.match(hints(h), /a approve prd · r read prd · esc sidebar/);
     await h.send("a");
     await h.settle(150);
     assert.match(h.frame(), /Approve PRD revision 2\?/);
@@ -147,10 +170,10 @@ describe("CTO message box", () => {
     await h.send("r");
     await h.settle(200);
     assert.match(h.frame(), /PRD r2 · Tip calculator/);
+    await esc(h); // closes the PRD
+    assert.match(hints(h), /a approve prd/);
     await esc(h);
-    await h.send("m");
-    await h.settle(100);
-    assert.match(h.frame(), /to: Project/);
+    assert.match(hints(h), /↑↓ move/);
     assert.equal(api.callsTo("prd.approve").length, 0);
   });
 });
@@ -174,7 +197,8 @@ describe("slash commands", () => {
     await down(h);
     await h.send("\t");
     assert.match(h.frame(), /›\s+\/(prd|pause)/);
-    assert.match(lines(h)[0]!, /2 CTO/, "tab completed the command, it did not switch tabs");
+    assert.match(lines(h)[0]!, /CTO/, "tab completed the command, it did not leave the box");
+    assert.match(hints(h), /enter/);
     await h.send("\x15"); // ctrl+u clears
     await h.send("/appr");
     await enter(h); // completes
@@ -272,10 +296,11 @@ describe("slash commands", () => {
     for (const [cmd, shown] of [
       ["/inbox", /Open 2\s+History/],
       ["/tasks", /TASKS 6 total/],
-      ["/team", /NEEDS YOU \(2\)/],
+      ["/team", /to: Everyone/],
+      ["/chat", /to: Everyone/],
       ["/home", /NEEDS YOU \(2\)/],
       ["/overview", /WORKERS/],
-      ["/settings", /Settings\s+esc close/],
+      ["/settings", /ENGINES FOUND/],
       ["/evidence", /TASKS 6 total/],
     ] as const) {
       const { h } = await mount({ view: VIEW.cto });
@@ -316,8 +341,7 @@ describe("slash commands", () => {
   });
 
   it("works in the other recipients' boxes too", async () => {
-    const { h, api } = await mount({ view: VIEW.cto });
-    await tab(h); // Project channel
+    const { h, api } = await mount({ view: VIEW.chat });
     await h.send("/tasks");
     await enter(h);
     await h.settle(150);
@@ -328,12 +352,14 @@ describe("slash commands", () => {
 
 describe("typed letters never trigger shortcuts", () => {
   it("in every recipient's box", async () => {
-    const { h, api } = await mount({ view: VIEW.cto });
-    await tab(h);
+    const { h, api } = await mount({ view: VIEW.chat });
     for (const ch of ["P", "T", "X", "L", "n", "g", "e", "q", "3", "?"]) await h.send(ch);
     assert.match(h.frame(), /PTXLngeq3\?/);
     assert.equal(api.calls.filter((c) => c.method.startsWith("control.")).length, 0);
-    assert.match(h.frame(), /to: Project/);
+    assert.match(h.frame(), /to: Everyone/);
+    const agent = await mount({ view: VIEW.agent });
+    for (const ch of ["P", "T", "e", "q", "3", "?"]) await agent.h.send(ch);
+    assert.match(agent.h.frame(), /PTeq3\?/);
   });
 
   it("in the Settings number box, the Inbox note box and the handoff note", async () => {
@@ -366,7 +392,7 @@ describe("command palette", () => {
     const { h } = await mount({ view: VIEW.cto });
     await ctrl(h, "p");
     assert.match(h.frame(), /Commands/);
-    assert.match(h.frame(), /Go to Home/);
+    assert.match(h.frame(), /Go to Overview/);
     await h.send("cli");
     await h.settle(100);
     const f = h.frame();
@@ -395,10 +421,10 @@ describe("command palette", () => {
     const api = new FakeClient();
     const entries = buildEntries(api.data.tasks, api.data.agents as never, [api.data.decision], { channels: (await api.call("state.channels", { projectId: "p1" })).channels });
     const labels = entries.map((e) => e.label);
-    for (const v of ["Home", "CTO", "Tasks", "Inbox", "Settings"]) assert.ok(labels.includes(`Go to ${v}`), v);
+    for (const v of ["Overview", "CTO", "Tasks", "Inbox", "Settings", "Team chat"]) assert.ok(labels.includes(`Go to ${v}`), v);
     for (const need of ["Run setup again", "Show every key and command", "Read the raw log of a run", "Message: Project", "Message: Bo", "Message: T-2 Implement tip calculation"]) assert.ok(labels.includes(need), need);
     assert.ok(!labels.includes("Message: CTO"), "the CTO is the default recipient, not an extra entry");
-    assert.ok(!labels.some((l) => /sidebar|Go to (Overview|Evidence|Team|Chat)/i.test(l)), "no entries for screens that no longer exist");
+    assert.ok(!labels.some((l) => /Go to Evidence/i.test(l)), "no entries for screens that do not exist");
   });
 
   it("runs an action: pause asks first, then pauses", async () => {
@@ -459,13 +485,17 @@ describe("command palette", () => {
     await h.send("settings");
     await enter(h);
     await h.settle(150);
-    assert.match(lines(h)[0]!, /Settings\s+esc close/);
+    assert.match(lines(h)[0]!, /Settings/);
+    assert.match(h.frame(), /ENGINES FOUND/);
     await ctrl(h, "p");
     await h.send("cy");
     await enter(h);
     await h.settle(250);
-    assert.match(h.frame(), /Home > Cy/);
-    assert.match(hints(h), /e edit/);
+    assert.match(lines(h)[0]!, /Cy/);
+    assert.match(h.frame(), /Message Cy directly/);
+    await esc(h);
+    await h.send("\x1b"); // (a lone escape again: nothing special)
+    await h.settle(100);
   });
 
   it("opens the help, and quits through the palette", async () => {
@@ -507,10 +537,10 @@ describe("command palette", () => {
   });
 });
 
-describe("tabs from an empty message box", () => {
-  it("1 to 4 switch tabs while the box is empty, without sending anything", async () => {
+describe("digits from an empty message box", () => {
+  it("1 to 9 jump to sidebar entries while the box is empty, without sending anything", async () => {
     const { h, api } = await mount({ view: VIEW.cto });
-    assert.match(hints(h), /1-4 tabs/);
+    assert.match(hints(h), /1-9 jump/);
     await h.send("3");
     await h.settle(150);
     assert.match(h.frame(), /TASKS 6 total/);
@@ -518,8 +548,7 @@ describe("tabs from an empty message box", () => {
     await esc(h);
     assert.equal(api.callsTo("cto.send").length, 0);
     assert.equal(api.callsTo("chat.send").length, 0);
-    const p = await mount({ view: VIEW.cto });
-    await tab(p.h); // project channel box, same rule
+    const p = await mount({ view: VIEW.chat });
     await p.h.send("4");
     await p.h.settle(150);
     assert.match(p.h.frame(), /Open 2/);
@@ -529,10 +558,10 @@ describe("tabs from an empty message box", () => {
   it("once the box has text, digits type normally and the hint goes away", async () => {
     const { h, api } = await mount({ view: VIEW.cto });
     await h.send("a");
-    assert.doesNotMatch(hints(h), /1-4 tabs/);
+    assert.doesNotMatch(hints(h), /1-9 jump/);
     await h.send("3");
     assert.match(h.frame(), /›\s+a3/);
-    assert.match(h.frame(), /to: CTO/);
+    assert.match(lines(h)[0]!, /CTO/);
     await enter(h);
     await h.settle(100);
     assert.equal((api.callsTo("cto.send")[0]?.params as { body: string }).body, "a3");

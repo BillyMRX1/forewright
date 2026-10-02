@@ -1798,6 +1798,12 @@ export class Store {
     return Number(this.one("SELECT COUNT(*) AS n FROM event WHERE project_id = ? AND type = ? AND at >= ?", this.projectId, type, sinceIso)?.["n"] ?? 0);
   }
 
+  /** Time of the earliest event of a type at or after a moment, or null. */
+  firstEventAt(type: string, sinceIso: string): string | null {
+    const r = this.one("SELECT MIN(at) AS at FROM event WHERE project_id = ? AND type = ? AND at >= ?", this.projectId, type, sinceIso);
+    return (r?.["at"] as string | null | undefined) ?? null;
+  }
+
   getSetting<T = unknown>(key: string): T | undefined {
     const r = this.one("SELECT value FROM setting WHERE project_id = ? AND key = ?", this.projectId, key);
     return r ? (JSON.parse(r["value"] as string) as T) : undefined;

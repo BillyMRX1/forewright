@@ -6,6 +6,9 @@ import path from "node:path";
 import type { Store, Task } from "../core/store.js";
 import { worktreesDir } from "../core/paths.js";
 import { WorkspaceError } from "./errors.js";
+
+/** Start of the block detail of a task that cannot start because the repository is empty. */
+export const NO_COMMITS_MARKER = "This project has no commits yet";
 import { git, gitLine, gitTry, isGitRepo, refExists } from "./git.js";
 
 export const INTEGRATION_BRANCH = "forewright/integration";
@@ -33,7 +36,7 @@ export class WorkspaceManager {
     if (refExists(this.root, `refs/heads/${INTEGRATION_BRANCH}`)) return this.integrationTip();
     const head = gitTry(this.root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
     if (head.code !== 0) {
-      throw new WorkspaceError("This git repository has no commits yet. Make an initial commit so Forewright can branch from it.", { root: this.root });
+      throw new WorkspaceError(`${NO_COMMITS_MARKER}, so work cannot start. Create the initial commit in Settings or run setup again.`, { root: this.root });
     }
     const base = head.stdout.trim();
     git(this.root, ["branch", INTEGRATION_BRANCH, base]);

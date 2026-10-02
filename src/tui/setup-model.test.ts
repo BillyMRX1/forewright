@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { EngineId } from "../core/types.js";
 import type { ProviderStatus } from "../runtime/protocol.js";
 import { baseData, FakeClient } from "./fake-client.js";
-import { canUseBackups, choicesFromSettings, ctoCandidates, modelChoices, normalizeChoices, recommendedChoices, settingWrites, toolRows, withBackups } from "./setup-model.js";
+import { choicesFromSettings, ctoBackupOptions, ctoCandidates, modelChoices, normalizeChoices, recommendedChoices, settingWrites, toggleBackup, toolRows, workerBackupOptions } from "./setup-model.js";
 
 type Login = boolean | "unknown" | "missing";
 function status(engine: EngineId, login: Login, opts: { mcp?: boolean; models?: string[]; method?: string | null } = {}): ProviderStatus {
@@ -102,19 +102,29 @@ describe("recommendations", () => {
     assert.equal(n.cto, "codex");
     assert.equal(n.ctoModel, null);
     assert.deepEqual(n.workers, ["codex", "opencode"]);
-    assert.deepEqual(n.fallbackWorkers, ["codex"]);
+    assert.deepEqual(n.fallbackWorkers, [], "the engine that does most of the work is not its own backup");
     assert.deepEqual(n.fallbackCto, [], "the CTO engine is never its own backup");
+    assert.equal(n.backups, false, "nothing ticked means wait for the reset");
   });
 
-  it("backups prefill the other ticked tools in order; with a single tool they are not available", () => {
+  it("backups are tick lists of the other ticked tools: nothing is ticked by default, ticking appends, unticking removes", () => {
     const r = rows();
-    const c = withBackups(r, recommendedChoices(r), true);
-    assert.equal(c.backups, true);
-    assert.deepEqual(c.fallbackWorkers, ["codex", "opencode"]);
-    assert.deepEqual(c.fallbackCto, ["codex", "opencode"]);
+    const c = recommendedChoices(r);
+    assert.equal(c.backups, false);
+    assert.deepEqual([c.fallbackWorkers, c.fallbackCto], [[], []]);
+    assert.deepEqual(workerBackupOptions(c), ["codex", "opencode"]);
+    assert.deepEqual(ctoBackupOptions(r, c), ["codex", "opencode"]);
+    let list = toggleBackup([], "opencode");
+    list = toggleBackup(list, "codex");
+    assert.deepEqual(list, ["opencode", "codex"], "ticking adds at the end of the order");
+    const n = normalizeChoices(r, { ...c, fallbackWorkers: list });
+    assert.deepEqual(n.fallbackWorkers, ["opencode", "codex"], "the order of ticking is kept");
+    assert.equal(n.backups, true);
+    assert.deepEqual(toggleBackup(list, "opencode"), ["codex"], "unticking removes it and the rest close up");
     const single = toolRows([status("claude", true, { models: ["opus"] })]);
-    assert.equal(canUseBackups(single, recommendedChoices(single)), false);
-    assert.equal(withBackups(single, recommendedChoices(single), true).backups, false);
+    const sc = recommendedChoices(single);
+    assert.deepEqual(workerBackupOptions(sc), []);
+    assert.deepEqual(ctoBackupOptions(single, sc), []);
   });
 
   it("settings of a project that ran setup before are the starting point; an untouched project shows the recommendation", () => {
@@ -147,7 +157,7 @@ describe("what the choices write", () => {
       { key: "authority.mergeToUserBranch", value: "ask" },
       { key: "setup.completedAt", value: "2026-10-01T00:00:00.000Z" },
     ]);
-    const withB = settingWrites(withBackups(r, c, true), "t");
+    const withB = settingWrites(normalizeChoices(r, { ...c, fallbackWorkers: ["codex"], fallbackCto: ["codex"] }), "t");
     assert.deepEqual(withB.find((x) => x.key === "fallback.workers")!.value, [{ engine: "codex" }]);
     assert.deepEqual(withB.find((x) => x.key === "fallback.cto")!.value, [{ engine: "codex" }]);
   });

@@ -6,6 +6,7 @@ export type ToastKind = "needs_you" | "error" | "finished" | "info";
 export type ToastTarget =
   | { kind: "decision"; decisionId: string }
   | { kind: "task"; taskId: string }
+  | { kind: "settings" }
   | { kind: "cto" };
 
 export interface Toast {

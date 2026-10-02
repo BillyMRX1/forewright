@@ -238,7 +238,7 @@ export const DEFAULT_LIMITS: Limits = {
   runTimeoutMs: 30 * 60 * 1000,
   maxRetriesPerTask: 2,
   maxRepairLoops: 2,
-  maxCtoWakeupsPerHour: 20,
+  maxCtoWakeupsPerHour: 60,
   maxMessagesPerThreadPerHour: 30,
 };
 

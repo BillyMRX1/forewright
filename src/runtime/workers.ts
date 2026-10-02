@@ -271,7 +271,7 @@ async function finishWork(rt: ProjectRuntime, a: ActiveRun): Promise<void> {
     return;
   }
   if (rt.workspace.commitsAhead(wt) === 0) {
-    sendBackForRepair(rt, taskId, `empty:${a.run.id}`, "Your run finished but no changes were committed. Make the change, commit it, then submit.", "no changes were committed");
+    sendBackForRepair(rt, taskId, `empty:${a.run.id}`, "Your run finished but no changes were committed. Make the change, commit it, then submit.", "the worker made no code changes. If this task needs no code, cancel it; reviews happen automatically");
     return;
   }
 

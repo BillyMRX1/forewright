@@ -9,8 +9,8 @@ import type { AgentAttention, NeedItem } from "./attention.js";
 import type { ActionId } from "./commands.js";
 import { VIEW } from "./format.js";
 
-/** Where the keyboard is: the view itself, or a message box in it. */
-export type Zone = "main" | "input";
+/** Where the keyboard is: the sidebar list, the view itself, or a message box in it. */
+export type Zone = "sidebar" | "main" | "input";
 
 /** A place a message can go: the CTO, the project channel, a task thread or one agent. */
 export interface ChannelInfo {
@@ -25,7 +25,7 @@ export function channelKey(c: Pick<ChannelInfo, "channel" | "taskId" | "agentId"
   return `${c.channel}:${c.taskId ?? ""}:${c.agentId ?? ""}`;
 }
 
-/** What a view can ask the shell to leave to it. "tab" and "digits" keep tab/shift+tab and 1-4 from switching tabs; "level" means the view has something open that q and esc close first. */
+/** What a view can ask the shell to leave to it. "tab" and "digits" keep tab and the digits 1-9 from moving between sidebar entries; "level" means the view has something open that q and esc close first. */
 export type ClaimKind = "tab" | "digits" | "level";
 
 export interface Selection {
@@ -39,7 +39,7 @@ export interface JumpTarget {
   decisionId?: string;
   taskId?: string;
   agentId?: string;
-  /** Opens the CTO view addressed to this recipient (see channelKey). */
+  /** Opens the Team chat addressed to this recipient (see channelKey): the project channel or a task thread. */
   channelKey?: string;
   /** Opens a task's detail on this sub-tab (0 Overview, 1 Run log, 2 Checks, 3 Diff). */
   taskTab?: number;
@@ -68,7 +68,7 @@ export interface AppCtx {
   narrow: boolean;
   focus: Zone;
   setFocus(zone: Zone): void;
-  /** Esc at the top of a view: closes Settings, otherwise dismisses the error line or the notice. */
+  /** Esc at the top of a view: dismisses the error line or the notice first, otherwise returns to the sidebar. */
   back(): void;
   /** Takes tab/shift+tab, the digits or the "something is open" level away from the shell until released. */
   claim(kind: ClaimKind): () => void;
@@ -90,6 +90,12 @@ export interface AppCtx {
   claimInput(): () => void;
   setSelection(sel: Partial<Selection>): void;
   goto(viewIndex: number, focus?: Zone): void;
+  /** Jumps to the nth sidebar entry (1 based, the number shown in the sidebar). */
+  selectNumber(n: number): void;
+  /** The agent shown when the agent view is open. */
+  agentId: string | null;
+  /** ISO time until which the CTO is paused by the wakeup limit, or null. */
+  ctoLimitUntil: string | null;
   /** Agents in attention order (needs you first), retired ones hidden. */
   attention: AgentAttention[];
   /** Things waiting for Billy, in the order ctrl+n visits them. */

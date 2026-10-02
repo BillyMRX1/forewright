@@ -5,6 +5,7 @@ import { Chip, PaneHeader, ScrollLines, SafeText, type DLine } from "./component
 import { useCtx, useLoad } from "./context.js";
 import { diffLines, oneLine, wrapText } from "./format.js";
 import { helpLines } from "./keys.js";
+import { markdownLines } from "./markdown.js";
 import { borderStyle, palette, sym } from "./theme.js";
 import type { RequirementDoc } from "../core/store-types.js";
 
@@ -44,7 +45,7 @@ export function prdLines(doc: RequirementDoc, approved: RequirementDoc | null, w
   if (approved && approved.revision !== doc.revision) {
     lines.push({ text: `Changes against approved revision ${approved.revision}`, bold: true });
     for (const d of diffLines(approved.body, doc.body)) lines.push({ text: `${d.kind === "add" ? "+ " : d.kind === "del" ? "- " : "  "}${d.text}`, ...(d.kind === "add" ? { color: palette.done } : d.kind === "del" ? { color: palette.error } : {}) });
-  } else for (const l of wrapText(doc.body, width)) lines.push({ text: l });
+  } else lines.push(...markdownLines(doc.body, width));
   return lines;
 }
 

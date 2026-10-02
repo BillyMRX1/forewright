@@ -1,4 +1,4 @@
-// The CTO screen: the conversation with the CTO, with the project channel, an agent or a task thread as other recipients (tab changes it).
+// The conversation screens: the CTO (with the PRD card), and the Team chat (the project channel and task threads).
 
 import { useRef, useState } from "react";
 import { Box, Text, type Key } from "ink";
@@ -9,11 +9,20 @@ import { VIEW, clip, clockTime, oneLine, wrapText } from "../format.js";
 import { markdownLines, plainInline } from "../markdown.js";
 import type { Agent, Message, RequirementDoc } from "../../core/store-types.js";
 import { palette, sym } from "../theme.js";
-import { engineLabel } from "../toasts.js";
+import { engineLabel, resetTimePhrase } from "../toasts.js";
 
 const EXAMPLES = ["Build a small command line tip calculator", "Add tests and a README to this project", "Review this codebase and propose a plan to improve it"];
 
 const CTO_CHANNEL: ChannelInfo = { channel: "cto", taskId: null, agentId: null, label: "CTO", lastAt: null };
+const PROJECT_CHANNEL: ChannelInfo = { channel: "project", taskId: null, agentId: null, label: "Everyone", lastAt: null };
+
+/**
+ * Keys that act on the PRD while the message box has focus. Not ctrl+a or ctrl+e (line start and end in the box),
+ * not ctrl+k, ctrl+u or ctrl+w (editing), and not ctrl+r (many terminals and shells use it for history search).
+ * ctrl+y and ctrl+o reach the app as plain control bytes (0x19 and 0x0f) in every terminal we know of.
+ */
+export const PRD_APPROVE_KEY = "ctrl+y";
+export const PRD_READ_KEY = "ctrl+o";
 
 export function senderLabel(m: Message, agents: Agent[]): { label: string; you: boolean; system: boolean } {
   if (m.senderKind === "human") return { label: "you", you: true, system: false };
@@ -60,23 +69,34 @@ export function prdCard(doc: RequirementDoc, width: number): DLine[] {
   for (const r of doc.requirements.slice(0, 3)) body.push({ text: clip(`${r.key} ${plainInline(oneLine(r.text))}`, inner) });
   if (doc.requirements.length > 3) body.push({ text: `and ${doc.requirements.length - 3} more requirement${doc.requirements.length - 3 === 1 ? "" : "s"}`, dim: true });
   if (doc.status === "proposed") {
-    body.push({ text: "", segs: [{ text: "ctrl+a", bold: true }, { text: " approve   " }, { text: "ctrl+r", bold: true }, { text: " read the full PRD   " }, { text: "or reply to ask for changes", dim: true }] });
-  } else body.push({ text: `${doc.status} ${sym().dot} ctrl+r to read`, dim: true });
+    body.push({ text: "", segs: [{ text: PRD_APPROVE_KEY, bold: true }, { text: " approve   " }, { text: PRD_READ_KEY, bold: true }, { text: " read the full PRD" }] });
+    body.push({ text: "or reply to ask for changes (a and r work in the conversation)", dim: true });
+  } else body.push({ text: `${doc.status} ${sym().dot} ${PRD_READ_KEY} to read`, dim: true });
   return boxLines([{ text: `PRD r${doc.revision}`, bold: true }, { text: ` ${sym().dot} ${doc.status}`, color }], body, w, color);
 }
 
+type Mode = "cto" | "chat";
+
 export function CtoView() {
+  return <ConversationView mode="cto" />;
+}
+
+export function ChatView() {
+  return <ConversationView mode="chat" />;
+}
+
+function ConversationView({ mode }: { mode: Mode }) {
   const ctx = useCtx();
   const { api, projectId } = ctx;
   const w = ctx.bodyWidth;
   const h = ctx.bodyHeight;
   const sending = useRef(false);
   const [exIdx, setExIdx] = useState(0);
-  const [recipient, setRecipient] = useState("cto::");
-  const channels: ChannelInfo[] = [CTO_CHANNEL, ...ctx.channels.filter((c) => c.channel !== "cto")];
-  const cur = channels.find((c) => channelKey(c) === recipient) ?? CTO_CHANNEL;
+  const [recipient, setRecipient] = useState("project::");
+  const toCto = mode === "cto";
+  const threads: ChannelInfo[] = [PROJECT_CHANNEL, ...ctx.channels.filter((c) => c.channel === "task")];
+  const cur = toCto ? CTO_CHANNEL : (threads.find((c) => channelKey(c) === recipient) ?? PROJECT_CHANNEL);
   const key = channelKey(cur);
-  const toCto = cur.channel === "cto";
   const draft = useDraft(toCto ? "cto" : "chat", toCto ? "compose" : key);
   const msgs = useLoad(
     () => api.call("state.messages", { projectId, channel: cur.channel, ...(cur.taskId ? { taskId: cur.taskId } : {}), ...(cur.agentId ? { agentId: cur.agentId } : {}), limit: 200 }),
@@ -84,16 +104,17 @@ export function CtoView() {
   );
   const team = useLoad(() => api.call("state.team", { projectId }));
   const prd = useLoad(() => api.call("state.prd", { projectId }));
-  const doc = prd.data?.doc ?? null;
+  const doc = toCto ? (prd.data?.doc ?? null) : null;
   const agents = team.data?.agents ?? [];
   const cto = agents.find((a) => a.role === "cto" && !a.retiredAt) ?? null;
-  const thinking = ctx.runtime?.ctoBusy === true;
+  const thinking = toCto && ctx.runtime?.ctoBusy === true;
   const spinner = useSpinner(thinking);
   const typing = ctx.focus === "input";
-  const empty = toCto && msgs.loaded && (msgs.data?.messages.length ?? 0) === 0;
-  useHintScope(typing ? null : "cto");
-  useJump(VIEW.cto, (j) => {
-    if (j.channelKey) setRecipient(j.channelKey);
+  const empty = msgs.loaded && (msgs.data?.messages.length ?? 0) === 0;
+  const scope = toCto ? "cto" : "chat";
+  useHintScope(typing ? null : scope);
+  useJump(mode === "cto" ? VIEW.cto : VIEW.chat, (j) => {
+    if (j.channelKey && !toCto) setRecipient(j.channelKey);
   });
 
   const compact = true;
@@ -102,8 +123,9 @@ export function CtoView() {
   const convH = Math.max(1, h - 2 - compH);
 
   const cycleRecipient = (dir: 1 | -1) => {
-    const i = Math.max(0, channels.findIndex((c) => channelKey(c) === key));
-    setRecipient(channelKey(channels[(i + dir + channels.length) % channels.length]!));
+    if (threads.length < 2) return ctx.notify("There are no task threads yet. Messages here go to everyone.");
+    const i = Math.max(0, threads.findIndex((c) => channelKey(c) === key));
+    setRecipient(channelKey(threads[(i + dir + threads.length) % threads.length]!));
   };
 
   const send = async (body: string) => {
@@ -116,10 +138,10 @@ export function CtoView() {
         const m = /^@(\S+)/.exec(body);
         if (m) {
           const agent = agents.find((a) => !a.retiredAt && a.name.toLowerCase() === m[1]!.toLowerCase());
-          if (!agent) throw Object.assign(new Error(`No agent is named ${m[1]}.`), { plain: `No agent is named ${m[1]}. Check Home for names.`, detail: null });
+          if (!agent) throw Object.assign(new Error(`No agent is named ${m[1]}.`), { plain: `No agent is named ${m[1]}. The sidebar lists the names.`, detail: null });
           toAgentIds = [agent.id];
-        } else if (cur.channel === "direct" && cur.agentId) toAgentIds = [cur.agentId];
-        await api.call("chat.send", { projectId, channel: cur.channel as "project" | "task" | "direct", ...(cur.taskId ? { taskId: cur.taskId } : {}), ...(toAgentIds ? { toAgentIds } : {}), body });
+        }
+        await api.call("chat.send", { projectId, channel: cur.channel as "project" | "task", ...(cur.taskId ? { taskId: cur.taskId } : {}), ...(toAgentIds ? { toAgentIds } : {}), body });
       }
       draft.clear();
     } catch (err) {
@@ -131,7 +153,7 @@ export function CtoView() {
 
   useKeys((input, key) => {
     if (key.escape) return ctx.back();
-    if (empty) {
+    if (empty && toCto) {
       if (key.upArrow) return setExIdx((i) => Math.max(0, i - 1));
       if (key.downArrow) return setExIdx((i) => Math.min(EXAMPLES.length - 1, i + 1));
       if (key.return) {
@@ -140,31 +162,32 @@ export function CtoView() {
       }
     }
     if (key.return || input === "i") return ctx.setFocus("input");
-    if (input === "a") return ctx.run("approve");
-    if (input === "r" || input === "d") return ctx.run("prd");
-    if (input === "m") return cycleRecipient(1);
+    if (toCto && input === "a") return ctx.run("approve");
+    if (toCto && (input === "r" || input === "d")) return ctx.run("prd");
+    if (!toCto && input === "m") return cycleRecipient(1);
   });
 
-  // Keys the message box passes on: tab changes recipient, ctrl+a and ctrl+r act on the PRD, and with an empty box in an empty conversation the arrows and Enter pick an example brief.
+  // Keys the message box passes on: tab goes back to the sidebar, ctrl+y and ctrl+o act on the PRD, and with an empty
+  // box in an empty CTO conversation the arrows and Enter pick an example brief.
   const inputKeys = (input: string, k: Key): boolean => {
     if (k.tab && !k.shift) {
-      cycleRecipient(1);
+      ctx.setFocus("sidebar");
       return true;
     }
-    if (k.ctrl && input === "a") {
+    if (toCto && k.ctrl && input === "y") {
       ctx.run("approve");
       return true;
     }
-    if (k.ctrl && input === "r") {
+    if (toCto && k.ctrl && input === "o") {
       ctx.run("prd");
       return true;
     }
-    // While the box is empty, 1 to 4 switch tabs; once it has any text they type normally.
-    if (draft.value.length === 0 && !k.ctrl && !k.meta && /^[1-4]$/.test(input)) {
-      ctx.goto(Number(input) - 1);
+    // While the box is empty, 1 to 9 jump to a sidebar entry; once it has any text they type normally.
+    if (draft.value.length === 0 && !k.ctrl && !k.meta && /^[1-9]$/.test(input)) {
+      ctx.selectNumber(Number(input));
       return true;
     }
-    if (!empty || draft.value.length > 0) return false;
+    if (!empty || !toCto || draft.value.length > 0) return false;
     if (k.downArrow) {
       setExIdx((i) => Math.min(EXAMPLES.length - 1, i + 1));
       return true;
@@ -181,7 +204,7 @@ export function CtoView() {
   };
 
   const conv: DLine[] = [];
-  if (empty) {
+  if (empty && toCto) {
     conv.push({ text: "" });
     for (const l of wrapText("Tell the CTO what you want to build. It will propose a PRD for you to approve.", Math.max(10, w - 2))) conv.push({ text: l, bold: true });
     conv.push({ text: "" }, { text: "Try one of these", dim: true });
@@ -191,6 +214,9 @@ export function CtoView() {
       conv.push(on ? (ctx.focus === "main" ? { text, bar: true } : { text, bold: true }) : { text });
     });
     conv.push({ text: "" }, { text: "Tip: describe the result, not the steps. Paste a path or a link if it helps.", dim: true });
+  } else if (empty) {
+    conv.push({ text: "" });
+    for (const l of wrapText(cur.channel === "task" ? `No messages in ${oneLine(cur.label)} yet.` : "Nothing here yet. Messages go to everyone on the team. Start with @name to send one to a single agent.", Math.max(10, w - 2))) conv.push({ text: l, dim: true });
   } else {
     // The PRD card goes under the last CTO message at or before the revision's creation time.
     let cardAt = -1;
@@ -202,27 +228,24 @@ export function CtoView() {
       if (cardAt < 0) cardAt = list.length - 1;
     }
     conv.push(...messageLines(list, agents, w, (_m, i) => (doc && toCto && i === cardAt ? prdCard(doc, w) : null)));
-    if (conv.length === 0) conv.push({ text: toCto ? "" : `No messages with ${oneLine(cur.label)} yet.`, dim: true });
   }
 
   const proposed = doc?.status === "proposed";
   const use = cto?.engineUse;
-  const engineText = cto ? `${engineLabel(cto.engine)}${cto.model ? ` ${cto.model}` : ""}${use?.viaFallback ? ` (using ${engineLabel(use.engine)})` : use?.waitUntil ? " (waiting for its limit)" : ""}` : "";
-  const next = channels.length > 1 ? channels[(Math.max(0, channels.findIndex((c) => channelKey(c) === key)) + 1) % channels.length]! : null;
-  const pill = thinking ? <Chip text={`${spinner} thinking${sym().ellipsis}`} color={palette.muted} /> : proposed && doc ? <Chip text={`${sym().bullet} PRD r${doc.revision} waiting for you`} color={palette.attention} bold /> : undefined;
-  const placeholder = toCto ? (proposed ? "Reply, or press ctrl+a to approve..." : `Message the CTO${sym().ellipsis}`) : `Message ${oneLine(cur.label)}${sym().ellipsis}`;
+  const engineText = toCto && cto ? `${engineLabel(cto.engine)}${cto.model ? ` ${cto.model}` : ""}${use?.viaFallback ? ` (using ${engineLabel(use.engine)})` : use?.waitUntil ? " (waiting for its limit)" : ""}` : "";
+  const limitUntil = toCto && ctx.ctoLimitUntil !== null && Date.parse(ctx.ctoLimitUntil) > Date.now() ? ctx.ctoLimitUntil : null;
+  const limitText = limitUntil ? `${sym().bullet} paused until ${resetTimePhrase(limitUntil)}, raise in Settings` : "";
+  const pill = limitUntil ? <Chip text={limitText} color={palette.attention} bold /> : thinking ? <Chip text={`${spinner} thinking${sym().ellipsis}`} color={palette.muted} /> : proposed && doc ? <Chip text={`${sym().bullet} PRD r${doc.revision} waiting for you`} color={palette.attention} bold /> : undefined;
+  const placeholder = toCto ? (proposed ? `Reply, or press ${PRD_APPROVE_KEY} to approve${sym().ellipsis}` : `Message the CTO${sym().ellipsis}`) : cur.channel === "task" ? `Message ${oneLine(cur.label)}${sym().ellipsis}` : `Message everyone, @name for one agent${sym().ellipsis}`;
 
-  // The header line, trimmed to fit beside the pill: the "tab: ..." hint goes first, then the engine, then the label is cut.
-  const pillW = thinking ? 12 : proposed && doc ? `● PRD r${doc.revision} waiting for you`.length : 0;
+  // The header line, trimmed to fit beside the pill: the engine goes first, then the label is cut.
+  const pillW = limitUntil ? limitText.length : thinking ? 12 : proposed && doc ? `● PRD r${doc.revision} waiting for you`.length : 0;
   const room = Math.max(8, w - (pillW > 0 ? pillW + 2 : 0));
-  const title = "CTO";
+  const title = toCto ? "CTO" : "Team chat";
   let engineHeader = engineText ? `  ${engineText}` : "";
-  let nextHint = next ? `  (tab: ${oneLine(next.label)})` : "";
-  const labelText = oneLine(cur.label);
-  const fits = () => [...title].length + [...engineHeader].length + [...`   to: `].length + [...labelText].length + [...nextHint].length <= room;
-  if (!fits()) nextHint = "";
-  if (!fits()) engineHeader = "";
-  const header = { title, engine: engineHeader, to: "   to: ", label: clip(labelText, Math.max(1, room - [...title].length - 7 - [...engineHeader].length)), next: nextHint };
+  const toText = toCto ? "" : `   to: ${oneLine(cur.label)}${threads.length > 1 ? "  (m: threads)" : ""}`;
+  if ([...title].length + [...engineHeader].length + [...toText].length > room) engineHeader = "";
+  const header = { title, engine: engineHeader, to: clip(toText, Math.max(0, room - [...title].length - [...engineHeader].length)) };
 
   return (
     <Box flexDirection="column" height={h} width={w}>
@@ -230,9 +253,7 @@ export function CtoView() {
         <Text wrap="truncate-end">
           <Text bold>{header.title}</Text>
           <Text dimColor>{header.engine}</Text>
-          <Text>{header.to}</Text>
-          <Text bold>{header.label}</Text>
-          <Text dimColor>{header.next}</Text>
+          <Text dimColor>{header.to}</Text>
         </Text>
         {pill ? (
           <Box flexShrink={0} marginLeft={1}>
@@ -240,9 +261,9 @@ export function CtoView() {
           </Box>
         ) : null}
       </Box>
-      <ScrollLines lines={conv} height={convH} width={w} anchor="bottom" arrows={!empty} zones={["main", "input"]} resetKey={key} />
+      <ScrollLines lines={conv} height={convH} width={w} anchor="bottom" arrows={!(empty && toCto)} zones={["main", "input"]} resetKey={key} />
       <Rule width={w} />
-      <ComposeBox value={draft.value} onChange={draft.setValue} onClear={draft.clear} onSend={(t) => void send(t)} scope={draft.value.length === 0 ? "cto.input.empty" : "cto.input"} placeholder={placeholder} width={w} maxRows={maxRows} compact={compact} paneHeight={h} onUp={() => ctx.setFocus("main")} onKey={inputKeys} />
+      <ComposeBox value={draft.value} onChange={draft.setValue} onClear={draft.clear} onSend={(t) => void send(t)} scope={draft.value.length === 0 ? `${scope}.input.empty` : `${scope}.input`} placeholder={placeholder} width={w} maxRows={maxRows} compact={compact} paneHeight={h} onUp={() => ctx.setFocus("main")} onKey={inputKeys} />
     </Box>
   );
 }

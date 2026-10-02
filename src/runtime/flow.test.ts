@@ -382,3 +382,19 @@ test("a reviewer that never submits a verdict is set aside and a newly hired rev
     await h.close();
   }
 });
+
+test("a work task that makes no code changes blocks with a plain explanation (cancel it, reviews are automatic)", async () => {
+  const adapter = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", finalText: "Reviewed it, looks fine." })] });
+  const h = await startHarness({ adapter });
+  try {
+    seedPrd(h);
+    addTask(h, { title: "Review the existing code", assignee: hire(h, "Wren") });
+    poke(h);
+    await waitFor(() => taskOf(h, "T-1").blockReason === "failed_verification", "the repair limit");
+    const detail = taskOf(h, "T-1").blockDetail ?? "";
+    assert.match(detail, /The worker made no code changes|the worker made no code changes/);
+    assert.match(detail, /cancel it; reviews happen automatically/);
+  } finally {
+    await h.close();
+  }
+});

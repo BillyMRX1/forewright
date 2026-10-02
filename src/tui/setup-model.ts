@@ -98,7 +98,7 @@ export interface SetupChoices {
   ctoModel: string | null;
   /** Engines the CTO may hire on. */
   workers: EngineId[];
-  /** True = "Use backups in this order"; false = "Wait for reset". */
+  /** True when any backup is ticked; false (nothing ticked) means the work waits for the reset. */
   backups: boolean;
   fallbackWorkers: EngineId[];
   fallbackCto: EngineId[];
@@ -138,15 +138,22 @@ export function recommendedModel(row: ToolRow): string | null {
   return modelChoices(row)[0]!.value;
 }
 
-/** The backup order offered by default: ticked tools in recommended order, minus the engine that does most of the work. */
-export function defaultBackupLists(rows: ToolRow[], c: Pick<SetupChoices, "ticked" | "cto" | "workers">): { workers: EngineId[]; cto: EngineId[] } {
-  const ticked = inOrder(c.ticked);
+/** Engines offered as worker backups: the ticked tools except the one that does most of the work. */
+export function workerBackupOptions(c: Pick<SetupChoices, "ticked" | "workers">): EngineId[] {
   const primary = inOrder(c.workers)[0] ?? null;
-  const workers = ticked.filter((e) => e !== primary);
-  const cto = ctoCandidates(rows, ticked)
+  return inOrder(c.ticked).filter((e) => e !== primary);
+}
+
+/** Engines offered as CTO backups: ticked tools that can lead, except the CTO itself. */
+export function ctoBackupOptions(rows: ToolRow[], c: Pick<SetupChoices, "ticked" | "cto">): EngineId[] {
+  return ctoCandidates(rows, inOrder(c.ticked))
     .map((r) => r.engine)
     .filter((e) => e !== c.cto);
-  return { workers, cto };
+}
+
+/** Ticking adds the engine at the end of the order; unticking removes it and the others close up. */
+export function toggleBackup(list: EngineId[], engine: EngineId): EngineId[] {
+  return list.includes(engine) ? list.filter((e) => e !== engine) : [...list, engine];
 }
 
 /** Fixes any choice that no longer fits the tools (a tool signed out, a model that vanished). Always returns a consistent set. */
@@ -160,13 +167,11 @@ export function normalizeChoices(rows: ToolRow[], c: SetupChoices): SetupChoices
   let workers = inOrder(c.workers.filter((e) => ticked.includes(e)));
   if (workers.length === 0) workers = ticked;
   const capable = new Set(candidates.map((r) => r.engine));
-  const fallbackWorkers = c.fallbackWorkers.filter((e, i, all) => ticked.includes(e) && all.indexOf(e) === i);
+  const workerPool = new Set(workerBackupOptions({ ticked, workers }));
+  // The order is the order of ticking, so it is kept as it is; only entries that no longer fit are dropped.
+  const fallbackWorkers = c.fallbackWorkers.filter((e, i, all) => workerPool.has(e) && all.indexOf(e) === i);
   const fallbackCto = c.fallbackCto.filter((e, i, all) => capable.has(e) && e !== cto?.engine && all.indexOf(e) === i);
-  const base: SetupChoices = { ...c, ticked, cto: cto ? cto.engine : null, ctoModel, workers, fallbackWorkers, fallbackCto };
-  if (!base.backups) return { ...base, fallbackWorkers: [], fallbackCto: [] };
-  const defaults = defaultBackupLists(rows, base);
-  if (defaults.workers.length === 0 && defaults.cto.length === 0) return { ...base, backups: false, fallbackWorkers: [], fallbackCto: [] };
-  return base;
+  return { ...c, ticked, cto: cto ? cto.engine : null, ctoModel, workers, fallbackWorkers, fallbackCto, backups: fallbackWorkers.length > 0 || fallbackCto.length > 0 };
 }
 
 /** What "Use recommended defaults" means, for these tools. */
@@ -205,18 +210,6 @@ export function choicesFromSettings(rows: ToolRow[], current: { settings: Settin
     fallbackCto: s.fallback.cto.map((e) => e.engine),
     merge: s.authority.mergeToUserBranch === "auto" ? "auto" : "ask",
   });
-}
-
-/** Turning "wait" into "use backups" prefills both lists. */
-export function withBackups(rows: ToolRow[], c: SetupChoices, on: boolean): SetupChoices {
-  if (!on) return { ...c, backups: false, fallbackWorkers: [], fallbackCto: [] };
-  const d = defaultBackupLists(rows, c);
-  return normalizeChoices(rows, { ...c, backups: true, fallbackWorkers: d.workers, fallbackCto: d.cto });
-}
-
-export function canUseBackups(rows: ToolRow[], c: SetupChoices): boolean {
-  const d = defaultBackupLists(rows, c);
-  return d.workers.length > 0 || d.cto.length > 0;
 }
 
 export interface SettingWrite {

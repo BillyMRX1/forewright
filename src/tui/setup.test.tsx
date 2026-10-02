@@ -59,11 +59,13 @@ interface WizardOpts {
   projectId?: string | null;
   create?: boolean;
   isGit?: boolean;
+  hasCommits?: boolean;
 }
 const events = { finished: 0, cancelled: 0 };
 
 async function wizard(opts: WizardOpts = {}) {
   const api = opts.api ?? fakeWith(mixedTools());
+  if (opts.hasCommits !== undefined) api.hasCommits = opts.hasCommits;
   const cols = opts.cols ?? 100;
   const rows = opts.rows ?? 30;
   events.finished = 0;
@@ -75,6 +77,7 @@ async function wizard(opts: WizardOpts = {}) {
       projectId={opts.projectId === undefined ? (opts.create ? null : "p1") : opts.projectId}
       root="/Users/billy/tip-calc"
       isGit={opts.isGit ?? true}
+      {...(opts.hasCommits !== undefined ? { hasCommits: opts.hasCommits } : {})}
       width={cols}
       height={rows}
       standalone
@@ -93,6 +96,8 @@ async function wizard(opts: WizardOpts = {}) {
 const setCalls = (api: FakeClient) => api.callsTo("settings.set").map((c) => c.params as { projectId: string; key: string; value: unknown });
 const written = (api: FakeClient) => Object.fromEntries(setCalls(api).map((c) => [c.key, c.value]));
 const space = (h: Harness) => h.send(" ");
+/** Lets the first look at the tools and the settings finish. */
+const h2 = (h: Harness) => h.settle(250);
 const rowsOf = (h: Harness) => h.frame().split("\n");
 const maxWidth = (h: Harness) => Math.max(...rowsOf(h).map((l) => [...l].length));
 
@@ -115,6 +120,55 @@ describe("setup wizard: pages", () => {
   it("page 1 says what a non-git folder means", async () => {
     const { h } = await wizard({ create: true, isGit: false });
     assert.match(h.frame(), /Git\s+no\. Agents can plan here; code tasks wait until you approve running git init\./);
+  });
+
+  it("page 1 offers an empty initial commit when the repo has none, and calls projects.initialCommit", async () => {
+    const { h, api } = await wizard({ hasCommits: false });
+    assert.match(h.frame(), /Create an empty initial commit \(needed before agents can work\)/);
+    await down(h);
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("projects.initialCommit").map((c) => c.params), [{ projectId: "p1" }]);
+    assert.match(h.frame(), /Created the initial commit\./);
+    assert.doesNotMatch(h.frame(), /Create an empty initial commit/, "offered only while there are no commits");
+    assert.match(h.frame(), /setup 1\/6/, "still on page 1");
+  });
+
+  it("the initial commit is offered for a new folder too, creating the workspace first", async () => {
+    const { h, api, createdIds } = await wizard({ create: true, hasCommits: false });
+    await down(h);
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(createdIds, ["p1"]);
+    assert.equal(api.callsTo("projects.initialCommit").length, 1);
+  });
+
+  it("the offer is read from state.settings for an existing project, and left out when there are commits or no git", async () => {
+    const empty = fakeWith(mixedTools());
+    empty.hasCommits = false;
+    const a = await wizard({ api: empty });
+    await h2(a.h);
+    assert.match(a.h.frame(), /Create an empty initial commit/);
+    const fine = await wizard({ api: fakeWith(mixedTools()) });
+    await h2(fine.h);
+    assert.doesNotMatch(fine.h.frame(), /initial commit/);
+    const noGit = await wizard({ isGit: false, hasCommits: false });
+    assert.doesNotMatch(noGit.h.frame(), /initial commit/);
+  });
+
+  it("a failing initial commit shows the plain reason and stays on the page", async () => {
+    const api = fakeWith(mixedTools());
+    const original = api.call.bind(api);
+    api.call = (async (method: string, params: unknown) => {
+      if (method === "projects.initialCommit") throw Object.assign(new Error("x"), { plain: "Git needs your name: run git config user.name." });
+      return original(method as never, params as never);
+    }) as typeof api.call;
+    const { h } = await wizard({ api, hasCommits: false });
+    await down(h);
+    await enter(h);
+    await h.settle(150);
+    assert.match(h.frame(), /Could not create the initial commit: Git needs your name/);
+    assert.match(h.frame(), /Create an empty initial commit/);
   });
 
   it("page 2 lists every tool with version, sign-in in plain words, models and a fix hint, in the recommended order", async () => {
@@ -192,8 +246,12 @@ describe("setup wizard: pages", () => {
     assert.match(h.frame(), /use two different tools/);
     await enter(h);
     assert.match(h.frame(), /setup 5\/6\s+If a tool hits its usage limit/);
-    assert.match(h.frame(), /\(x\) Wait for reset\s+\(default, nothing changes\)/);
-    assert.match(h.frame(), /\( \) Use backups in this order/);
+    assert.match(h.frame(), /Workers backups/);
+    assert.match(h.frame(), /\[ \] Codex/);
+    assert.match(h.frame(), /CTO backups/);
+    assert.match(h.frame(), /Nothing ticked: work waits for the reset\./);
+    assert.match(hints(h), /space tick\/untick/);
+    assert.doesNotMatch(h.frame(), /Wait for reset|Use backups in this order/, "no separate radio: nothing ticked is the wait");
     await enter(h);
     assert.match(h.frame(), /setup 6\/6\s+Your control/);
     assert.match(h.frame(), /\(x\) Ask me before merging into my branch\s+recommended/);
@@ -313,9 +371,16 @@ describe("setup wizard: choices write the right settings", () => {
     await down(h); // Codex
     await space(h); // untick Codex as worker
     await enter(h); // page 5
+    assert.doesNotMatch(h.frame().split("CTO backups")[0]!, /Claude/, "the main worker tool is not its own backup");
+    await space(h); // Codex as a worker backup
     await down(h);
-    await space(h); // backups
-    assert.match(h.frame(), /Workers\s*\n\s*1\. Codex/, "the main worker tool is not its own backup");
+    await space(h); // Copilot
+    assert.match(h.frame(), /\[x\] 1\. Codex/);
+    assert.match(h.frame(), /\[x\] 2\. Copilot/);
+    await down(h);
+    await space(h); // CTO backups: Claude Code
+    await down(h);
+    await space(h); // Copilot
     await enter(h);
     await down(h);
     await space(h); // merge automatically
@@ -345,9 +410,8 @@ describe("setup wizard: choices write the right settings", () => {
     await enter(h); // only one tool: straight to page 5
     assert.match(h.frame(), /setup 5\/6/);
     assert.match(h.frame(), /needs a second ticked tool/);
-    await down(h);
-    await space(h);
-    assert.match(h.frame(), /Backups need a second ticked tool\./);
+    await space(h); // nothing to tick: nothing happens
+    assert.match(h.frame(), /Nothing ticked: work waits for the reset\./);
     await enter(h);
     await enter(h);
     await enter(h);
@@ -355,24 +419,30 @@ describe("setup wizard: choices write the right settings", () => {
     assert.deepEqual(written(api)["workers.engines"], ["claude"]);
   });
 
-  it("backups: add, reorder with [ and ], J and K, and remove with x, saving the order", async () => {
+  it("backups are tick lists: ticking appends and numbers the row, unticking removes and renumbers, the cursor visits every row", async () => {
     const { h, api } = await wizard();
     await toStep(h, 5);
+    // Workers backups: Codex, Copilot. CTO backups: Codex, Copilot. Four rows, all reachable with up and down.
     await down(h);
+    await space(h); // Copilot first
+    await up(h);
+    await space(h); // then Codex
+    assert.match(h.frame(), /\[x\] 2\. Codex/);
+    assert.match(h.frame(), /\[x\] 1\. Copilot/);
+    await space(h); // untick Codex
+    assert.doesNotMatch(h.frame(), /\[x\] 2\. Codex/);
+    assert.match(h.frame(), /\[ \] Codex/);
+    await space(h); // tick again: it goes to the end
+    assert.match(h.frame(), /\[x\] 2\. Codex/);
+    await down(h);
+    await down(h); // first CTO row
     await space(h);
-    await down(h); // first Workers entry
-    assert.match(h.frame(), /1\. Codex/);
-    assert.match(h.frame(), /2\. Copilot/);
-    await h.send("]");
-    assert.ok(h.frame().indexOf("1. Copilot") >= 0 && h.frame().indexOf("2. Codex") >= 0);
-    await h.send("K");
-    assert.ok(h.frame().indexOf("1. Codex") >= 0);
-    await h.send("J");
-    await h.send("x"); // removes the entry under the cursor (Codex, now second)... cursor followed it
-    assert.doesNotMatch(h.frame().split("CTO")[0]!, /Codex/, "Codex is gone from the Workers list");
-    await h.send("a");
-    assert.match(h.frame().split("CTO")[0]!, /2\. Codex/, "a adds the next tool, keeping the main worker tool last");
-    assert.match(h.frame(), /CTO\s*\n\s*1\. Codex/);
+    assert.match(h.frame().split("CTO backups")[1]!, /\[x\] 1\. Codex/);
+    await down(h);
+    await down(h); // stays on the last row
+    await space(h);
+    assert.match(h.frame().split("CTO backups")[1]!, /\[x\] 2\. Copilot/);
+    assert.match(h.frame(), /At a limit: backups in the numbered order\./);
     await enter(h);
     await enter(h);
     await enter(h);
@@ -382,13 +452,13 @@ describe("setup wizard: choices write the right settings", () => {
     assert.deepEqual(w["fallback.cto"], [{ engine: "codex" }, { engine: "copilot" }]);
   });
 
-  it("choosing 'Wait for reset' again after backups writes empty lists", async () => {
+  it("nothing ticked is 'wait for the reset': ticking and unticking everything writes empty lists", async () => {
     const { h, api } = await wizard();
     await toStep(h, 5);
-    await down(h);
     await space(h);
-    await up(h);
+    assert.doesNotMatch(h.frame(), /Nothing ticked/);
     await space(h);
+    assert.match(h.frame(), /Nothing ticked: work waits for the reset\./);
     await enter(h);
     await enter(h);
     await enter(h);
@@ -445,8 +515,8 @@ describe("setup wizard: choices write the right settings", () => {
     assert.match(h.frame(), /\[x\] Claude Code/);
     assert.match(h.frame(), /\[ \] Codex/);
     await enter(h);
-    assert.match(h.frame(), /\(x\) Use backups in this order/);
-    assert.match(h.frame(), /1\. Codex/);
+    assert.match(h.frame(), /\[x\] 1\. Codex/, "the saved worker backup is ticked");
+    assert.match(h.frame(), /\[x\] 1\. Claude Code/, "the saved CTO backup is ticked");
     await enter(h);
     assert.match(h.frame(), /\(x\) Merge finished work automatically/);
   });
@@ -577,10 +647,12 @@ describe("setup wizard: sizes and ASCII", () => {
     await enter(h);
     show("setup 4/6 Who does the work? (100x30)", h.frame());
     await enter(h);
-    show("setup 5/6 Usage limit, wait (100x30)", h.frame());
+    show("setup 5/6 Usage limit, nothing ticked = wait (100x30)", h.frame());
     await down(h);
     await space(h);
-    show("setup 5/6 Usage limit, backups (100x30)", h.frame());
+    await up(h);
+    await space(h);
+    show("setup 5/6 Usage limit, two worker backups ticked in order (100x30)", h.frame());
     await enter(h);
     show("setup 6/6 Your control (100x30)", h.frame());
     await enter(h);
@@ -613,7 +685,7 @@ describe("setup in the app", () => {
     assert.ok(written(api)["setup.completedAt"], "saved through settings.set");
     assert.doesNotMatch(h.frame(), /setup done/);
     assert.match(h.frame(), /Tell the CTO what you want to build/, "back in the CTO view");
-    assert.match(h.frame(), /to: CTO/);
+    assert.match(lines(h)[0]!, /CTO/);
   });
 
   it("Esc on the offer records skippedAt once and the view works afterwards", async () => {

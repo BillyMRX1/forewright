@@ -14,7 +14,15 @@ import { looksLikeSessionLoss, nameOfSender } from "./workers.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const FAILURE_COOLDOWN_MS = 60 * 1000;
-const RATE_LIMIT_TITLE = "CTO wakeups are rate-limited";
+
+// Routine progress notices (work finished with checks passing, review verdicts, a task integrated
+// that is not the last one) never start a CTO turn by themselves. They stay pending and are
+// delivered in the next turn that a real trigger starts. Everything else wakes the CTO.
+const ROUTINE_NOTICE_KEY = /^(notice:.+:(work_done|review)|integrated:.+)$/;
+
+function isRoutine(m: Message): boolean {
+  return m.senderKind === "system" && m.dedupeKey !== null && ROUTINE_NOTICE_KEY.test(m.dedupeKey);
+}
 
 export class CtoDriver {
   private cooldownUntil = 0;
@@ -42,6 +50,7 @@ export class CtoDriver {
     const cto = rt.ctoAgent();
     const pending = store.pendingDeliveries(cto.id);
     if (pending.length === 0) return;
+    if (pending.every(isRoutine)) return; // routine notices wait for a real trigger
     const now = rt.clock.now().getTime();
     if (now < this.cooldownUntil) return;
     const res = resolveFor(rt, cto, "cto");
@@ -68,13 +77,12 @@ export class CtoDriver {
     const limit = store.getSettings().maxCtoWakeupsPerHour;
     const since = new Date(now - HOUR_MS).toISOString();
     if (store.countEvents("cto.turn_started", since) >= limit) {
-      if (!store.listDecisions({ status: "open" }).some((d) => d.title === RATE_LIMIT_TITLE)) {
-        store.requestDecision({
-          kind: "question",
-          title: RATE_LIMIT_TITLE,
-          question: `The CTO already ran ${limit} times in the last hour, which is the limit. New messages wait until the hour rolls over. You can raise the limit in Settings.`,
-          options: [{ key: "ok", label: "OK, keep waiting", consequence: "Nothing changes; the CTO resumes when the hour rolls over." }],
-        });
+      // No Inbox decision: a notice event, once per window. Messages stay pending.
+      const windowStart = store.firstEventAt("cto.turn_started", since) ?? since;
+      if (store.countEvents("cto.rate_limited", windowStart) === 0) {
+        const until = new Date(Date.parse(windowStart) + HOUR_MS).toISOString();
+        store.recordEvent("cto.rate_limited", "agent", cto.id, { kind: "system" }, { until, limit });
+        rt.publish();
       }
       return;
     }

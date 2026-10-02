@@ -14,19 +14,21 @@ import { abbreviatePath, clip, fit, windowed, wrapText } from "./format.js";
 import {
   MERGE_OPTIONS,
   NOTHING_USABLE,
-  canUseBackups,
   choicesFromSettings,
+  ctoBackupOptions,
   ctoCandidates,
   engineLabel,
   modelChoices,
   normalizeChoices,
   recommendedChoices,
   settingWrites,
+  toggleBackup,
   toolRows,
-  withBackups,
+  workerBackupOptions,
   type SetupChoices,
   type ToolRow,
 } from "./setup-model.js";
+import { hasCommitsOf } from "./compat.js";
 import { asciiMode, palette, sym } from "./theme.js";
 
 export const SETUP_STEPS = 6;
@@ -48,6 +50,8 @@ export interface SetupWizardProps {
   projectId: string | null;
   root: string;
   isGit: boolean;
+  /** False when the folder is a git repo with no commits yet (the service reports it); step 1 then offers an initial commit. */
+  hasCommits?: boolean;
   width: number;
   height: number;
   /** Creates the workspace and returns its project id. Present only while the folder has none. */
@@ -94,6 +98,7 @@ export function SetupWizard(props: SetupWizardProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const spinner = useSpinner(health.status === "checking" || busy !== null);
+  const [hasCommits, setHasCommits] = useState<boolean | undefined>(props.hasCommits);
 
   const rowsRef = useRef<ToolRow[]>([]);
   const choicesRef = useRef<SetupChoices | null>(null);
@@ -134,6 +139,8 @@ export function SetupWizard(props: SetupWizardProps) {
             try {
               const s = await api.call("state.settings", { projectId: pid });
               current = choicesFromSettings(next, s);
+              const known = hasCommitsOf(s);
+              if (known !== undefined && mounted.current) setHasCommits(known);
             } catch (err) {
               if (mounted.current) setError(`Could not read the current settings, so recommended defaults are shown: ${plainError(err)}`);
             }
@@ -256,7 +263,31 @@ export function SetupWizard(props: SetupWizardProps) {
   };
 
   // ---- step items
-  const step1Options = (): string[] => (props.create && !created ? ["Create workspace and continue", "Skip setup, use recommended defaults", "Quit"] : ["Continue", "Skip setup, use recommended defaults"]);
+  const COMMIT_OPTION = "Create an empty initial commit (needed before agents can work)";
+  const offerCommit = props.isGit && hasCommits === false;
+  const step1Options = (): string[] => {
+    const base = props.create && !created ? ["Create workspace and continue", "Skip setup, use recommended defaults", "Quit"] : ["Continue", "Skip setup, use recommended defaults"];
+    return offerCommit ? [base[0]!, COMMIT_OPTION, ...base.slice(1)] : base;
+  };
+
+  /** Makes the empty initial commit through the service (the workspace is created first when it does not exist yet). */
+  const initialCommit = async (): Promise<void> => {
+    setError(null);
+    setBusy("Creating the initial commit");
+    try {
+      const pid = await ensureProject();
+      if (pid === null) throw new Error("There is no workspace to commit in.");
+      await api.call("projects.initialCommit", { projectId: pid });
+      if (mounted.current) {
+        setHasCommits(true);
+        setCursor(0); // the commit option disappears: land on Continue, not the option that slid under the cursor
+        setNotice("Created the initial commit.");
+      }
+    } catch (err) {
+      if (mounted.current) setError(`Could not create the initial commit: ${plainError(err)}`);
+    }
+    if (mounted.current) setBusy(null);
+  };
 
   const itemCount = (): number => {
     switch (step) {
@@ -272,20 +303,12 @@ export function SetupWizard(props: SetupWizardProps) {
       case 4:
         return ticked.length;
       case 5:
-        return choices ? (choices.backups ? 2 + choices.fallbackWorkers.length + choices.fallbackCto.length : 2) : 2;
+        return choices ? Math.max(1, workerBackupOptions(choices).length + ctoBackupOptions(rows, choices).length) : 1;
       case 6:
         return MERGE_OPTIONS.length;
       default:
         return 1;
     }
-  };
-
-  /** Where the cursor sits on step 5: a mode row, or an entry of one of the two lists. */
-  const backupSpot = (): { kind: "mode"; index: number } | { kind: "workers" | "cto"; index: number } => {
-    const c = choices!;
-    if (cursor < 2) return { kind: "mode", index: cursor };
-    const i = cursor - 2;
-    return i < c.fallbackWorkers.length ? { kind: "workers", index: i } : { kind: "cto", index: i - c.fallbackWorkers.length };
   };
 
   useInput((input, key) => {
@@ -306,6 +329,7 @@ export function SetupWizard(props: SetupWizardProps) {
       case 1: {
         if (pressed !== "enter") return;
         const label = step1Options()[cursor];
+        if (label === COMMIT_OPTION) return void initialCommit();
         if (label?.startsWith("Create")) return void createAndContinue();
         if (label === "Continue") return go(2);
         if (label?.startsWith("Skip")) return void skipAll();
@@ -361,40 +385,16 @@ export function SetupWizard(props: SetupWizardProps) {
       }
       case 5: {
         if (choices === null) return;
-        const spot = backupSpot();
         if (pressed === "enter") return forward();
-        if (pressed === "space" && spot.kind === "mode") {
-          if (spot.index === 1 && !canUseBackups(rowsRef.current, choices)) return setNotice("Backups need a second ticked tool.");
-          return setChoices((c) => {
-            const next = withBackups(rowsRef.current, c!, spot.index === 1);
-            choicesRef.current = next;
-            return next;
-          });
+        if (pressed !== "space") return;
+        const wOpts = workerBackupOptions(choices);
+        const cOpts = ctoBackupOptions(rows, choices);
+        if (cursor < wOpts.length) {
+          const e = wOpts[cursor]!;
+          return update((c) => ({ ...c, fallbackWorkers: toggleBackup(c.fallbackWorkers, e) }));
         }
-        if (!choices.backups) return;
-        const kind = spot.kind === "mode" ? "workers" : spot.kind;
-        const list = kind === "workers" ? choices.fallbackWorkers : choices.fallbackCto;
-        const set = (next: EngineId[]) => update((c) => (kind === "workers" ? { ...c, fallbackWorkers: next } : { ...c, fallbackCto: next }));
-        if (pressed === "a") {
-          const primary = choices.workers[0];
-          const pool = kind === "workers" ? [...ticked.filter((e) => e !== primary), ...ticked.filter((e) => e === primary)] : ctoCandidates(rowsRef.current, ticked).map((r) => r.engine);
-          const next = pool.find((e) => !list.includes(e) && (kind === "workers" || e !== choices.cto));
-          if (!next) return setNotice("Every tool is already in that list.");
-          return set([...list, next]);
-        }
-        if (spot.kind === "mode") return;
-        const at = spot.index;
-        if (pressed === "x") {
-          set(list.filter((_, i) => i !== at));
-          return setCursor((c) => (list.length === 1 ? 1 : at === list.length - 1 ? c - 1 : c));
-        }
-        const dir = pressed === "[" || pressed === "K" || pressed === "k" ? -1 : pressed === "]" || pressed === "J" || pressed === "j" ? 1 : 0;
-        if (dir !== 0 && at + dir >= 0 && at + dir < list.length) {
-          const next = [...list];
-          [next[at], next[at + dir]] = [next[at + dir]!, next[at]!];
-          set(next);
-          setCursor((c) => c + dir);
-        }
+        const e = cOpts[cursor - wOpts.length];
+        if (e) update((c) => ({ ...c, fallbackCto: toggleBackup(c.fallbackCto, e) }));
         return;
       }
       case 6: {
@@ -529,24 +529,29 @@ export function SetupWizard(props: SetupWizardProps) {
     }
     case 5: {
       const c = choices;
-      wrap("Today, work waits until the usage limit resets. Or hand it to a backup tool, in this order.", { dim: true });
+      wrap("When a tool hits its usage limit, work can move to a backup tool. Tick the backups you allow; the order you tick them is the order they are tried.", { dim: true });
+      wrap("Tick nothing and the work simply waits for the reset (nothing changes).", { dim: true });
       blank();
-      const modeW = widest(["Wait for reset", "Use backups in this order"]);
-      choice(0, radio(!c?.backups), "Wait for reset", "(default, nothing changes)", modeW);
-      choice(1, radio(c?.backups ?? false), "Use backups in this order", c && !canUseBackups(rows, c) ? "(needs a second ticked tool)" : "", modeW);
-      if (c?.backups) {
-        const group = (title: string, list: EngineId[], base: number) => {
-          blank();
+      if (c) {
+        const wOpts = workerBackupOptions(c);
+        const cOpts = ctoBackupOptions(rows, c);
+        const group = (title: string, opts: EngineId[], list: EngineId[], base: number, none: string) => {
           text(title, { bold: true });
-          if (list.length === 0) text("    none: that work waits for the reset", { dim: true });
-          list.forEach((e, i) => choice(base + i, `${i + 1}.`, engineLabel(e), ""));
+          if (opts.length === 0) text(`    ${none}`, { dim: true });
+          opts.forEach((e, i) => {
+            const at = list.indexOf(e);
+            choice(base + i, at >= 0 ? `[x] ${at + 1}.` : "[ ]", engineLabel(e), "");
+          });
         };
-        group("Workers", c.fallbackWorkers, 2);
-        group("CTO", c.fallbackCto, 2 + c.fallbackWorkers.length);
+        group("Workers backups", wOpts, c.fallbackWorkers, 0, "needs a second ticked tool");
+        blank();
+        group("CTO backups", cOpts, c.fallbackCto, wOpts.length, "needs another ticked tool that can lead");
+        blank();
+        text(c.backups ? "At a limit: backups in the numbered order." : "Nothing ticked: work waits for the reset.", { ...(c.backups ? {} : { dim: true }) });
       }
       blank();
-      wrap("A backup works from the same task notes. It may write in a different style.", { dim: true });
-      hints = c?.backups ? [`${arrows()} move`, "space choose", "[ ] reorder", "x remove", "a add", "enter next"] : [`${arrows()} move`, "space choose", "enter next", "esc back"];
+      wrap("A backup works from the same task notes. It may write in a different style. Untick and tick again to change the order.", { dim: true });
+      hints = [`${arrows()} move`, "space tick/untick", "enter next", "esc back"];
       break;
     }
     case 6: {

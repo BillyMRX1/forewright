@@ -1,4 +1,4 @@
-// The message box of the CTO screen: an input line with slash command suggestions above it.
+// The message box of the conversation screens: an input line with slash command suggestions above it.
 
 import { useState } from "react";
 import { Box, type Key } from "ink";
@@ -59,7 +59,7 @@ export function ComposeBox({
   const open = suggestions.length > 0;
   const at = Math.min(sel, Math.max(0, suggestions.length - 1));
   useHintScope(focus ? (open ? "slash" : scope) : null);
-  // While suggestions are open, tab completes a command instead of moving between tabs or recipients.
+  // While suggestions are open, tab completes a command instead of leaving the box.
   useClaim("tab", open);
 
   const submit = (raw: string) => {
@@ -109,7 +109,7 @@ export function ComposeBox({
           setSel(0);
         }}
         onSubmit={submit}
-        onEscape={() => ctx.setFocus("main")}
+        onEscape={() => ctx.setFocus("sidebar")}
         onUp={onUp}
         intercept={intercept}
         focus={focus}

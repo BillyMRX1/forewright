@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { FakeClient } from "./fake-client.js";
-import { VIEW, closeAll, ctrl, down, enter, esc, hints, lines, mount, up } from "./test-support.js";
+import { VIEW, closeAll, ctrl, down, enter, esc, hints, lines, mount, paneLines, up } from "./test-support.js";
 
 afterEach(closeAll);
 
@@ -123,7 +123,8 @@ describe("n and ctrl+n, next needs-you", () => {
     assert.match(h.frame(), /▸ Which rounding rule\?/);
     await h.send("n");
     await h.settle(200);
-    assert.match(h.frame(), /to: CTO/);
+    assert.match(lines(h)[0]!, /CTO/);
+    assert.match(h.frame(), /PRD r2 . proposed/);
     assert.match(hints(h), /a approve prd/); // focus is on the conversation so a and r work
     await h.send("n");
     await h.settle(200);
@@ -147,7 +148,7 @@ describe("n and ctrl+n, next needs-you", () => {
     const { h } = await mount({ view: VIEW.home, api });
     await h.send("n"); // PRD
     await h.settle(200);
-    assert.match(h.frame(), /to: CTO/);
+    assert.match(lines(h)[0]!, /CTO/);
     await esc(h);
     await h.send("n"); // blocked task T-5
     await h.settle(250);
@@ -168,7 +169,7 @@ describe("n and ctrl+n, next needs-you", () => {
     api.openDecisions = [];
     api.proposedPrd = false;
     api.data.tasks.find((t) => t.id === "t5")!.blockReason = "failed_verification";
-    const { h } = await mount({ view: VIEW.home, api });
+    const { h } = await mount({ cols: 140, view: VIEW.home, api });
     assert.match(h.frame(), /NEEDS YOU \(1\)/);
     assert.match(h.frame(), /Blocked\s+T-5 Write README/);
     await enter(h);
@@ -188,14 +189,18 @@ describe("attention on Home", () => {
     api.data.agents[1]!.currentTaskId = null;
     api.emitEvent("task.completed", "task", "t2");
     await h.settle(500);
-    assert.match(lines(h).find((l) => /^   Bo\b/.test(l)) ?? "", /Bo\s+Codex.*✓/);
+    assert.match(paneLines(h).find((l) => /^   Bo\b/.test(l)) ?? "", /Bo\s+Codex.*✓/);
+    assert.match(h.frame(), /✓ Bo/, "the sidebar marks it done too");
     // open the worker and look at it
     await ctrl(h, "p");
     await h.send("Bo (");
     await enter(h);
     await h.settle(300);
     await esc(h);
-    assert.match(lines(h).find((l) => /^   Bo\b/.test(l)) ?? "", /Bo\s+Codex.*○/);
+    await h.send("5"); // back to the Overview
+    await h.settle(200);
+    assert.match(paneLines(h).find((l) => /^   Bo\b/.test(l)) ?? "", /Bo\s+Codex.*○/);
+    assert.match(h.frame(), /○ Bo/);
   });
 
   it("shows a working worker with its task, a blocked worker with ✗, and keeps the order urgent first", async () => {
@@ -203,7 +208,7 @@ describe("attention on Home", () => {
     api.data.tasks.find((t) => t.id === "t5")!.assigneeAgentId = "a3";
     api.data.tasks.find((t) => t.id === "t5")!.blockReason = "failed_verification";
     const { h } = await mount({ cols: 120, rows: 36, view: VIEW.home, api });
-    const f = lines(h);
+    const f = paneLines(h);
     const order = ["Ada", "Cy", "Bo"].map((n) => f.findIndex((l) => new RegExp(`^   ${n}\\s`).test(l)));
     assert.ok(order.every((i) => i > 0), `workers missing: ${order.join(",")}`);
     assert.ok(order[0]! < order[1]! && order[1]! < order[2]!, "needs you, then blocked, then working");

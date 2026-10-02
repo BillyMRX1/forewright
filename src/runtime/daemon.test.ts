@@ -10,6 +10,7 @@ import { FakeAdapter } from "../providers/fake.js";
 import { RpcClient } from "./client.js";
 import { startDaemon } from "./daemon.js";
 import type { ForewrightEvent } from "../core/store.js";
+import { tempDir } from "../core/test-helpers.js";
 import { addTask, call, gitIn, hire, isCto, isWork, poke, rule, seedPrd, settle, sleep, startHarness, taskOf, toolResults, waitFor, ctoRequests, workRequests, fileExists } from "./test-harness.js";
 
 test("reconnect: a client that disconnected gets exactly the events it missed, once, then live events", async () => {
@@ -231,5 +232,63 @@ test("state.messages, channels, task detail and diff read models answer for a fi
     assert.equal((await h.client.request("drafts.get", { projectId: h.projectId, view: "chat", key: "cto" })).body, "half a thought");
   } finally {
     await h.close();
+  }
+});
+
+function emptyRepo(identity: boolean): string {
+  const dir = tempDir("forewright-empty-");
+  gitIn(dir, "init", "-q", "-b", "main");
+  if (identity) {
+    gitIn(dir, "config", "user.name", "Test User");
+    gitIn(dir, "config", "user.email", "test@localhost");
+  }
+  return dir;
+}
+
+test("empty git repo: the task blocks with a plain message, projects.initialCommit fixes it, and the task then runs", async () => {
+  const adapter = new FakeAdapter({ rules: [rule(isWork, { outcome: "succeeded", writeFiles: { "made.txt": "made\n" } })] });
+  const h = await startHarness({ adapter, repo: emptyRepo(true) });
+  try {
+    assert.equal((await h.client.request("state.settings", { projectId: h.projectId })).hasCommits, false);
+    seedPrd(h);
+    addTask(h, { title: "First code task", assignee: hire(h, "Wren") });
+    poke(h);
+    await waitFor(() => taskOf(h, "T-1").blockReason === "environment", "the task to block");
+    const detail = taskOf(h, "T-1").blockDetail ?? "";
+    assert.match(detail, /no commits yet/);
+    assert.match(detail, /Create the initial commit in Settings or run setup again/);
+    assert.equal(workRequests(h).length, 0);
+
+    const made = await h.client.request("projects.initialCommit", { projectId: h.projectId });
+    assert.equal(made.created, true);
+    assert.equal(gitIn(h.repo, "log", "--format=%s"), "Initial commit");
+    assert.equal(h.rt.store.recentEvents(0, 100_000).filter((e) => e.type === "project.initial_commit").length, 1);
+    assert.equal((await h.client.request("state.settings", { projectId: h.projectId })).hasCommits, true);
+    await waitFor(() => taskOf(h, "T-1").state === "review", "the task to run after the initial commit");
+    assert.equal(taskOf(h, "T-1").blockReason, null);
+
+    const again = await h.client.request("projects.initialCommit", { projectId: h.projectId });
+    assert.equal(again.created, false);
+    assert.match(again.message, /Nothing to do/);
+    assert.equal(gitIn(h.repo, "rev-list", "--count", "main"), "1", "no second empty commit");
+  } finally {
+    await h.close();
+  }
+});
+
+test("empty git repo without a git identity: projects.initialCommit fails with a plain explanation and creates nothing", async () => {
+  const keep = { g: process.env["GIT_CONFIG_GLOBAL"], s: process.env["GIT_CONFIG_NOSYSTEM"] };
+  const none = path.join(tempDir("forewright-gitcfg-"), "empty-gitconfig");
+  writeFileSync(none, "");
+  process.env["GIT_CONFIG_GLOBAL"] = none;
+  process.env["GIT_CONFIG_NOSYSTEM"] = "1";
+  const h = await startHarness({ repo: emptyRepo(false) });
+  try {
+    await assert.rejects(() => h.client.request("projects.initialCommit", { projectId: h.projectId }), /git config user\.name/);
+    assert.throws(() => gitIn(h.repo, "rev-parse", "--verify", "HEAD"), "still no commits");
+  } finally {
+    await h.close();
+    if (keep.g === undefined) delete process.env["GIT_CONFIG_GLOBAL"]; else process.env["GIT_CONFIG_GLOBAL"] = keep.g;
+    if (keep.s === undefined) delete process.env["GIT_CONFIG_NOSYSTEM"]; else process.env["GIT_CONFIG_NOSYSTEM"] = keep.s;
   }
 });

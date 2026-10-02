@@ -10,7 +10,7 @@ import type { Message, MessageChannel } from "../core/store.js";
 import type { EngineId, PermissionProfile } from "../core/types.js";
 import type { Daemon } from "./daemon.js";
 import { RpcError } from "./errors.js";
-import { gitTry } from "./git.js";
+import { gitTry, hasCommits } from "./git.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import type { ProviderStatus, TaskDetail } from "./protocol.js";
 import { PROTOCOL_VERSION } from "./protocol.js";
@@ -101,6 +101,8 @@ export class ClientApi {
       "projects.open": (p) => d.openProject(reqStr(p, "cwd", 4096)),
       "projects.init": (p) => d.initProject(reqStr(p, "cwd", 4096), optStr(p, "name")),
 
+      "projects.initialCommit": async (p) => (await this.rt(p)).initialCommit(),
+
       "state.overview": async (p) => (await this.rt(p)).store.overview(),
       "state.runtime": async (p) => (await this.rt(p)).status(),
       "state.tasks": async (p) => ({ board: (await this.rt(p)).store.taskBoard() }),
@@ -152,6 +154,7 @@ export class ClientApi {
           providers: await this.providerStatuses(rt, false),
           ctoEngine: cto.engine,
           ctoModel: cto.model,
+          hasCommits: hasCommits(rt.root),
           fallbackStatus: { cto: fallbackStatus(rt, "cto", settings.fallback.cto), workers: fallbackStatus(rt, "workers", settings.fallback.workers) },
         };
       },

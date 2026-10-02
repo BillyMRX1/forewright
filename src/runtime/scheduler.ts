@@ -8,7 +8,8 @@ import { dispatchReviews } from "./review.js";
 import { integrateNext } from "./integration.js";
 import { dispatchWork } from "./workers.js";
 import { reconcileLeases } from "./recovery.js";
-import { isGitRepo } from "./git.js";
+import { hasCommits, isGitRepo } from "./git.js";
+import { NO_COMMITS_MARKER } from "./workspace.js";
 
 export class Scheduler {
   private timer: NodeJS.Timeout | null = null;
@@ -98,7 +99,9 @@ export class Scheduler {
     const open = store.listTasks({ states: ["planned", "ready"] });
     if (isGit) {
       for (const t of open) {
-        if (t.blockReason === "environment" && (t.blockDetail ?? "").startsWith(NOT_GIT_MARKER)) store.clearBlocked(t.id);
+        if (t.blockReason !== "environment") continue;
+        const detail = t.blockDetail ?? "";
+        if (detail.startsWith(NOT_GIT_MARKER) || (detail.startsWith(NO_COMMITS_MARKER) && hasCommits(rt.root))) store.clearBlocked(t.id);
       }
       return;
     }

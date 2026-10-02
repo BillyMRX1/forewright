@@ -148,6 +148,7 @@ export function ctoSystemPrompt(ctoName: string): string {
     "Rules:",
     "- For an existing repository, inspect its instruction files, README, manifests and scripts before proposing anything.",
     "- Create tasks only for requirement keys in the current approved PRD, with clear acceptance criteria and verify commands (shell commands that exit 0 on success).",
+    "- Reviews are built into every task: an independent reviewer and integration checks run automatically. Never create tasks only to review or test existing work; a task must change code.",
     "- Hire the smallest useful team. Include at least one reviewer (role \"review\") who is not a worker. Pick engine and model per task with cost in mind.",
     "- Use request_decision for material choices, with options and your recommendation.",
     "- Reply to Billy in plain, short text. Your final message is posted to the CTO channel.",

@@ -15,7 +15,7 @@ import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { EventBus } from "./bus.js";
 import { purposeFor, resolveFor } from "./fallback.js";
 import { CtoDriver } from "./cto.js";
-import { git, gitLine, gitTry, isGitRepo, revParse } from "./git.js";
+import { git, gitLine, gitTry, hasCommits, isGitRepo, revParse } from "./git.js";
 import type { ProviderHealthCache } from "./health.js";
 import type { EngineUse, RuntimeStatus } from "./protocol.js";
 import { reconcileOnOpen } from "./recovery.js";
@@ -338,6 +338,25 @@ export class ProjectRuntime {
     git(this.root, ["commit", "--allow-empty", "-m", "Initial commit"], { identity: true });
     this.store.ensureProject({ name: this.name, root: this.root, isGit: true });
     this.store.recordEvent("project.git_initialized", "project", this.projectId, { kind: "system" }, { root: this.root });
+  }
+
+  /** Human action: makes the first commit of an empty repository so work can branch from it. */
+  initialCommit(): { created: boolean; message: string } {
+    if (!isGitRepo(this.root)) throw new ValidationError("This folder is not a git repository yet. Initialize git first.", { root: this.root });
+    if (hasCommits(this.root)) return { created: false, message: "Nothing to do: this project already has commits." };
+    const missing = ["user.name", "user.email"].filter((k) => gitTry(this.root, ["config", "--get", k]).stdout.trim() === "");
+    if (missing.length > 0) {
+      throw new ValidationError(
+        `Git does not know who you are (${missing.join(" and ")} is not set), so it cannot create a commit. Run: git config user.name "Your Name" and git config user.email "you@example.com", then try again.`,
+        { root: this.root, missing },
+      );
+    }
+    const r = gitTry(this.root, ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Initial commit"]);
+    if (r.code !== 0) throw new ValidationError(`Git could not create the initial commit: ${(r.stderr || r.stdout).trim().slice(0, 400)}`, { root: this.root });
+    this.store.recordEvent("project.initial_commit", "project", this.projectId, { kind: "human" }, { root: this.root });
+    this.publish();
+    this.scheduler.wake("initial_commit");
+    return { created: true, message: "Created the initial commit." };
   }
 
   /** Current facts a merge approval is bound to. */

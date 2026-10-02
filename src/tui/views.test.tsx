@@ -3,7 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { FakeClient } from "./fake-client.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { checkLines, diffTabLines, overviewLines } from "./views/tasks.js";
-import { VIEW, closeAll, ctrl, down, enter, esc, hints, left, lines, mount, release, right, shiftTab, tab, up } from "./test-support.js";
+import { VIEW, closeAll, ctrl, down, enter, esc, hints, left, lines, mount, pane, release, right, shiftTab, tab, up } from "./test-support.js";
 
 afterEach(closeAll);
 
@@ -65,7 +65,7 @@ describe("Tasks", () => {
   it("Enter opens a task: header, state line, four tabs, then what to build and when it is done", async () => {
     const { h } = await mount({ view: VIEW.tasks });
     await enter(h);
-    const f = h.frame();
+    const f = pane(h);
     assert.match(f, /Tasks > T-3 Add CLI parsing/);
     assert.match(f, /○ Planned/);
     assert.match(f, /1 Overview\s+2 Run log\s+3 Checks\s+4 Diff/);
@@ -143,7 +143,7 @@ describe("Tasks", () => {
     assert.match(h.frame(), /@@ -1 \+1 @@/);
     await h.send("1");
     assert.match(h.frame(), /WHAT TO BUILD/);
-    assert.match(lines(h)[0]!, /3 Tasks/);
+    assert.match(lines(h)[0]!, /Tasks/);
     assert.match(h.frame(), /Tasks > T-2/);
   });
 
@@ -274,7 +274,7 @@ describe("Inbox", () => {
     assert.match(h.frame(), /▸ 1\s+Nearest cent\s+recommended/);
     await h.send("2"); // digits pick here; they do not switch tabs
     assert.match(h.frame(), /▸ 2\s+Always up/);
-    assert.match(lines(h)[0]!, /4 Inbox/);
+    assert.match(lines(h)[0]!, /Inbox/);
     await enter(h);
     assert.match(h.frame(), /Resolve "Which rounding rule\?" with "Always up"\?/);
     assert.equal(api.callsTo("decisions.resolve").length, 0);
@@ -336,7 +336,8 @@ describe("Inbox", () => {
     await esc(h);
     await h.send("o");
     await h.settle(200);
-    assert.match(h.frame(), /to: CTO/);
+    assert.match(lines(h)[0]!, /CTO/);
+    assert.match(h.frame(), /PRD r2/);
   });
 
   it("tab and Esc go back from the decision to the list", async () => {
@@ -473,18 +474,22 @@ describe("Settings", () => {
     assert.match(h.frame(), /Enter a number\./);
   });
 
-  it("Esc closes Settings; q does too", async () => {
-    const { h } = await mount({ cols: 140, rows: 40, view: VIEW.tasks });
-    await h.send(",");
-    await h.settle(100);
+  it("Esc goes back to the sidebar and q does too; the pane stays until you pick something else", async () => {
+    const { h } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
     await esc(h);
+    assert.match(hints(h), /↑↓ move · enter open/, "esc goes back to the sidebar");
+    assert.match(h.frame(), /ENGINES FOUND/, "the Settings pane stays");
+    await h.send("3");
+    await h.settle(100);
     assert.match(h.frame(), /TASKS 6 total/);
     await h.send(",");
     await h.settle(100);
-    await h.send("q");
+    assert.match(hints(h), /↑↓ move|settings|tab group/);
+    await h.send("q"); // q closes Settings too
     await h.settle(100);
-    assert.match(h.frame(), /TASKS 6 total/);
+    assert.match(hints(h), /↑↓ move · enter open/);
   });
+
 });
 
 describe("Backups (fallback lists)", () => {
@@ -546,49 +551,51 @@ describe("Backups (fallback lists)", () => {
   });
 });
 
-describe("CTO and chat recipients", () => {
-  it("Tab changes who the message goes to: CTO, project channel, a task thread, an agent", async () => {
+describe("CTO, Team chat and agent messages", () => {
+  it("the CTO box sends to the CTO; the Team chat box to the project channel; an agent's box directly to it", async () => {
     const { h, api } = await mount({ view: VIEW.cto });
-    assert.match(h.frame(), /to: CTO\s+\(tab: Project\)/);
-    await h.send("\t");
-    await h.settle(150);
-    assert.match(h.frame(), /to: Project/);
+    await h.send("plan it");
+    await enter(h);
+    await h.settle(100);
+    assert.deepEqual(api.callsTo("cto.send").at(-1)?.params, { projectId: "p1", body: "plan it" });
+    assert.equal(api.callsTo("chat.send").length, 0);
+    await h.send("2");
+    await h.settle(200);
+    assert.match(h.frame(), /Team chat\s+to: Everyone/);
     assert.match(h.frame(), /hello in project/);
     await h.send("hi team");
     await enter(h);
     await h.settle(100);
     let call = api.callsTo("chat.send").at(-1)?.params as { channel: string; body: string; taskId?: string; toAgentIds?: string[] };
-    assert.deepEqual({ channel: call.channel, body: call.body }, { channel: "project", body: "hi team" });
-    assert.equal(api.callsTo("cto.send").length, 0);
-    await h.send("\t");
-    await h.settle(100);
-    assert.match(h.frame(), /to: T-2 Implement tip calculation/);
-    await h.send("status?");
-    await enter(h);
-    await h.settle(100);
-    call = api.callsTo("chat.send").at(-1)?.params as typeof call;
-    assert.deepEqual({ channel: call.channel, taskId: call.taskId }, { channel: "task", taskId: "t2" });
-    await h.send("\t");
-    await h.settle(100);
-    assert.match(h.frame(), /to: Bo/);
+    assert.deepEqual({ channel: call.channel, body: call.body, toAgentIds: call.toAgentIds }, { channel: "project", body: "hi team", toAgentIds: undefined });
+    await h.send("6");
+    await h.settle(250);
+    assert.match(h.frame(), /hello in direct/);
     await h.send("you there?");
     await enter(h);
     await h.settle(100);
     call = api.callsTo("chat.send").at(-1)?.params as typeof call;
-    assert.deepEqual({ channel: call.channel, toAgentIds: call.toAgentIds }, { channel: "direct", toAgentIds: ["a2"] });
-    await h.send("\t");
-    await h.settle(100);
-    assert.match(h.frame(), /to: CTO/);
-    await h.send("plan it");
-    await enter(h);
-    await h.settle(100);
-    assert.deepEqual(api.callsTo("cto.send").at(-1)?.params, { projectId: "p1", body: "plan it" });
+    assert.deepEqual({ channel: call.channel, toAgentIds: call.toAgentIds, body: call.body }, { channel: "direct", toAgentIds: ["a2"], body: "you there?" });
+    assert.equal(api.callsTo("cto.send").length, 1);
   });
 
-  it("sends a directed message for @name in the project channel, and reports an unknown name instead of sending", async () => {
-    const { h, api } = await mount({ view: VIEW.cto });
-    await h.send("\t");
+  it("m switches the Team chat between everyone and a task thread", async () => {
+    const { h, api } = await mount({ view: VIEW.chat });
+    assert.match(h.frame(), /to: Everyone\s+\(m: threads\)/);
+    await up(h); // to the conversation
+    await h.send("m");
+    await h.settle(150);
+    assert.match(h.frame(), /to: T-2 Implement tip calculation/);
+    await enter(h);
+    await h.send("status?");
+    await enter(h);
     await h.settle(100);
+    const call = api.callsTo("chat.send").at(-1)?.params as { channel: string; taskId?: string };
+    assert.deepEqual({ channel: call.channel, taskId: call.taskId }, { channel: "task", taskId: "t2" });
+  });
+
+  it("sends a directed message for @name in the Team chat, and reports an unknown name instead of sending", async () => {
+    const { h, api } = await mount({ view: VIEW.chat });
     await h.send("@bo please look");
     await enter(h);
     await h.settle(100);
@@ -602,35 +609,39 @@ describe("CTO and chat recipients", () => {
     assert.match(h.frame(), /No agent is named nobody/);
   });
 
-  it("keeps a draft per recipient", async () => {
-    const { h } = await mount({ view: VIEW.cto });
+  it("keeps a draft per conversation, saved to the service and restored when you come back", async () => {
+    const { h, api } = await mount({ view: VIEW.cto });
     await h.send("for the CTO");
-    await h.send("\t");
-    await h.settle(200);
+    await esc(h);
+    await h.send("2");
+    await h.settle(250);
     assert.doesNotMatch(h.frame(), /for the CTO/);
     await h.send("for the team");
-    await h.send("\t");
-    await h.send("\t");
-    await h.send("\t");
+    await esc(h);
+    await h.send("1");
     await h.settle(250);
-    assert.match(h.frame(), /to: CTO/);
     assert.match(h.frame(), /for the CTO/);
-    await h.send("\t");
+    assert.doesNotMatch(h.frame(), /for the team/);
+    await esc(h);
+    await h.send("2");
     await h.settle(250);
     assert.match(h.frame(), /for the team/);
+    assert.ok(api.callsTo("drafts.save").some((c) => (c.params as { view: string; body: string }).view === "chat" && (c.params as { body: string }).body === "for the team"));
   });
 
-  it("the palette and /chat reach the project channel and the other recipients", async () => {
+  it("the palette and /chat reach the Team chat and each agent's pane", async () => {
     const { h } = await mount();
     await ctrl(h, "p");
     await h.send("Message: Bo");
     await enter(h);
     await h.settle(250);
-    assert.match(h.frame(), /to: Bo/);
+    assert.match(lines(h)[0]!, /Bo/);
+    assert.match(h.frame(), /Message Bo directly/);
+    assert.match(hints(h), /enter send/);
     await h.send("/chat");
     await enter(h);
     await h.settle(250);
-    assert.match(h.frame(), /to: Project/);
+    assert.match(h.frame(), /to: Everyone/);
   });
 
   it("messages show a short role label and the time, with no header per message", async () => {

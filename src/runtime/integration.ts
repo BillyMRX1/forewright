@@ -180,7 +180,12 @@ async function integrate(rt: ProjectRuntime, task: Task): Promise<void> {
   store.completeTask(task.id, generation);
   store.staleIntegrationChecks(task.id);
   store.recordEvent("integration.completed", "task", task.id, { kind: "system" }, { candidate, mergeSha, previousTip: old });
-  rt.notifyCto(`integration:${task.id}:${candidate}`, `${task.shortId} "${task.title}" was integrated into ${INTEGRATION_BRANCH} (${mergeSha.slice(0, 10)}) and is done.`);
+  // Routine progress stays quiet; the CTO is woken only when this was the last open task.
+  const allDone = store.listTasks().every((t) => t.state === "done" || t.state === "cancelled");
+  rt.notifyCto(
+    `${allDone ? "milestone" : "integrated"}:${task.id}:${candidate}`,
+    `${task.shortId} "${task.title}" was integrated into ${INTEGRATION_BRANCH} (${mergeSha.slice(0, 10)}) and is done.${allDone ? " All tasks are done: the milestone is complete." : ""}`,
+  );
 }
 
 /** The task still awaits integration of the same commit, scope and attempt. */

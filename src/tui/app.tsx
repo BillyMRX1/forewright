@@ -1,4 +1,4 @@
-// Root component: top bar with numbered tabs, the screen, one hint bar, the focus model, global keys and overlays.
+// Root component: the sidebar (herdr style) and the main pane for the selected entry, a slim top bar, one status bar, the focus model, global keys and overlays.
 
 import { execFile } from "node:child_process";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -6,20 +6,22 @@ import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import type { ClientApi } from "./client.js";
 import { Ctx, needTarget, type AppCtx, type ChannelInfo, type ClaimKind, type JumpTarget, type Selection, type Zone } from "./context.js";
 import { Rule, SafeText } from "./components.js";
-import { TAB_COUNT, VIEW, wrapText } from "./format.js";
+import { VIEW, VIEW_NAMES, wrapText } from "./format.js";
 import type { ProviderStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
 import type { Decision, ForewrightEvent, RequirementDoc, Task } from "../core/store-types.js";
 import { TASK_STATES } from "../core/types.js";
 import { deriveAttention, needsYouItems, nextNeedItem, type UnseenDone } from "./attention.js";
 import { ToastCard, TopBar, type ConnView } from "./shell.js";
+import { Sidebar, buildSidebar } from "./sidebar.js";
 import { Palette, type PaletteEntry } from "./palette.js";
 import { ConfirmCard, HelpModal, PrdViewer } from "./modals.js";
 import { footerHints } from "./keys.js";
 import { viewOfAction, type ActionId } from "./commands.js";
-import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
-import { palette as colors } from "./theme.js";
+import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, resetTimePhrase, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
+import { palette as colors, sym } from "./theme.js";
 import { HomeView } from "./views/home.js";
-import { CtoView } from "./views/cto.js";
+import { ChatView, CtoView } from "./views/cto.js";
+import { AgentView } from "./views/agent.js";
 import { TasksView } from "./views/tasks.js";
 import { InboxView } from "./views/inbox.js";
 import { SettingsView } from "./views/settings.js";
@@ -33,7 +35,10 @@ export interface AppProps {
   root: string;
   isGit: boolean;
   size?: { columns: number; rows: number };
+  /** The sidebar entry shown first (a VIEW index). Defaults to the CTO, with the message box focused. */
   initialView?: number;
+  /** The agent shown first when initialView is VIEW.agent. */
+  initialAgentId?: string;
   /** Overrides how long each kind of notice stays, in milliseconds (tests use short values). */
   toastMs?: Partial<Record<ToastKind, number>>;
   /** Called when the user quits, after the UI has been asked to exit. */
@@ -57,13 +62,21 @@ interface Snapshot {
   decisions: Decision[];
   proposedPrd: boolean;
   channels: ChannelInfo[];
+  /** Messages in the project channel, newest last. */
+  chat: Array<{ createdAt: string; fromHuman: boolean }>;
 }
 
-const EMPTY_SNAPSHOT: Snapshot = { agents: [], tasks: [], decisions: [], proposedPrd: false, channels: [] };
+const EMPTY_SNAPSHOT: Snapshot = { agents: [], tasks: [], decisions: [], proposedPrd: false, channels: [], chat: [] };
 
-/** Only the CTO screen has a message box. */
+/** The CTO, the Team chat and an agent have a message box. */
 function viewHasInput(view: number): boolean {
-  return view === VIEW.cto;
+  return view === VIEW.cto || view === VIEW.chat || view === VIEW.agent;
+}
+
+/** The sidebar entry key of a view. */
+function entryKey(view: number, agentId: string | null): string {
+  if (view === VIEW.agent) return `agent:${agentId ?? ""}`;
+  return ["home", "cto", "tasks", "inbox", "settings", "chat"][view] ?? "cto";
 }
 
 function defaultZone(view: number): Zone {
@@ -112,9 +125,13 @@ export function App(props: AppProps) {
   const win = useWindowSize();
   const cols = Math.max(20, props.size?.columns ?? (win.columns || 80));
   const rows = Math.max(6, props.size?.rows ?? (win.rows || 24));
-  const initial = props.initialView ?? VIEW.home;
+  const initial = props.initialView ?? VIEW.cto;
 
   const [view, setView] = useState(initial);
+  const [agentId, setAgentId] = useState<string | null>(props.initialAgentId ?? null);
+  const [ctoLimitUntil, setCtoLimitUntil] = useState<string | null>(null);
+  const chatSeenAt = useRef<string | null>(null);
+  const [chatSeenTick, setChatSeenTick] = useState(0);
   const [rawFocus, setFocus] = useState<Zone>(defaultZone(initial));
   const [hintScope, setHintScopeState] = useState("home");
   const setHintScope = useCallback((scope: string | null) => {
@@ -140,7 +157,6 @@ export function App(props: AppProps) {
   const inputCount = useRef(0);
   const [inputClaims, setInputClaims] = useState(0);
   const claims = useRef<Record<ClaimKind, number>>({ tab: 0, digits: 0, level: 0 });
-  const returnView = useRef<number>(VIEW.home);
   const latestSeq = useRef(0);
   const selection = useRef<Selection>({ taskId: null, runId: null });
   const runtimeRef = useRef<RuntimeStatus | null>(null);
@@ -171,6 +187,8 @@ export function App(props: AppProps) {
   }, []);
   const notify = useCallback((text: string) => raise("info", text), [raise]);
 
+  const toastsRef = useRef<Toast[]>([]);
+  toastsRef.current = toasts;
   const shown = currentToast(toasts);
   const shownId = shown?.id ?? null;
   const shownKind = shown?.kind ?? null;
@@ -236,6 +254,12 @@ export function App(props: AppProps) {
         } else {
           raise("info", engineNoticeText(type, p, who), p["role"] === "cto" ? { kind: "cto" } : null);
         }
+        break;
+      }
+      case "cto.rate_limited": {
+        const until = typeof p["until"] === "string" ? p["until"] : null;
+        setCtoLimitUntil(until ?? new Date(Date.now() + 60 * 60_000).toISOString());
+        raise("info", `CTO paused until ${resetTimePhrase(until)} (wakeup limit). Raise it in Settings.`, { kind: "settings" });
         break;
       }
       case "message.posted":
@@ -309,12 +333,14 @@ export function App(props: AppProps) {
       api.call("state.tasks", { projectId }),
       api.call("state.prd", { projectId }),
       api.call("state.channels", { projectId }),
+      api.call("state.messages", { projectId, channel: "project", limit: 50 }),
     ]).then(
-      ([rt, inbox, team, board, prd, chans]) => {
+      ([rt, inbox, team, board, prd, chans, chat]) => {
         if (cancelled) return;
         setRuntime(rt);
         const tasks = TASK_STATES.flatMap((st) => board.board[st]);
-        setSnap({ agents: team.agents, tasks, decisions: inbox.open, proposedPrd: prd.doc?.status === "proposed", channels: chans.channels });
+        setSnap({ agents: team.agents, tasks, decisions: inbox.open, proposedPrd: prd.doc?.status === "proposed", channels: chans.channels, chat: chat.messages.map((m) => ({ createdAt: m.createdAt, fromHuman: m.senderKind === "human" })) });
+        if (chatSeenAt.current === null) chatSeenAt.current = chat.messages.reduce((m, x) => (x.createdAt > m ? x.createdAt : m), "");
         // Finished work is "unseen" only if it finished after this client started.
         const done = tasks.filter((t) => t.state === "done");
         if (doneSeen.current === null) doneSeen.current = new Set(done.map((t) => t.id));
@@ -356,12 +382,15 @@ export function App(props: AppProps) {
     };
   }, [api, fail, conn === "connected"]);
 
-  // ---- layout: top bar, rule, the screen, then the notice rows and the one hint bar
+  // ---- layout: top bar, rule, then the sidebar beside the main pane, the notice rows and the one status bar
+  const showSide = cols >= 72;
+  const sideW = !showSide ? cols : cols >= 120 ? 32 : cols >= 100 ? 28 : cols >= 84 ? 26 : 24;
   const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 6).slice(0, 3) : [];
   const errorRows = error ? 1 + detailLines.length : 0;
   const offerRows = offer ? 1 : 0;
   const bodyHeight = Math.max(2, rows - 3 - errorRows - offerRows);
-  const bodyWidth = Math.max(8, cols - 2);
+  const mainW = showSide ? cols - sideW - 1 : cols;
+  const bodyWidth = Math.max(8, mainW - 2);
 
   // ---- focus
   const focus: Zone = rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
@@ -389,10 +418,12 @@ export function App(props: AppProps) {
   }, []);
   const viewRef = useRef(view);
   viewRef.current = view;
-  const openView = useCallback((i: number, zone?: Zone) => {
-    const v = Math.min(Math.max(0, i), VIEW.settings);
-    if (v === VIEW.settings && viewRef.current !== VIEW.settings) returnView.current = viewRef.current;
+  const agentRef = useRef(agentId);
+  agentRef.current = agentId;
+  const openView = useCallback((i: number, zone?: Zone, forAgent?: string | null) => {
+    const v = Math.min(Math.max(0, i), VIEW.agent);
     setView(v);
+    if (v === VIEW.agent) setAgentId(forAgent ?? agentRef.current);
     setFocus(zone ?? defaultZone(v));
   }, []);
   const goto = useCallback(
@@ -406,7 +437,7 @@ export function App(props: AppProps) {
     (target: Omit<JumpTarget, "nonce">) => {
       jumpNonce.current += 1;
       setJump({ ...target, nonce: jumpNonce.current });
-      openView(target.view, target.focus ?? (target.blurInput ? "main" : undefined));
+      openView(target.view, target.focus ?? (target.blurInput ? "main" : undefined), target.agentId ?? null);
     },
     [openView],
   );
@@ -418,13 +449,13 @@ export function App(props: AppProps) {
   }, []);
 
   const back = useCallback(() => {
-    if (viewRef.current === VIEW.settings) {
-      openView(returnView.current);
+    if (errorRef.current !== null || toastsRef.current.length > 0) {
+      setError(null);
+      setToasts((q) => (q.length > 0 ? removeToast(q, currentToast(q)!.id) : q));
       return;
     }
-    setError(null);
-    setToasts((q) => (q.length > 0 ? removeToast(q, currentToast(q)!.id) : q));
-  }, [openView]);
+    setFocus("sidebar");
+  }, []);
 
   const attention = useMemo(
     () => deriveAttention({ agents: snap.agents, tasks: snap.tasks, decisions: snap.decisions, runtime, proposedPrd: snap.proposedPrd, unseenDone: unseen }),
@@ -432,9 +463,34 @@ export function App(props: AppProps) {
   );
   const needs = useMemo(() => needsYouItems({ tasks: snap.tasks, decisions: snap.decisions, proposedPrd: snap.proposedPrd }), [snap]);
 
+  const selectedKey = entryKey(view, agentId);
+  const seenAt = chatSeenAt.current;
+  if (view === VIEW.chat && !overlay) {
+    const newest = snap.chat.reduce((m, x) => (x.createdAt > m ? x.createdAt : m), "");
+    if (seenAt !== null && newest > seenAt) chatSeenAt.current = newest;
+  }
+  const unreadChat = view === VIEW.chat ? 0 : snap.chat.filter((m) => !m.fromHuman && seenAt !== null && m.createdAt > seenAt).length;
+  const entries = useMemo(
+    () => buildSidebar({ attention, tasks: snap.tasks, decisions: snap.decisions, proposedPrd: snap.proposedPrd, runtime, providers, ctoLimitUntil, unreadChat }),
+    [attention, snap, runtime, providers, ctoLimitUntil, unreadChat],
+  );
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  useEffect(() => {
+    if (ctoLimitUntil === null) return;
+    const wait = Date.parse(ctoLimitUntil) - Date.now();
+    if (!(wait > 0)) {
+      setCtoLimitUntil(null);
+      return;
+    }
+    const t = setTimeout(() => setCtoLimitUntil(null), Math.min(wait, 2 ** 31 - 1));
+    return () => clearTimeout(t);
+  }, [ctoLimitUntil]);
+
   const toastTarget = (target: ToastTarget): Omit<JumpTarget, "nonce"> => {
     if (target.kind === "decision") return { view: VIEW.inbox, decisionId: target.decisionId, focus: "main" };
     if (target.kind === "task") return { view: VIEW.tasks, taskId: target.taskId, focus: "main" };
+    if (target.kind === "settings") return { view: VIEW.settings, focus: "main" };
     return { view: VIEW.cto, channelKey: "cto::" };
   };
 
@@ -496,8 +552,6 @@ export function App(props: AppProps) {
     const v = viewOfAction(id);
     if (v !== null) return goto(v);
     switch (id) {
-      case "chat":
-        return jumpTo({ view: VIEW.cto, channelKey: "project::" });
       case "approve":
         api.call("state.prd", { projectId }).then((r) => {
           if (r.doc?.status === "proposed") approve(r.doc);
@@ -560,6 +614,25 @@ export function App(props: AppProps) {
 
   const typing = focus === "input" || inputClaims > 0;
 
+  const openEntry = (e: { view: number; agentId?: string }, zone?: Zone) => {
+    setJump(null);
+    openView(e.view, zone, e.agentId ?? null);
+  };
+  /** Moves the sidebar cursor; the pane shows the entry at once and the sidebar keeps the keyboard. */
+  const moveSelection = (delta: number) => {
+    const cur = entries.findIndex((e) => e.key === selectedKey);
+    const next = entries[Math.min(entries.length - 1, Math.max(0, (cur < 0 ? 0 : cur) + delta))];
+    if (next) openEntry(next, "sidebar");
+  };
+  const selectNumber = useCallback(
+    (n: number) => {
+      const e = entriesRef.current.find((x) => x.number === n);
+      if (e) openEntry(e);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       if (confirm?.quit) {
@@ -604,21 +677,22 @@ export function App(props: AppProps) {
       return;
     }
     if (key.ctrl && input === "e") return setErrorOpen((o) => !o);
-    // shift+tab goes to the previous tab, also from a message box.
-    if (key.tab && key.shift) {
-      if (claims.current.tab > 0) return;
-      return goto((viewRef.current + TAB_COUNT - 1) % TAB_COUNT);
-    }
     // Everything below is for when no text box has focus.
     if (typing) return;
     if (key.ctrl || key.meta) return;
-    if (key.tab) {
-      if (claims.current.tab > 0) return;
-      return goto(viewRef.current >= TAB_COUNT ? returnView.current : (viewRef.current + 1) % TAB_COUNT);
+    if (focus === "sidebar") {
+      if (key.upArrow || input === "k") return moveSelection(-1);
+      if (key.downArrow || input === "j") return moveSelection(1);
+      if (key.return || key.rightArrow || input === "l") return setFocus(defaultZone(viewRef.current));
+      if (key.escape) return back();
     }
-    if (/^[1-4]$/.test(input)) {
+    if (key.tab && !key.shift) {
+      if (claims.current.tab > 0) return;
+      return setFocus((z) => (z === "sidebar" ? defaultZone(viewRef.current) : "sidebar"));
+    }
+    if (/^[1-9]$/.test(input)) {
       if (claims.current.digits > 0) return;
-      return goto(Number(input) - 1);
+      return selectNumber(Number(input));
     }
     if (input === ",") return goto(VIEW.settings);
     if (input === "?") return setHelp(true);
@@ -626,7 +700,7 @@ export function App(props: AppProps) {
     if (input === "n") return goNextNeed();
     if (input === "q") {
       if (claims.current.level > 0) return; // the screen closes what it has open first
-      if (viewRef.current === VIEW.settings) return back();
+      if (viewRef.current === VIEW.settings && focus !== "sidebar") return back();
       return quit();
     }
   });
@@ -659,6 +733,9 @@ export function App(props: AppProps) {
       claimInput,
       setSelection,
       goto,
+      selectNumber,
+      agentId,
+      ctoLimitUntil,
       attention,
       needs,
       openDecisions: snap.decisions,
@@ -670,18 +747,27 @@ export function App(props: AppProps) {
       jumpTo,
       markSeen,
     }),
-    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, bodyWidth, focus, back, claim, run, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, attention, needs, snap, latest, jump, jumpTo, markSeen],
+    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, bodyWidth, focus, back, claim, run, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, selectNumber, agentId, ctoLimitUntil, attention, needs, snap, latest, jump, jumpTo, markSeen],
   );
   const overlayCtx = useMemo(() => ({ ...ctx, modal: false, focus: "main" as Zone }), [ctx]);
 
-  const viewEl = [<HomeView key="v0" />, <CtoView key="v1" />, <TasksView key="v2" />, <InboxView key="v3" />, <SettingsView key="v4" />][view];
+  const viewEl = [
+    <HomeView key="v0" />,
+    <CtoView key="v1" />,
+    <TasksView key="v2" />,
+    <InboxView key="v3" />,
+    <SettingsView key="v4" />,
+    <ChatView key="v5" />,
+    <AgentView key={`v6:${agentId ?? ""}`} />,
+  ][view];
 
   const paused = runtime?.paused === true;
-  const badges = { tasks: snap.tasks.filter((t) => t.state === "working").length, inbox: snap.decisions.length + (snap.proposedPrd ? 1 : 0) };
   const cardMode = shown !== null && cols >= 70 && rows >= 20;
-  const scope = confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : hintScope;
+  const sidebarOnly = !showSide && focus === "sidebar" && !overlay;
+  const scope = confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
   const hintText = footerHints(scope, cols - 2, { needs: needs.length, toast: shown?.target != null, typing, prd: snap.proposedPrd });
-  const showView = !overlay;
+  const showView = !overlay && !sidebarOnly;
+  const titleName = view === VIEW.agent ? (snap.agents.find((a) => a.id === agentId)?.name ?? "Agent") : VIEW_NAMES[view]!;
 
   if (wizard) {
     return (
@@ -707,45 +793,58 @@ export function App(props: AppProps) {
     );
   }
 
+  const divider = (sym().frame.v + "\n").repeat(bodyHeight).trimEnd();
   return (
     <Ctx.Provider value={ctx}>
       <Box flexDirection="column" width={cols} height={rows}>
-        <TopBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} view={view} badges={badges} />
+        <TopBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} title={titleName} menuHint={!showSide} need={needs.length} />
         <Rule width={cols} />
-        <Box flexDirection="column" width={cols} height={bodyHeight} flexShrink={0} paddingX={1} overflow="hidden">
-          <Box flexDirection="column" height={bodyHeight} width={bodyWidth} flexShrink={0} display={showView ? "flex" : "none"} overflow="hidden">
-            {viewEl}
-          </Box>
-          {confirm ? <ConfirmCard text={confirm.text} width={bodyWidth} height={bodyHeight} /> : null}
-          {help ? (
-            <Ctx.Provider value={overlayCtx}>
-              <HelpModal width={bodyWidth} height={bodyHeight} />
-            </Ctx.Provider>
+        <Box height={bodyHeight} width={cols} flexShrink={0}>
+          {showSide || sidebarOnly ? <Sidebar entries={entries} selectedKey={selectedKey} focused={focus === "sidebar" && !overlay} width={sideW} height={bodyHeight} attention={attention} /> : null}
+          {showSide ? (
+            <Box width={1} height={bodyHeight} flexShrink={0}>
+              <Text dimColor={focus !== "sidebar"} {...(focus === "sidebar" ? { color: colors.accent } : {})}>
+                {divider}
+              </Text>
+            </Box>
           ) : null}
-          {prdOpen ? (
-            <Ctx.Provider value={overlayCtx}>
-              <PrdViewer onClose={() => setPrdOpen(false)} onApprove={approve} />
-            </Ctx.Provider>
-          ) : null}
-          {logRun !== null ? (
-            <Ctx.Provider value={overlayCtx}>
-              <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
-            </Ctx.Provider>
-          ) : null}
-          {paletteOpen ? (
-            <Ctx.Provider value={overlayCtx}>
-              <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} />
-            </Ctx.Provider>
-          ) : null}
-          {cardMode && shown ? (
-            <Box position="absolute" bottom={0} right={1}>
-              <ToastCard toast={shown} width={bodyWidth} />
+          {!sidebarOnly ? (
+            <Box flexDirection="column" width={mainW} height={bodyHeight} flexShrink={0} paddingX={1} overflow="hidden">
+              <Box flexDirection="column" height={bodyHeight} width={bodyWidth} flexShrink={0} display={showView ? "flex" : "none"} overflow="hidden">
+                {viewEl}
+              </Box>
+              {confirm ? <ConfirmCard text={confirm.text} width={bodyWidth} height={bodyHeight} /> : null}
+              {help ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <HelpModal width={bodyWidth} height={bodyHeight} />
+                </Ctx.Provider>
+              ) : null}
+              {prdOpen ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <PrdViewer onClose={() => setPrdOpen(false)} onApprove={approve} />
+                </Ctx.Provider>
+              ) : null}
+              {logRun !== null ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <LogViewer runId={logRun} onClose={() => setLogRun(null)} />
+                </Ctx.Provider>
+              ) : null}
+              {paletteOpen ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} />
+                </Ctx.Provider>
+              ) : null}
+              {cardMode && shown ? (
+                <Box position="absolute" bottom={0} right={1}>
+                  <ToastCard toast={shown} width={bodyWidth} />
+                </Box>
+              ) : null}
             </Box>
           ) : null}
         </Box>
         {offer ? (
           <Box height={1} flexShrink={0} paddingX={1}>
-            <SafeText color={colors.attention} bold>
+            <SafeText color={colors.attention} bold width={Math.max(8, cols - 32)}>
               {"Set up engines for this project?"}
             </SafeText>
             <Text dimColor>{"  enter to start, esc to skip"}</Text>
@@ -754,11 +853,11 @@ export function App(props: AppProps) {
         {error ? (
           <Box flexDirection="column" height={errorRows} flexShrink={0} paddingX={1}>
             <Box height={1}>
-              <SafeText color={colors.error}>{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (ctrl+e: details)" : ""}`}</SafeText>
+              <SafeText color={colors.error} width={cols - 2}>{`Error: ${error.plain}${error.detail !== null && !errorOpen ? "  (ctrl+e: details)" : ""}`}</SafeText>
             </Box>
             {detailLines.map((l, i) => (
               <Box key={i} height={1}>
-                <SafeText color={colors.error} dimColor>{`  ${l}`}</SafeText>
+                <SafeText color={colors.error} dimColor width={cols - 2}>{`  ${l}`}</SafeText>
               </Box>
             ))}
           </Box>
@@ -766,13 +865,13 @@ export function App(props: AppProps) {
         <Box height={1} flexShrink={0} paddingX={1}>
           {shown && !cardMode ? (
             <>
-              <SafeText color={shown.kind === "needs_you" ? colors.attention : shown.kind === "error" ? colors.error : shown.kind === "finished" ? colors.done : colors.muted} bold={shown.kind === "needs_you"}>
+              <SafeText width={cols - 16} color={shown.kind === "needs_you" ? colors.attention : shown.kind === "error" ? colors.error : shown.kind === "finished" ? colors.done : colors.muted} bold={shown.kind === "needs_you"}>
                 {shown.text}
               </SafeText>
               {shown.target ? <Text dimColor>{"  ctrl+g go"}</Text> : null}
             </>
           ) : (
-            <SafeText dimColor>{offer ? "" : hintText}</SafeText>
+            <SafeText dimColor width={cols - 2}>{offer ? "" : hintText}</SafeText>
           )}
         </Box>
       </Box>

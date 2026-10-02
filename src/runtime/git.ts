@@ -57,6 +57,11 @@ export function refExists(cwd: string, ref: string): boolean {
   return gitTry(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code === 0;
 }
 
+/** True when HEAD points at a commit (false for an empty repository or a non-repository). */
+export function hasCommits(cwd: string): boolean {
+  return gitTry(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).code === 0;
+}
+
 export function revParse(cwd: string, ref: string): string {
   return gitLine(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]);
 }

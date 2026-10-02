@@ -12,6 +12,8 @@ export interface MountOptions {
   cols?: number;
   rows?: number;
   view?: number;
+  /** The agent shown when `view` is VIEW.agent. */
+  agentId?: string;
   api?: FakeClient;
   toastMs?: Partial<Record<ToastKind, number>>;
   onQuit?: () => void;
@@ -41,6 +43,7 @@ export async function mount(opts: MountOptions = {}) {
       branch="main"
       size={{ columns: cols, rows }}
       initialView={opts.view ?? VIEW.home}
+      {...(opts.agentId || opts.view === VIEW.agent ? { initialAgentId: opts.agentId ?? "a2" } : {})}
       {...(opts.toastMs ? { toastMs: opts.toastMs } : {})}
       {...(opts.onQuit ? { onQuit: opts.onQuit } : {})}
       {...(opts.offlineAfterMs !== undefined ? { offlineAfterMs: opts.offlineAfterMs } : {})}
@@ -74,3 +77,7 @@ export const ctrl = (h: Harness, letter: string) => h.send(String.fromCharCode(l
 export const lines = (h: Harness) => h.frame().split("\n");
 /** The hint line: the last non-empty row. */
 export const hints = (h: Harness) => lines(h).filter((l) => l.trim().length > 0).at(-1) ?? "";
+
+/** The frame without the sidebar: every body row loses everything up to and including the divider. Rows without a divider stay. */
+export const paneLines = (h: Harness) => lines(h).map((l) => (l.includes("│") && !/^[─-]+$/.test(l) ? l.slice(l.indexOf("│") + 1) : l));
+export const pane = (h: Harness) => paneLines(h).join("\n");

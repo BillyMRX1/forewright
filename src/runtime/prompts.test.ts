@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { tempDir } from "../core/test-helpers.js";
-import { buildWorkerPrompt, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
+import { buildWorkerPrompt, ctoSystemPrompt, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
 import type { Agent, Task } from "../core/store.js";
 
 test("instruction files: Claude gets CLAUDE.md and AGENTS.md, Codex only CLAUDE.md when there is no AGENTS.md, each capped at 20 KB and de-duplicated", () => {
@@ -49,4 +49,10 @@ test("worker prompt carries the task, requirements, verify commands, handoff and
   const system = workerSystemPrompt();
   assert.match(system, /submit_work/);
   assert.match(system, /never push|Never push/i);
+});
+
+test("CTO prompt says reviews are built in and review-only tasks must not be created", () => {
+  const p = ctoSystemPrompt("Ada");
+  assert.match(p, /Reviews are built into every task/);
+  assert.match(p, /Never create tasks only to review or test existing work/);
 });

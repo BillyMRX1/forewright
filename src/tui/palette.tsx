@@ -55,11 +55,12 @@ export function buildEntries(tasks: Task[], agents: TeamMember[], decisions: Dec
   act("quit", "Quit", "ctrl+c");
   for (const c of opts.channels ?? []) {
     if (c.channel === "cto") continue;
-    entries.push({ id: `chat:${channelKey(c)}`, kind: "chat", label: `Message: ${oneLine(c.label)}`, hint: c.channel === "project" ? "/chat" : c.channel === "task" ? "task thread" : "direct", target: { view: VIEW.cto, channelKey: channelKey(c) } });
+    const target: Omit<JumpTarget, "nonce"> = c.channel === "direct" && c.agentId ? { view: VIEW.agent, agentId: c.agentId, focus: "input" } : { view: VIEW.chat, channelKey: channelKey(c) };
+    entries.push({ id: `chat:${channelKey(c)}`, kind: "chat", label: `Message: ${oneLine(c.label)}`, hint: c.channel === "project" ? "/chat" : c.channel === "task" ? "task thread" : "direct", target });
   }
   for (const d of decisions) if (d.status === "open") entries.push({ id: `decision:${d.id}`, kind: "decision", label: `Decision: ${oneLine(d.title)}`, target: { view: VIEW.inbox, decisionId: d.id } });
   for (const t of tasks) entries.push({ id: `task:${t.id}`, kind: "task", label: `${t.shortId} ${oneLine(t.title)}`, target: { view: VIEW.tasks, taskId: t.id } });
-  for (const a of agents) if (a.lifecycle !== "retired") entries.push({ id: `agent:${a.id}`, kind: "agent", label: `${oneLine(a.name)} (${a.role})`, hint: "worker details and editing", target: { view: VIEW.home, agentId: a.id } });
+  for (const a of agents) if (a.lifecycle !== "retired") entries.push({ id: `agent:${a.id}`, kind: "agent", label: `${oneLine(a.name)} (${a.role})`, hint: "live session, messages and editing", target: { view: a.role === "cto" ? VIEW.cto : VIEW.agent, agentId: a.id } });
   return entries;
 }
 

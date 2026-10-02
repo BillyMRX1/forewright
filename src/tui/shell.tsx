@@ -1,8 +1,8 @@
-// The frame around the screens: the top bar (project, branch, numbered tabs with badges, status pills) and the notice card.
+// The frame around the screens: the slim top bar (project, branch, the open entry, status pills) and the notice card.
 
 import { Box, Text } from "ink";
 import type { Seg } from "./components.js";
-import { TAB_COUNT, VIEW, VIEW_NAMES, clip, fit, oneLine, wrapText } from "./format.js";
+import { clip, fit, oneLine, wrapText } from "./format.js";
 import { sanitizeTerminal } from "../core/safety.js";
 import { borderStyle, palette, sym } from "./theme.js";
 import type { Toast } from "./toasts.js";
@@ -15,56 +15,30 @@ function len(text: string): number {
   return [...text].length;
 }
 
-export interface Badges {
-  /** Tasks being worked on. */
-  tasks: number;
-  /** Decisions waiting for you, and a PRD waiting for approval. */
-  inbox: number;
-}
-
-/** The count or mark shown after a tab name, and the color it gets. Yellow is for things that need you; a working count is dim. */
-function badgeOf(view: number, b: Badges): { text: string; color?: string; dim?: boolean } | null {
-  if (view === VIEW.tasks && b.tasks > 0) return { text: String(b.tasks), dim: true };
-  if (view === VIEW.inbox && b.inbox > 0) return { text: String(b.inbox), color: palette.attention };
-  return null;
-}
-
-function tabSegs(view: number, badges: Badges, currentOnly: boolean): Seg[] {
-  const segs: Seg[] = [];
-  const indexes = currentOnly ? [Math.min(view, TAB_COUNT - 1)] : Array.from({ length: TAB_COUNT }, (_, i) => i);
-  indexes.forEach((i, k) => {
-    if (k > 0) segs.push({ text: "   " });
-    const on = i === view;
-    segs.push({ text: `${i + 1} ${VIEW_NAMES[i]}`, ...(on ? { bold: true } : {}) });
-    const badge = badgeOf(i, badges);
-    if (badge) segs.push({ text: ` ${badge.text}`, ...(badge.color ? { color: badge.color, bold: true } : {}), ...(badge.dim ? { dim: true } : {}) });
-  });
-  if (currentOnly) {
-    segs.push({ text: "  tab", dim: true });
-    if (badges.inbox > 0) segs.push({ text: `  ! ${badges.inbox}`, color: palette.attention, bold: true });
-  }
-  return segs;
-}
-
 const total = (segs: Seg[]) => segs.reduce((n, s) => n + len(s.text), 0);
 
-/** The top line: project and branch on the left, the numbered tabs in the middle, PAUSED and the connection on the right. Tab names are never abbreviated: when they do not fit, only the current tab is shown, with a `tab` hint. */
+/** The top line: project and branch on the left, the open sidebar entry in the middle (with `esc menu` when the sidebar is hidden), PAUSED and the connection on the right. */
 export function TopBar({
   width,
   project,
   branch,
   conn,
   paused,
-  view,
-  badges,
+  title,
+  menuHint,
+  need,
 }: {
   width: number;
   project: string;
   branch: string | null;
   conn: ConnView;
   paused: boolean;
-  view: number;
-  badges: Badges;
+  /** Name of the open sidebar entry. */
+  title: string;
+  /** True when the sidebar is not on screen, so the bar says how to reach it. */
+  menuHint: boolean;
+  /** Things waiting for you, shown next to the title when the sidebar is hidden. */
+  need: number;
 }) {
   const name = oneLine(project);
   const b = branch ? oneLine(branch) : null;
@@ -81,22 +55,25 @@ export function TopBar({
     [{ text: clip(name, 8), bold: true }],
     [],
   ];
-  const settings = view === VIEW.settings;
-  const middles: Seg[][] = settings ? [[{ text: "Settings", bold: true }, { text: "   esc close", dim: true }]] : [tabSegs(view, badges, false), tabSegs(view, badges, true)];
+  const t = oneLine(title);
+  const attention: Seg[] = need > 0 ? [{ text: `  ! ${need}`, color: palette.attention, bold: true }] : [];
+  const middles: Seg[][] = menuHint
+    ? [[{ text: t, bold: true }, { text: "  esc menu", dim: true }, ...attention], [{ text: t, bold: true }, ...attention], [{ text: t, bold: true }]]
+    : [[{ text: t, bold: true }], []];
   let pick: { left: Seg[]; mid: Seg[]; right: Seg[] } | null = null;
-  // Preference: the tabs whole, then the connection in words (never a bare colored dot), then the project, then the branch.
+  // Preference: the title whole, then the connection in words (never a bare colored dot), then the project, then the branch.
   outer: for (const right of rightVariants) {
     for (const mid of middles) {
       for (const left of leftVariants(24)) {
-        const need = 1 + total(left) + (left.length > 0 ? 2 : 0) + total(mid) + 2 + total(right) + 1;
-        if (need <= width) {
+        const need2 = 1 + total(left) + (left.length > 0 ? 2 : 0) + total(mid) + 2 + total(right) + 1;
+        if (need2 <= width) {
           pick = { left, mid, right };
           break outer;
         }
       }
     }
   }
-  if (pick === null) pick = { left: [], mid: [{ text: clip(settings ? "Settings" : `${view + 1} ${VIEW_NAMES[view]}`, Math.max(0, width - 14)), bold: true }], right: rightVariants[1]! };
+  if (pick === null) pick = { left: [], mid: [{ text: clip(t, Math.max(0, width - 14)), bold: true }], right: rightVariants[1]! };
   const used = 1 + total(pick.left) + total(pick.mid) + total(pick.right) + 1;
   const free = Math.max(2, width - used);
   const gap1 = pick.left.length > 0 ? Math.max(2, Math.floor(free / 2)) : Math.floor(free / 2);

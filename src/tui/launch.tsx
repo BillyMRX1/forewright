@@ -7,6 +7,18 @@ import { ForewrightClient, ensureDaemon } from "./client.js";
 import { App } from "./app.js";
 import { SetupWizard } from "./setup.js";
 import type { ProjectOpenResult } from "../runtime/protocol.js";
+import { execFileSync } from "node:child_process";
+import { hasCommitsOf } from "./compat.js";
+
+/** Whether a git repo has any commit yet; undefined when git cannot tell (not a repo, git missing). */
+function repoHasCommits(dir: string): boolean | undefined {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: dir, stdio: "ignore", windowsHide: true });
+    return true;
+  } catch (err) {
+    return (err as { status?: number }).status === 1 ? false : undefined;
+  }
+}
 
 const ALT_ON = "\x1b[?1049h";
 const ALT_OFF = "\x1b[?1049l";
@@ -15,6 +27,7 @@ function SetupScreen({
   client,
   root,
   isGit,
+  hasCommits,
   projectId,
   create,
   onDone,
@@ -22,6 +35,7 @@ function SetupScreen({
   client: ForewrightClient;
   root: string;
   isGit: boolean;
+  hasCommits: boolean | undefined;
   projectId: string | null;
   create?: () => Promise<string>;
   onDone: (finished: boolean) => void;
@@ -33,6 +47,7 @@ function SetupScreen({
       projectId={projectId}
       root={root}
       isGit={isGit}
+      {...(hasCommits !== undefined ? { hasCommits } : {})}
       width={win.columns || 80}
       height={win.rows || 24}
       standalone
@@ -44,7 +59,7 @@ function SetupScreen({
 }
 
 /** Runs the setup wizard on its own screen (the folder has no workspace yet). Resolves true when it was finished. */
-async function runSetup(client: ForewrightClient, root: string, isGit: boolean, create: () => Promise<string>): Promise<boolean> {
+async function runSetup(client: ForewrightClient, root: string, isGit: boolean, hasCommits: boolean | undefined, create: () => Promise<string>): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let answered = false;
     const app = render(
@@ -52,6 +67,7 @@ async function runSetup(client: ForewrightClient, root: string, isGit: boolean, 
         client={client}
         root={root}
         isGit={isGit}
+        hasCommits={hasCommits}
         projectId={null}
         create={create}
         onDone={(finished) => {
@@ -85,7 +101,7 @@ export async function launchTui({ cwd }: { cwd: string }): Promise<void> {
     try {
       if (open.status === "none") {
         // A new folder: the setup wizard starts with the welcome page and creates the workspace itself.
-        const finished = await runSetup(client, open.suggestedRoot, open.isGit, async () => {
+        const finished = await runSetup(client, open.suggestedRoot, open.isGit, hasCommitsOf(open) ?? repoHasCommits(open.suggestedRoot), async () => {
           created = await client.call("projects.init", { cwd });
           if (created.status !== "found") throw new ForewrightError("project_open_failed", "The Forewright service could not create a workspace in this folder.", { cwd });
           return created.projectId;

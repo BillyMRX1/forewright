@@ -36,7 +36,7 @@ describe("key table", () => {
   });
 
   it("bare letters and digits are only bound where no text box has focus", () => {
-    const idle = new Set(["idle", "home", "home.worker", "cto", "cto.input.empty", "tasks", "tasks.detail", "tasks.detail.final", "inbox", "inbox.options", "inbox.prd", "settings", "settings.fallback", "prd", "log", "help", "confirm"]);
+    const idle = new Set(["idle", "sidebar", "home", "home.worker.edit", "cto", "cto.input.empty", "chat", "chat.input.empty", "agent", "agent.input.empty", "tasks", "tasks.detail", "tasks.detail.final", "inbox", "inbox.options", "inbox.prd", "settings", "settings.fallback", "prd", "log", "help", "confirm"]);
     for (const b of BINDINGS) {
       if (b.keys.some((k) => /^[a-zA-Z0-9]$/.test(k))) assert.ok(idle.has(b.scope), `${b.id} binds a bare letter in scope ${b.scope}, which has a text box`);
     }

@@ -9,7 +9,7 @@ export type ActionId =
   | "go.tasks"
   | "go.inbox"
   | "go.settings"
-  | "chat"
+  | "go.chat"
   | "approve"
   | "prd"
   | "pause"
@@ -28,6 +28,7 @@ export const VIEW_ACTIONS: Array<{ id: ActionId; view: number }> = [
   { id: "go.tasks", view: VIEW.tasks },
   { id: "go.inbox", view: VIEW.inbox },
   { id: "go.settings", view: VIEW.settings },
+  { id: "go.chat", view: VIEW.chat },
 ];
 
 export function viewOfAction(id: ActionId): number | null {
@@ -48,14 +49,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "stop", description: "stop the current run (asks first)", action: "stop" },
   { name: "inbox", description: "open the Inbox", action: "go.inbox" },
   { name: "tasks", description: "open Tasks", action: "go.tasks" },
-  { name: "team", description: "open Home, where the workers are", action: "go.home" },
+  { name: "team", description: "open the Team chat, where you talk to everyone", action: "go.chat" },
   { name: "settings", description: "open Settings", action: "go.settings" },
   { name: "help", description: "show every key and command", action: "help" },
   { name: "setup", description: "run the setup again: tools, CTO, workers, limits, control", action: "setup" },
-  { name: "home", description: "open Home", action: "go.home" },
-  { name: "overview", description: "open Home (the overview)", action: "go.home" },
+  { name: "home", description: "open the Overview", action: "go.home" },
+  { name: "overview", description: "open the Overview: what needs you, progress, latest events", action: "go.home" },
   { name: "cto", description: "open the CTO conversation", action: "go.cto" },
-  { name: "chat", description: "talk to the project channel (change recipient with tab)", action: "chat" },
+  { name: "chat", description: "open the Team chat (messages go to everyone, @name sends to one agent)", action: "go.chat" },
   { name: "evidence", description: "open Tasks; a task's Checks and Diff tabs hold its evidence", action: "go.tasks" },
   { name: "log", description: "read the raw log of the current run", action: "log" },
   { name: "terminate", description: "terminate the team: pause, stop every run, retire the workers (asks first)", action: "terminate" },

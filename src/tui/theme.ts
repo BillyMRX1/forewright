@@ -157,3 +157,16 @@ export const TASK_STATE_COLOR: Record<TaskState, string | undefined> = {
 export function dot(): string {
   return asciiMode() ? "-" : "·";
 }
+
+/**
+ * Sidebar state colors, after herdr's palette: blocked and needs-you red, working yellow, done (not yet looked at) cyan,
+ * idle green but dim, a usage-limit wait peach-like yellow. The glyph and the word repeat the state, so color is never alone.
+ */
+export const SIDEBAR_COLOR: Record<DisplayStatus, { color: string; dim?: boolean }> = {
+  needs_you: { color: "red" },
+  blocked: { color: "red" },
+  done: { color: "cyan" },
+  working: { color: "yellow" },
+  idle: { color: "green", dim: true },
+  waiting: { color: "yellow", dim: true },
+};

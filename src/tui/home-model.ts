@@ -178,6 +178,8 @@ export function describeEvent(ev: ForewrightEvent, ctx: NameLookup): string | nu
       return `${p["role"] === "cto" ? "CTO" : agentName(p["agentId"])} is back on ${engineLabel(str(p["engine"], "its own engine"))}`;
     case "engine.waiting":
       return `${p["role"] === "cto" ? "CTO" : agentName(p["agentId"])} waits for the ${engineLabel(str(p["engine"], "engine"))} limit until ${untilText(typeof p["until"] === "string" ? p["until"] : null)}`;
+    case "cto.rate_limited":
+      return `The CTO hit its wakeup limit and is paused until ${untilText(typeof p["until"] === "string" ? p["until"] : null)}`;
     case "message.posted":
       return p["channel"] === "cto" && ev.actor.startsWith("agent:") ? "CTO replied" : null;
     default:

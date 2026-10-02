@@ -81,6 +81,7 @@ export interface Methods {
   // projects
   "projects.open": { params: { cwd: string }; result: ProjectOpenResult };
   "projects.init": { params: { cwd: string; name?: string }; result: ProjectOpenResult };
+  "projects.initialCommit": { params: { projectId: string }; result: { created: boolean; message: string } };
 
   // read models
   "state.overview": { params: { projectId: string }; result: Overview };
@@ -100,7 +101,7 @@ export interface Methods {
   "state.prd": { params: { projectId: string; revision?: number }; result: { doc: RequirementDoc | null; approved: RequirementDoc | null; all: Array<Pick<RequirementDoc, "revision" | "status" | "title" | "createdAt">> } };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
-  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
+  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
   "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
   "evidence.diff": { params: { projectId: string; taskId: string }; result: { base: string | null; head: string | null; diff: string; truncated: boolean } };
   "runs.log": { params: { projectId: string; runId: string; tailLines?: number }; result: { lines: string[]; path: string } };

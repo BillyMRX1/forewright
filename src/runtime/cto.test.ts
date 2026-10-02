@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeAdapter } from "../providers/fake.js";
-import { call, ctoRequests, isCto, rule, seedPrd, settle, sleep, startHarness, waitFor } from "./test-harness.js";
+import { call, ctoRequests, eventsOf, isCto, rule, seedPrd, settle, sleep, startHarness, waitFor } from "./test-harness.js";
 
 test("a completion notice that arrives while the CTO is busy is kept and handled once in the next turn, even if posted twice", async () => {
   const adapter = new FakeAdapter({
@@ -39,7 +39,7 @@ test("a completion notice that arrives while the CTO is busy is kept and handled
   }
 });
 
-test("CTO wakeups are rate-limited: one inbox question is created and no more turns start", async () => {
+test("CTO wakeups are rate-limited: no inbox decision, one cto.rate_limited event per window, messages stay pending", async () => {
   const h = await startHarness();
   try {
     h.rt.store.setSetting("maxCtoWakeupsPerHour", 1, { kind: "human" });
@@ -47,12 +47,63 @@ test("CTO wakeups are rate-limited: one inbox question is created and no more tu
     await waitFor(() => ctoRequests(h).length === 1, "the first turn");
     await settle(h);
     await h.client.request("cto.send", { projectId: h.projectId, body: "two" });
-    await waitFor(() => h.rt.store.listDecisions({ status: "open" }).some((d) => d.title === "CTO wakeups are rate-limited"), "the rate limit question");
+    await waitFor(() => eventsOf(h, "cto.rate_limited").length === 1, "the rate limit event");
     await h.client.request("cto.send", { projectId: h.projectId, body: "three" });
     await sleep(300);
     assert.equal(ctoRequests(h).length, 1);
-    assert.equal(h.rt.store.listDecisions({ status: "open" }).filter((d) => d.title === "CTO wakeups are rate-limited").length, 1, "the question is created once");
+    assert.equal(eventsOf(h, "cto.rate_limited").length, 1, "the event is emitted once per window");
+    assert.match(String(eventsOf(h, "cto.rate_limited")[0]!.payload["until"]), /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(h.rt.store.listDecisions().length, 0, "no inbox decision is created");
     assert.equal(h.rt.store.pendingDeliveries(h.rt.ctoAgent().id).length, 2, "messages wait, nothing is lost");
+  } finally {
+    await h.close();
+  }
+});
+
+test("routine notices do not start a CTO turn; they are delivered exactly once in the next triggered turn", async () => {
+  const h = await startHarness();
+  try {
+    const cto = h.rt.ctoAgent();
+    h.rt.notifyCto("notice:run_a:work_done", "ROUTINE-WORK-DONE");
+    h.rt.notifyCto("notice:run_b:review", "ROUTINE-REVIEW-APPROVED");
+    h.rt.notifyCto("integrated:task_a:abc", "ROUTINE-INTEGRATED");
+    await sleep(400);
+    assert.equal(ctoRequests(h).length, 0, "routine notices alone start nothing");
+    assert.equal(h.rt.store.pendingDeliveries(cto.id).length, 3);
+
+    await h.client.request("cto.send", { projectId: h.projectId, body: "REAL-TRIGGER" });
+    await waitFor(() => ctoRequests(h).length === 1, "a turn started by the human message");
+    await settle(h);
+    const prompt = ctoRequests(h)[0]!.prompt;
+    for (const m of ["ROUTINE-WORK-DONE", "ROUTINE-REVIEW-APPROVED", "ROUTINE-INTEGRATED", "REAL-TRIGGER"]) assert.equal(prompt.split(m).length - 1, 1, `${m} appears once`);
+    await sleep(300);
+    assert.equal(ctoRequests(h).length, 1);
+    assert.equal(h.rt.store.pendingDeliveries(cto.id).length, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a failure notice wakes the CTO and carries earlier routine notices along", async () => {
+  const h = await startHarness();
+  try {
+    h.rt.notifyCto("notice:run_a:work_done", "ROUTINE-EARLIER");
+    await sleep(200);
+    assert.equal(ctoRequests(h).length, 0);
+    h.rt.notifyCto("repairs-exhausted:task_a:3", "FAILURE-REPAIR-LIMIT");
+    await waitFor(() => ctoRequests(h).length === 1, "the failure to wake the CTO");
+    await settle(h);
+    const prompt = ctoRequests(h)[0]!.prompt;
+    assert.ok(prompt.includes("FAILURE-REPAIR-LIMIT") && prompt.includes("ROUTINE-EARLIER"));
+  } finally {
+    await h.close();
+  }
+});
+
+test("the default CTO wakeup limit is 60 an hour", async () => {
+  const h = await startHarness();
+  try {
+    assert.equal(h.rt.store.getSettings().maxCtoWakeupsPerHour, 60);
   } finally {
     await h.close();
   }
