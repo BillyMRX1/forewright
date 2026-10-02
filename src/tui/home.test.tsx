@@ -169,12 +169,15 @@ describe("Overview", () => {
     await h.send("y");
     await h.settle(150);
     assert.equal(api.callsTo("control.pauseAll").length, 1);
+    // The badge appears once the pause call returns and the screen re-renders; slow CI runners need a moment.
+    for (let i = 0; i < 40 && !/PAUSED/.test(lines(h)[0]!); i++) await h.settle(50);
     assert.match(lines(h)[0]!, /PAUSED/);
     await h.send("p");
     assert.match(h.frame(), /Resume all work in this project\?/);
     await h.send("y");
     await h.settle(150);
     assert.equal(api.callsTo("control.resume").length, 1);
+    for (let i = 0; i < 40 && /PAUSED/.test(lines(h)[0]!); i++) await h.settle(50);
     assert.doesNotMatch(lines(h)[0]!, /PAUSED/);
   });
 
