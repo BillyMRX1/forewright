@@ -11,9 +11,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/cli/main.js', 0o755)\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test --test-concurrency=1 --test-timeout=300000 \"dist/**/*.test.js\"",
+    "test": "pnpm build && node --test --test-concurrency=1 --test-timeout=300000 \"dist/**/*.test.js\"",
     "start": "node dist/cli/main.js"
   },
   "dependencies": {
