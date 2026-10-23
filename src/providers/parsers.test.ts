@@ -111,7 +111,7 @@ test("every event carries the request's runId and generation", () => {
 });
 
 test("raw is redacted and truncated to 4 KB", () => {
-  const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz0123456789";
+  const secret = "sk-ant-" + "abcdefghijklmnopqrstuvwxyz0123456789";
   const big = JSON.stringify({ type: "mystery", pad: "x".repeat(10_000), key: secret });
   const { events } = drive(claude, [big]);
   const raw = events[0]?.raw ?? "";

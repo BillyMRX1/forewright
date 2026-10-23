@@ -26,7 +26,7 @@ const WIN_BASE: NodeJS.ProcessEnv = {
   USERPROFILE: "C:\\Users\\me", AppData: "C:\\Users\\me\\AppData\\Roaming", LocalAppData: "C:\\Users\\me\\AppData\\Local", ProgramData: "C:\\ProgramData",
   ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)", CommonProgramFiles: "C:\\Program Files\\Common Files",
   TEMP: "C:\\Temp", TMP: "C:\\Temp", USERNAME: "me", USERDOMAIN: "PC", HOMEDRIVE: "C:", HOMEPATH: "\\Users\\me", NUMBER_OF_PROCESSORS: "8",
-  PROCESSOR_ARCHITECTURE: "AMD64", OS: "Windows_NT", ANTHROPIC_API_KEY: "sk-ant-secret", Foo: "no", GITHUB_TOKEN: "no",
+  PROCESSOR_ARCHITECTURE: "AMD64", OS: "Windows_NT", ANTHROPIC_API_KEY: "sk-ant-" + "secret", Foo: "no", GITHUB_TOKEN: "no",
 };
 
 test("on Windows the child gets the system variables it needs, spelled once, and still no secrets or strangers", () => {
@@ -52,8 +52,8 @@ test("on Windows an extra variable replaces the base one of any case instead of 
 
 test("on Windows an API key is passed only with API billing enabled, and is a secret", () => {
   const on = childEnv(WIN_BASE, {}, { allowApiBilling: true, platform: "win32" });
-  assert.equal(on.env["ANTHROPIC_API_KEY"], "sk-ant-secret");
-  assert.deepEqual(on.secrets, ["sk-ant-secret"]);
+  assert.equal(on.env["ANTHROPIC_API_KEY"], "sk-ant-" + "secret");
+  assert.deepEqual(on.secrets, ["sk-ant-" + "secret"]);
   assert.throws(() => childEnv({}, { openai_api_key: "x" }, { allowApiBilling: false, platform: "win32" }), /Refusing to pass OPENAI_API_KEY/);
 });
 

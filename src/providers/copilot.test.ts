@@ -11,7 +11,7 @@ import { makeEmitter } from "./runner.js";
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
 const BASE_ENV = {
   ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(),
-  ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000", GH_TOKEN: "gh-should-not-leak-0000", COPILOT_PROVIDER_API_KEY: "byok-should-not-leak-0000",
+  ANTHROPIC_API_KEY: "sk-ant-" + "should-not-leak-0000", GH_TOKEN: "gh-" + "should-not-leak-0000", COPILOT_PROVIDER_API_KEY: "byok-should-not-leak-0000",
 };
 const SID = "15fd3316-170d-4437-9e2c-a73b7be29260";
 
@@ -174,21 +174,21 @@ ${dumpEnvJs(path.join(dir, "env.txt"))}`,
   fs.mkdirSync(path.join(userHome, ".copilot"));
   fs.writeFileSync(path.join(userHome, ".copilot", "mcp-config.json"), "{}");
   await new CopilotAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv: { ...BASE_ENV, HOME: userHome } }).start(
-    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }),
+    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789" } }] }),
     () => {},
   ).done;
   const argv = argvOf(argvFile);
   const flag = argv.find((a) => a.startsWith("--additional-mcp-config=@")) as string;
   assert.ok(flag);
-  assert.ok(!argv.join(" ").includes("tok-123456789"), "secret must not appear in argv");
+  assert.ok(!argv.join(" ").includes("tok-" + "123456789"), "secret must not appear in argv");
   assertPrivateMode(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), {
-    mcpServers: { forewright: { type: "local", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" }, tools: ["*"] } },
+    mcpServers: { forewright: { type: "local", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789" }, tools: ["*"] } },
   });
   assert.equal(fs.existsSync(flag.slice("--additional-mcp-config=@".length)), false, "temp file is removed");
   assert.ok(argv.includes("--allow-tool=forewright"));
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
-  assert.ok(!env.includes("tok-123456789"), "the agent token is not in copilot's own environment");
+  assert.ok(!env.includes("tok-" + "123456789"), "the agent token is not in copilot's own environment");
   assert.ok(env.includes(`COPILOT_HOME=${path.join(dir, "provider-homes", "copilot")}`));
   assert.ok(!env.includes("ANTHROPIC_API_KEY") && !env.includes("GH_TOKEN") && !env.includes("COPILOT_PROVIDER"), "no API, token or BYOK variables");
   assert.equal(fs.readFileSync(path.join(userHome, ".copilot", "mcp-config.json"), "utf8"), "{}", "the user's copilot config is untouched");

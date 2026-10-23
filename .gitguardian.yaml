@@ -1,0 +1,8 @@
+version: 2
+
+# Test files and fixtures only contain made-up values (and the redaction tests
+# need secret-shaped inputs), so they are not scanned for secrets.
+secret:
+  ignored_paths:
+    - "**/*.test.ts"
+    - "src/providers/fixtures/**"

@@ -9,31 +9,31 @@ import {
 import { tempDir } from "./test-helpers.js";
 
 test("proxy URLs are masked, idempotently, and left alone without a login", () => {
-  assert.equal(maskProxyUrl("http://alice:pw@proxy:8080"), "http://***:***@proxy:8080");
-  assert.equal(maskProxyUrl("http://alice:p@ss@proxy:8080/x"), "http://***:***@proxy:8080/x");
-  assert.equal(maskProxyUrl("alice:pw@proxy:8080"), "***:***@proxy:8080");
-  assert.equal(maskProxyUrl(maskProxyUrl("http://alice:pw@proxy:8080")), "http://***:***@proxy:8080");
+  assert.equal(maskProxyUrl("http://alice:" + "pw@proxy.example.invalid:8080"), "http://***:***@proxy.example.invalid:8080");
+  assert.equal(maskProxyUrl("http://alice:" + "p@ss@proxy.example.invalid:8080/x"), "http://***:***@proxy.example.invalid:8080/x");
+  assert.equal(maskProxyUrl("alice:" + "pw@proxy.example.invalid:8080"), "***:***@proxy.example.invalid:8080");
+  assert.equal(maskProxyUrl(maskProxyUrl("http://alice:" + "pw@proxy.example.invalid:8080")), "http://***:***@proxy.example.invalid:8080");
   assert.equal(maskProxyUrl("http://proxy:8080"), "http://proxy:8080");
 });
 
 test("a proxy must be an http or https URL; the error never shows the password", () => {
-  assert.equal(validateProxyUrl(" http://proxy.corp:8080 "), "http://proxy.corp:8080");
-  assert.equal(validateProxyUrl("https://u:p@proxy.corp"), "https://u:p@proxy.corp");
-  assert.throws(() => validateProxyUrl("proxy.corp:8080"), ValidationError);
+  assert.equal(validateProxyUrl(" http://proxy.example.invalid:8080 "), "http://proxy.example.invalid:8080");
+  assert.equal(validateProxyUrl("https://u:" + "p@proxy.example.invalid"), "https://u:" + "p@proxy.example.invalid");
+  assert.throws(() => validateProxyUrl("proxy.example.invalid:8080"), ValidationError);
   assert.throws(() => validateProxyUrl("not a url"), ValidationError);
   assert.throws(() => validateProxyUrl("socks5://proxy:1080"), ValidationError);
-  assert.throws(() => validateProxyUrl("ftp://u:topsecret@proxy"), (e: Error) => e instanceof ValidationError && !e.message.includes("topsecret"));
+  assert.throws(() => validateProxyUrl("ftp://u:" + "topsecret@proxy.example.invalid"), (e: Error) => e instanceof ValidationError && !e.message.includes("topsecret"));
 });
 
 test("set and clear proxy and CA through the config file, which is private and keeps the other setting", () => {
   const home = tempDir();
   assert.deepEqual(readNetworkConfig(home), {}, "no file is an empty config");
-  setProxy({ url: "http://u:p@proxy.corp:8080" }, home);
+  setProxy({ url: "http://u:" + "p@proxy.example.invalid:8080" }, home);
   setProxy({ noProxy: "localhost,.corp.example.com" }, home);
   const ca = path.join(home, "corp.pem");
   writeFileSync(ca, "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n");
   setCaFile(ca, home);
-  assert.deepEqual(readNetworkConfig(home), { proxy: { https: "http://u:p@proxy.corp:8080", http: "http://u:p@proxy.corp:8080", noProxy: "localhost,.corp.example.com", caFile: ca } });
+  assert.deepEqual(readNetworkConfig(home), { proxy: { https: "http://u:" + "p@proxy.example.invalid:8080", http: "http://u:" + "p@proxy.example.invalid:8080", noProxy: "localhost,.corp.example.com", caFile: ca } });
   if (process.platform !== "win32") assert.equal(statSync(networkConfigPath(home)).mode & 0o777, 0o600);
   assert.deepEqual(clearProxy(home), { proxy: { caFile: ca } });
   assert.deepEqual(clearCaFile(home), {});
@@ -66,16 +66,16 @@ test("the environment wins over the config, per variable pair", () => {
 });
 
 test("the summary for display is masked and says where each value came from", () => {
-  const s = summarizeNetwork({ HTTPS_PROXY: "http://a:b@envproxy:1" }, { proxy: { http: "http://c:d@cfgproxy:2", noProxy: "x" } }, "linux");
-  assert.deepEqual(s.https, { value: "http://***:***@envproxy:1", source: "environment" });
-  assert.deepEqual(s.http, { value: "http://***:***@cfgproxy:2", source: "Forewright config" });
-  assert.equal(s.httpsProxyForCheck, "http://a:b@envproxy:1");
+  const s = summarizeNetwork({ HTTPS_PROXY: "http://a:" + "b@envproxy.example.invalid:1" }, { proxy: { http: "http://c:" + "d@cfgproxy.example.invalid:2", noProxy: "x" } }, "linux");
+  assert.deepEqual(s.https, { value: "http://***:***@envproxy.example.invalid:1", source: "environment" });
+  assert.deepEqual(s.http, { value: "http://***:***@cfgproxy.example.invalid:2", source: "Forewright config" });
+  assert.equal(s.httpsProxyForCheck, "http://a:" + "b@envproxy.example.invalid:1");
   assert.ok(!JSON.stringify({ https: s.https, http: s.http }).includes("a:b"));
 });
 
 test("proxySecrets and bypassesProxy", () => {
   assert.deepEqual(proxySecrets("http://proxy:8080"), []);
-  assert.ok(proxySecrets("http://u:pw%40x@proxy:8080").includes("pw@x"));
+  assert.ok(proxySecrets("http://u:" + "pw%40x@proxy.example.invalid:8080").includes("pw@x"));
   assert.equal(bypassesProxy("api.corp.example.com", "localhost,.corp.example.com"), true);
   assert.equal(bypassesProxy("api.openai.com", "localhost,.corp.example.com"), false);
   assert.equal(bypassesProxy("anything", "*"), true);

@@ -91,7 +91,7 @@ test("a proxy that answers 407 is reported as needing a login, and the login is 
     socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=x\r\nContent-Length: 0\r\n\r\n");
   });
   try {
-    const r = await checkReachable({ host: "api.example.test", proxy: `http://alice:pw@${proxy.url.slice("http://".length)}`, timeoutMs: 3000 });
+    const r = await checkReachable({ host: "api.example.test", proxy: `http://alice:${"pw"}@${proxy.url.slice("http://".length)}`, timeoutMs: 3000 });
     assert.equal(r.kind, "proxy_login");
     assert.equal(r.message, "blocked by the proxy (HTTP 407: proxy needs a login)");
     assert.equal(proxy.seen[0]?.headers["proxy-authorization"], `Basic ${Buffer.from("alice:pw").toString("base64")}`);

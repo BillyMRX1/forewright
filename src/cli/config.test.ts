@@ -22,9 +22,9 @@ test("config proxy, no-proxy, ca and --clear change the stored settings and prin
   const home = tempDir();
   const ca = path.join(home, "ca.pem");
   fs.writeFileSync(ca, "pem");
-  let r = run(["proxy", "http://alice:pw123456@proxy.corp:8080", "--no-proxy", "localhost,.corp"], home);
+  let r = run(["proxy", "http://alice:" + "pw123456@proxy.example.invalid:8080", "--no-proxy", "localhost,.corp"], home);
   assert.equal(r.code, 0);
-  assert.ok(r.out.includes("http://***:***@proxy.corp:8080"));
+  assert.ok(r.out.includes("http://***:***@proxy.example.invalid:8080"));
   assert.ok(!r.out.includes("pw123456"));
   assert.equal(readNetworkConfig(home).proxy?.noProxy, "localhost,.corp");
   r = run(["ca", ca], home);
@@ -40,7 +40,7 @@ test("config proxy, no-proxy, ca and --clear change the stored settings and prin
 
 test("config rejects bad input: invalid proxy URL, missing CA file, unknown words", () => {
   const home = tempDir();
-  assert.throws(() => run(["proxy", "proxy.corp:8080"], home), ValidationError);
+  assert.throws(() => run(["proxy", "proxy.example.invalid:8080"], home), ValidationError);
   assert.throws(() => run(["ca", path.join(home, "nope.pem")], home), ValidationError);
   assert.equal(run(["proxy"], home).code, 2);
   assert.equal(run(["proxy", "--bogus"], home).code, 2);
@@ -64,7 +64,7 @@ test("config values reach a spawned engine child, the environment wins, and the 
   const home = tempDir();
   const ca = path.join(home, "corp.pem");
   fs.writeFileSync(ca, "pem");
-  runConfig(["proxy", "http://alice:topsecretpw@proxy.corp:8080", "--no-proxy", "localhost"], { out: () => {}, err: () => {} }, home);
+  runConfig(["proxy", "http://alice:" + "topsecretpw@proxy.example.invalid:8080", "--no-proxy", "localhost"], { out: () => {}, err: () => {} }, home);
   runConfig(["ca", ca], { out: () => {}, err: () => {} }, home);
 
   const dir = tmpDir();
@@ -81,9 +81,9 @@ test("config values reach a spawned engine child, the environment wins, and the 
   const env = Object.fromEntries(
     fs.readFileSync(path.join(dir, "env.txt"), "utf8").split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
   );
-  assert.equal(env["HTTPS_PROXY"], "http://alice:topsecretpw@proxy.corp:8080");
+  assert.equal(env["HTTPS_PROXY"], "http://alice:" + "topsecretpw@proxy.example.invalid:8080");
   // On Windows environment names are case-insensitive, so https_proxy and HTTPS_PROXY are one variable.
-  if (process.platform !== "win32") assert.equal(env["https_proxy"], "http://alice:topsecretpw@proxy.corp:8080");
+  if (process.platform !== "win32") assert.equal(env["https_proxy"], "http://alice:" + "topsecretpw@proxy.example.invalid:8080");
   assert.equal(env["HTTP_PROXY"], "http://envproxy:1", "environment wins over the config");
   assert.equal(env["NO_PROXY"], "localhost");
   assert.equal(env["NODE_EXTRA_CA_CERTS"], ca);

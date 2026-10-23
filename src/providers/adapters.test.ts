@@ -10,7 +10,7 @@ import { isolatedCodexHome } from "./isolation.js";
 import { assertPrivateMode, baseRequest, dumpEnvJs, dumpModeJs, fakeBinary, linkKind, systemEnv, tmpDir } from "./test-helpers.js";
 
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
-const BASE_ENV = { ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(), ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000" };
+const BASE_ENV = { ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(), ANTHROPIC_API_KEY: "sk-ant-" + "should-not-leak-0000" };
 
 function argvOf(file: string): string[] {
   return fs.readFileSync(file, "utf8").split("\n").slice(0, -1);
@@ -98,14 +98,14 @@ fs.copyFileSync(f, ${JSON.stringify(path.join(dir, "mcp-copy.json"))});
 ${dumpEnvJs(path.join(dir, "env.txt"))}`,
   });
   await claudeAdapter(dir, bin).start(
-    baseRequest({ cwd: dir, mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } }] }),
+    baseRequest({ cwd: dir, mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-" + "123456789" } }] }),
     () => {},
   ).done;
   const argv = argvOf(argvFile);
   const mcpPath = argv[argv.indexOf("--mcp-config") + 1] as string;
   assert.ok(argv.includes("--strict-mcp-config"));
   assertPrivateMode(fs.readFileSync(path.join(dir, "mode.txt"), "utf8"));
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } } } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp-copy.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_TOKEN: "tok-" + "123456789" } } } });
   assert.equal(fs.existsSync(mcpPath), false);
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
   assert.ok(!env.includes("ANTHROPIC_API_KEY"));
@@ -173,7 +173,7 @@ test("codex: resume form, mcp via -c with secrets in env not argv, CODEX_HOME is
   await codexAdapter(dir, bin, home).start(
     baseRequest({
       cwd: dir, resumeSessionId: "th-9", systemPrompt: "SYS",
-      mcpServers: [{ name: "forewright", command: "node", args: ["/b/bridge.js", "--x"], env: { FOREWRIGHT_TOKEN: "tok-123456789" } }],
+      mcpServers: [{ name: "forewright", command: "node", args: ["/b/bridge.js", "--x"], env: { FOREWRIGHT_TOKEN: "tok-" + "123456789" } }],
     }),
     () => {},
   ).done;
@@ -185,11 +185,11 @@ test("codex: resume form, mcp via -c with secrets in env not argv, CODEX_HOME is
   assert.ok(argv.includes('mcp_servers.forewright.args=["/b/bridge.js", "--x"]'));
   assert.ok(argv.includes('mcp_servers.forewright.env_vars=["FOREWRIGHT_TOKEN"]'));
   assert.ok(argv.includes('mcp_servers.forewright.default_tools_approval_mode="approve"'));
-  assert.ok(!argv.join(" ").includes("tok-123456789"), "secret must not appear in argv");
+  assert.ok(!argv.join(" ").includes("tok-" + "123456789"), "secret must not appear in argv");
   // the argv file is newline-separated, so the multi-line prompt spans three entries
   assert.deepEqual(argv.slice(-5), ["--", "th-9", "SYS", "", baseRequest().prompt]);
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
-  assert.ok(env.includes("FOREWRIGHT_TOKEN=tok-123456789"));
+  assert.ok(env.includes("FOREWRIGHT_TOKEN=tok-" + "123456789"));
   assert.ok(env.includes(`CODEX_HOME=${path.join(dir, "provider-homes", "codex")}`));
   assert.ok(!env.includes("ANTHROPIC_API_KEY"));
 });

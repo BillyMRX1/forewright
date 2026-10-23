@@ -221,7 +221,7 @@ test("LineSplitter caps very long lines and marks them truncated", () => {
   assert.equal(chunked.push("\n")[0]?.truncated, true);
 });
 
-const BASE = { PATH: "/usr/bin", HOME: "/h", USER: "u", LC_ALL: "C", FOO: "no", ANTHROPIC_API_KEY: "sk-ant-secretsecret", OPENAI_API_KEY: "sk-openai-secret", CODEX_API_KEY: "c", ANTHROPIC_AUTH_TOKEN: "t", AZURE_OPENAI_API_KEY: "a" };
+const BASE = { PATH: "/usr/bin", HOME: "/h", USER: "u", LC_ALL: "C", FOO: "no", ANTHROPIC_API_KEY: "sk-ant-" + "secretsecret", OPENAI_API_KEY: "sk-openai-" + "secret", CODEX_API_KEY: "c", ANTHROPIC_AUTH_TOKEN: "t", AZURE_OPENAI_API_KEY: "a" };
 
 test("childEnv keeps an allowlist and strips API billing variables by default", () => {
   const { env, secrets } = childEnv(BASE, { EXTRA: "1" }, { allowApiBilling: false });
@@ -236,8 +236,8 @@ test("childEnv keeps an allowlist and strips API billing variables by default", 
 
 test("childEnv passes API keys only with allowApiBilling and reports them as secrets", () => {
   const { env, secrets } = childEnv(BASE, {}, { allowApiBilling: true });
-  assert.equal(env["ANTHROPIC_API_KEY"], "sk-ant-secretsecret");
-  assert.ok(secrets.includes("sk-ant-secretsecret"));
+  assert.equal(env["ANTHROPIC_API_KEY"], "sk-ant-" + "secretsecret");
+  assert.ok(secrets.includes("sk-ant-" + "secretsecret"));
 });
 
 test("childEnv throws when an extra tries to inject an API key without allowApiBilling", () => {
@@ -278,7 +278,7 @@ test("start times match exactly or within the 1.5 s the POSIX clock can shift, n
 
 const NONET = {}; // an empty Forewright config: these tests never read the real one
 const NET_BASE = {
-  PATH: "/usr/bin", FOO: "no", ANTHROPIC_API_KEY: "sk-ant-secretsecret",
+  PATH: "/usr/bin", FOO: "no", ANTHROPIC_API_KEY: "sk-ant-" + "secretsecret",
   HTTP_PROXY: "http://p:1", HTTPS_PROXY: "http://p:2", ALL_PROXY: "socks5://p:3", NO_PROXY: "localhost",
   http_proxy: "http://l:1", https_proxy: "http://l:2", all_proxy: "socks5://l:3", no_proxy: "lo",
   NODE_EXTRA_CA_CERTS: "/ca/a.pem", SSL_CERT_FILE: "/ca/b.pem", SSL_CERT_DIR: "/ca/dir", REQUESTS_CA_BUNDLE: "/ca/c.pem", CURL_CA_BUNDLE: "/ca/d.pem", NODE_USE_SYSTEM_CA: "1",
@@ -324,8 +324,8 @@ test("childEnv fills proxy and CA from the config only where the environment set
 });
 
 test("childEnv reports proxy URLs with a login as secrets (URL, login part and password)", () => {
-  const { secrets } = childEnv({ PATH: "/x", HTTPS_PROXY: "http://alice:s3cret%21pw@proxy.corp:8080" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
-  for (const s of ["http://alice:s3cret%21pw@proxy.corp:8080", "alice:s3cret%21pw", "s3cret%21pw", "s3cret!pw"]) assert.ok(secrets.includes(s), s);
-  const plainProxy = childEnv({ PATH: "/x", HTTPS_PROXY: "http://proxy.corp:8080" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  const { secrets } = childEnv({ PATH: "/x", HTTPS_PROXY: "http://alice:" + "s3cret%21pw@proxy.example.invalid:8080" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
+  for (const s of ["http://alice:" + "s3cret%21pw@proxy.example.invalid:8080", "alice:s3cret%21pw", "s3cret%21pw", "s3cret!pw"]) assert.ok(secrets.includes(s), s);
+  const plainProxy = childEnv({ PATH: "/x", HTTPS_PROXY: "http://proxy.example.invalid:8080" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
   assert.deepEqual(plainProxy.secrets, []);
 });

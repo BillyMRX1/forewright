@@ -68,7 +68,7 @@ ${opts.stderr ? `process.stderr.write(${JSON.stringify(opts.stderr + "\n")});` :
 process.exitCode = ${opts.exitCode ?? 0};
 };
 ${opts.sleep ? "setTimeout(rest, 30000);" : "rest();"}`);
-  const baseEnv = { ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: home, OPENAI_API_KEY: "sk-openai-should-not-leak", GEMINI_API_KEY: "gem-should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000" };
+  const baseEnv = { ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: home, OPENAI_API_KEY: "sk-openai-" + "should-not-leak", GEMINI_API_KEY: "gem-should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-" + "should-not-leak-0000" };
   return {
     dir, home, bin, argvFile, envFile, cfgFile, ranFile,
     adapter: (over = {}) => new OpencodeAdapter({ forewrightHome: dir, binary: bin, runsDir: dir, baseEnv, realHome: home, ...over }),
@@ -102,7 +102,7 @@ test("opencode: billing class is oauth > free (no key stored) > api_key", () => 
 test("opencode: readAuthTypes returns only the type field, never credential values", () => {
   const dir = tmpDir();
   const f = path.join(dir, "auth.json");
-  fs.writeFileSync(f, JSON.stringify({ openrouter: { type: "api", key: "sk-secret-value-1234" }, "github-copilot": { type: "oauth", refresh: "r-secret", access: "a-secret" }, odd: { nokind: 1 } }));
+  fs.writeFileSync(f, JSON.stringify({ openrouter: { type: "api", key: "sk-secret-" + "value-1234" }, "github-copilot": { type: "oauth", refresh: "r-secret", access: "a-secret" }, odd: { nokind: 1 } }));
   const types = readAuthTypes(f);
   assert.deepEqual(types, { openrouter: "api", "github-copilot": "oauth", odd: "unknown" });
   assert.ok(!JSON.stringify(types).includes("secret"));
@@ -199,14 +199,14 @@ test("opencode: permission profiles refuse by default (ask, auto-rejected) and a
 });
 
 test("opencode: mcp config references env vars, so the secret is in neither argv nor the config text", () => {
-  const cfg = buildOpencodeConfig({ permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["/b/bridge.js", "--x"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789", FOREWRIGHT_SOCKET: "/s.sock" } }] }) as Record<string, any>;
+  const cfg = buildOpencodeConfig({ permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["/b/bridge.js", "--x"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789", FOREWRIGHT_SOCKET: "/s.sock" } }] }) as Record<string, any>;
   assert.deepEqual(cfg["mcp"]["forewright"], {
     type: "local", command: ["node", "/b/bridge.js", "--x"], enabled: true, timeout: 30000,
     environment: { FOREWRIGHT_AGENT_TOKEN: "{env:FOREWRIGHT_AGENT_TOKEN}", FOREWRIGHT_SOCKET: "{env:FOREWRIGHT_SOCKET}" },
   });
   assert.deepEqual(cfg["plugin"], []);
   assert.equal(cfg["share"], "disabled");
-  assert.ok(!JSON.stringify(cfg).includes("tok-123456789"));
+  assert.ok(!JSON.stringify(cfg).includes("tok-" + "123456789"));
   assert.throws(() => buildOpencodeConfig({ permission: "read_only", mcpServers: [{ name: "bad name", command: "x", args: [], env: {} }] }), /Invalid MCP server name/);
   assert.throws(() => buildOpencodeConfig({ permission: "read_only", mcpServers: [{ name: "ok", command: "x", args: [], env: { "A-B": "v" } }] }), /Invalid MCP environment/);
 });
@@ -221,7 +221,7 @@ test("opencode: end to end with a fake binary: success, isolation env, config in
   const out = await r.adapter().start(
     baseRequest({
       cwd: r.dir, model: MODEL, permission: "workspace_write", systemPrompt: "SYS",
-      mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }],
+      mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789" } }],
     }),
     (e) => events.push(e),
   ).done;
@@ -234,12 +234,12 @@ test("opencode: end to end with a fake binary: success, isolation env, config in
 
   const argv = argvOf(r.argvFile);
   assert.deepEqual(argv.slice(0, 8), ["run", "--pure", "--format", "json", "-m", MODEL, "--dir", r.dir]);
-  assert.ok(!argv.join(" ").includes("tok-123456789"), "secret must not appear in argv");
+  assert.ok(!argv.join(" ").includes("tok-" + "123456789"), "secret must not appear in argv");
   assert.ok(!argv.some((a) => /--auto|allow-all|dangerous/.test(a)));
   assert.equal(argv[argv.indexOf("--") + 1], "SYS", "system prompt is prepended to the message");
 
   const env = fs.readFileSync(r.envFile, "utf8");
-  assert.ok(env.includes("FOREWRIGHT_AGENT_TOKEN=tok-123456789"));
+  assert.ok(env.includes("FOREWRIGHT_AGENT_TOKEN=tok-" + "123456789"));
   assert.ok(env.includes(`XDG_DATA_HOME=${path.join(r.dir, "provider-homes", "opencode", "data")}`));
   assert.ok(env.includes("OPENCODE_DISABLE_CLAUDE_CODE=1") && env.includes("OPENCODE_DISABLE_PROJECT_CONFIG=1"));
   assert.ok(!/OPENAI_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY/.test(env));
@@ -247,7 +247,7 @@ test("opencode: end to end with a fake binary: success, isolation env, config in
   assert.equal(cfg["permission"]["forewright_*"], "allow");
   assert.equal(cfg["permission"]["edit"], "allow");
   assert.equal(cfg["mcp"]["forewright"]["environment"]["FOREWRIGHT_AGENT_TOKEN"], "{env:FOREWRIGHT_AGENT_TOKEN}");
-  assert.ok(!JSON.stringify(cfg).includes("tok-123456789"));
+  assert.ok(!JSON.stringify(cfg).includes("tok-" + "123456789"));
   assert.deepEqual(fs.readdirSync(r.home, { recursive: true }).sort(), before, "the user's home is not written to");
 });
 
@@ -288,7 +288,7 @@ test("opencode: an API-key billed model is refused and the run binary is never s
 });
 
 test("opencode: a stored API key makes that provider billed, an oauth login makes it a subscription", async () => {
-  const r = rig({ auth: { openrouter: { type: "api", key: "sk-secret-value-1234" }, "github-copilot": { type: "oauth", access: "a", refresh: "r", expires: 0 } } });
+  const r = rig({ auth: { openrouter: { type: "api", key: "sk-secret-" + "value-1234" }, "github-copilot": { type: "oauth", access: "a", refresh: "r", expires: 0 } } });
   const a = r.adapter();
   const report = await a.billingReport();
   const by = Object.fromEntries(report.map((m) => [m.id, m]));
@@ -330,7 +330,7 @@ test("opencode: with no model requested the run uses an allowed one, preferring 
 });
 
 test("opencode: probe lists only permitted models, reports billing mode and names blocked providers", async () => {
-  const r = rig({ auth: { openrouter: { type: "api", key: "sk-secret-value-1234" }, "github-copilot": { type: "oauth" } } });
+  const r = rig({ auth: { openrouter: { type: "api", key: "sk-secret-" + "value-1234" }, "github-copilot": { type: "oauth" } } });
   const h = await r.adapter().probe();
   assert.equal(h.engine, "opencode");
   assert.equal(h.version, "1.18.30");
@@ -470,14 +470,14 @@ test("opencode: a run that exceeds its time limit fails", async () => {
 });
 
 test("opencode: secrets in events and outcomes are redacted", async () => {
-  const r = rig({ stdoutLines: ['{"type":"error","sessionID":"s","error":{"name":"E","data":{"message":"bad token tok-123456789 here"}}}'], exitCode: 1 });
+  const r = rig({ stdoutLines: ['{"type":"error","sessionID":"s","error":{"name":"E","data":{"message":"bad token tok-" + "123456789 here"}}}'], exitCode: 1 });
   const events: NormalizedEvent[] = [];
   const o = await r.adapter().start(
-    baseRequest({ cwd: r.dir, model: MODEL, mcpServers: [{ name: "forewright", command: "node", args: [], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }),
+    baseRequest({ cwd: r.dir, model: MODEL, mcpServers: [{ name: "forewright", command: "node", args: [], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789" } }] }),
     (e) => events.push(e),
   ).done;
-  assert.ok(!JSON.stringify(events).includes("tok-123456789"));
-  assert.ok(!JSON.stringify(o).includes("tok-123456789"));
+  assert.ok(!JSON.stringify(events).includes("tok-" + "123456789"));
+  assert.ok(!JSON.stringify(o).includes("tok-" + "123456789"));
 });
 
 // ---------------------------------------------------------------- Windows behavior

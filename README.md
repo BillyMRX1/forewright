@@ -123,7 +123,7 @@ forewright config ca --clear
 forewright config
 ```
 
-Variables already set in the environment always win over these settings. A proxy address may include a login (`http://user:password@host:8080`); Forewright never prints it, and it is removed from logs, events and messages. To check the result, run `forewright doctor`: its Network section shows the proxy in use (login hidden) and where it came from, the certificate file, and whether the API host of each installed engine can be reached through the proxy ("reachable", "blocked by the proxy (HTTP 407: proxy needs a login)", "DNS failed", "timed out", "certificate not trusted"). On a slow company laptop, engine checks wait up to 30 seconds on Windows; a message that an engine "was slow to answer" means it is installed but slow, not missing.
+Variables already set in the environment always win over these settings. A proxy address may include a login (`http://USER:PASSWORD@proxy.example.invalid:8080`); Forewright never prints it, and it is removed from logs, events and messages. To check the result, run `forewright doctor`: its Network section shows the proxy in use (login hidden) and where it came from, the certificate file, and whether the API host of each installed engine can be reached through the proxy ("reachable", "blocked by the proxy (HTTP 407: proxy needs a login)", "DNS failed", "timed out", "certificate not trusted"). On a slow company laptop, engine checks wait up to 30 seconds on Windows; a message that an engine "was slow to answer" means it is installed but slow, not missing.
 
 ## Known limitations
 

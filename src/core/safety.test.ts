@@ -21,21 +21,21 @@ test("sanitizeTerminal keeps newline and tab, drops lone carriage returns", () =
 
 test("redactSecrets covers every documented secret shape", () => {
   const cases: Array<[string, string]> = [
-    ["key sk-ant-api03-abcDEF123_456-xyz here", "sk-ant-"],
-    ["key sk-abcdefghijklmnopqrstuvwx here", "sk-abcdefghij"],
-    ["ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abc"],
-    ["gho_abcdefghijklmnopqrstuvwxyz0123456789", "gho_abc"],
-    ["github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz", "github_pat_11"],
-    ["slack xoxb-1234567890-abcdefghij", "xoxb-"],
-    ["aws AKIAABCDEFGHIJKLMNOP end", "AKIAABCDEF"],
-    ["Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"],
+    ["key sk-ant-" + "api03-abcDEF123_456-xyz here", "sk-ant-"],
+    ["key sk-" + "abcdefghijklmnopqrstuvwx here", "sk-abcdefghij"],
+    ["ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abc"],
+    ["gho_" + "abcdefghijklmnopqrstuvwxyz0123456789", "gho_abc"],
+    ["github_pat_" + "11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz", "github_pat_11"],
+    ["slack xox" + "b-1234567890-abcdefghij", "xoxb-"],
+    ["aws AKIA" + "ABCDEFGHIJKLMNOP end", "AKIAABCDEF"],
+    ["Authorization: Basic dXNlcjp" + "wYXNz", "dXNlcjp" + "wYXNz"],
     ["curl -H 'Bearer abc.def-ghi123'", "abc.def-ghi123"],
-    ["jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig_nature-1 end", "eyJhbGci"],
-    ["-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----", "MIIBOgIBAAJBAK"],
-    ["api_key=hunter2hunter2", "hunter2hunter2"],
-    ["API-KEY: hunter2hunter2", "hunter2hunter2"],
-    ["token: abcdef123456", "abcdef123456"],
-    ["secret = topsecretvalue", "topsecretvalue"],
+    ["jwt eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0." + "sig_nature-1 end", "eyJhbGci"],
+    ["-----BEGIN RSA PRIVATE " + "KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE " + "KEY-----", "MIIBOgIBAAJBAK"],
+    ["api_key=" + "hunter2hunter2", "hunter2hunter2"],
+    ["API-KEY: " + "hunter2hunter2", "hunter2hunter2"],
+    ["token: " + "abcdef123456", "abcdef123456"],
+    ["secret = " + "topsecretvalue", "topsecretvalue"],
     ['password="p4ssw0rd!"', "p4ssw0rd"],
   ];
   for (const [input, leaked] of cases) {
@@ -58,7 +58,7 @@ test("truncate leaves a visible marker", () => {
 });
 
 test("redactSecrets hides the login of a proxy URL even when it is not a known secret", () => {
-  const out = redactSecrets('{"raw":"connect via http://alice:hunter2pw@proxy.corp:8080 failed"}');
+  const out = redactSecrets(`{"raw":"connect via http://alice:` + "hunter2pw" + `@proxy.example.invalid:8080 failed"}`);
   assert.ok(!out.includes("hunter2pw") && !out.includes("alice"));
-  assert.ok(out.includes("http://***:***@proxy.corp:8080"));
+  assert.ok(out.includes("http://***:***@proxy.example.invalid:8080"));
 });

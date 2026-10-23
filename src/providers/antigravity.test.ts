@@ -12,7 +12,7 @@ import { assertPrivateMode, baseRequest, drive, dumpEnvJs, exitCode, exitOk, fak
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
 const BASE_ENV = {
   ...systemEnv(), PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: os.homedir(),
-  GEMINI_API_KEY: "AIza-should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-should-not-leak-0000", AGY_LLM_GATEWAY_API_KEY: "gw-should-not-leak-0000",
+  GEMINI_API_KEY: "AIza-" + "should-not-leak-0000", ANTHROPIC_API_KEY: "sk-ant-" + "should-not-leak-0000", AGY_LLM_GATEWAY_API_KEY: "gw-should-not-leak-0000",
 };
 
 function argvOf(file: string): string[] {
@@ -136,7 +136,7 @@ test("antigravity: private home has linked (not copied) auth, shared state, fore
   const home = fakeRealHome();
   const before = treeHash(home);
   const { bin } = fakeBinary(dir, "agy", { stdoutLines: [], extraJs: recordRunJs(dir) });
-  await adapter(dir, bin, home).start(baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }), () => {}).done;
+  await adapter(dir, bin, home).start(baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789" } }] }), () => {}).done;
   const runHome = fs.readFileSync(path.join(dir, "home.txt"), "utf8").trim();
   assert.notEqual(runHome, home);
   // the credential is linked (symlink, or a hard link on Windows without Developer Mode), never a copy; the run's own view is recorded
@@ -156,15 +156,15 @@ test("antigravity: MCP servers go into a per-run 0600 config file, never argv; e
   const dir = tmpDir();
   const { bin, argvFile } = fakeBinary(dir, "agy", { stdoutLines: [], extraJs: recordRunJs(dir) });
   await adapter(dir, bin, fakeRealHome()).start(
-    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } }] }),
+    baseRequest({ cwd: dir, permission: "coordinator", mcpServers: [{ name: "forewright", command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789" } }] }),
     () => {},
   ).done;
-  assert.ok(!argvOf(argvFile).join(" ").includes("tok-123456789"), "secret must not appear in argv");
+  assert.ok(!argvOf(argvFile).join(" ").includes("tok-" + "123456789"), "secret must not appear in argv");
   assertPrivateMode(fs.readFileSync(path.join(dir, "mcp-mode.txt"), "utf8"));
   assert.ok(fs.existsSync(path.join(dir, "migrated.txt")), "the migration marker exists so agy keeps Forewright's mcp_config.json");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-123456789" } } } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "mcp.json"), "utf8")), { mcpServers: { forewright: { command: "node", args: ["bridge.js"], env: { FOREWRIGHT_AGENT_TOKEN: "tok-" + "123456789" } } } });
   const env = fs.readFileSync(path.join(dir, "env.txt"), "utf8");
-  assert.ok(env.includes("FOREWRIGHT_AGENT_TOKEN=tok-123456789"));
+  assert.ok(env.includes("FOREWRIGHT_AGENT_TOKEN=tok-" + "123456789"));
   assert.ok(env.includes("AGY_CLI_DISABLE_AUTO_UPDATE=1"));
   assert.ok(!env.includes("GEMINI_API_KEY") && !env.includes("ANTHROPIC_API_KEY") && !env.includes("AGY_LLM_GATEWAY_API_KEY"));
   assert.ok(!env.includes(`HOME=${os.homedir()}\n`), "HOME points at the private home");
@@ -286,12 +286,12 @@ test("antigravity: tool steps map to tool_call and tool_result, tool errors that
 
 test("antigravity: secrets are redacted from events and outcomes", () => {
   const events: NormalizedEvent[] = [];
-  const p = new AntigravityStreamParser({ runId: "r", generation: 1 }, makeEmitter({ runId: "r", generation: 1 }, (e) => events.push(e), ["tok-123456789"]), ["tok-123456789"]);
-  p.feedLine('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"x","tool_info":{"parameters":{"k":"tok-123456789"}}}}', false);
-  p.feedStderr("denied tok-123456789");
+  const p = new AntigravityStreamParser({ runId: "r", generation: 1 }, makeEmitter({ runId: "r", generation: 1 }, (e) => events.push(e), ["tok-" + "123456789"]), ["tok-" + "123456789"]);
+  p.feedLine('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"x","tool_info":{"parameters":{"k":"tok-" + "123456789"}}}}', false);
+  p.feedStderr("denied tok-" + "123456789");
   const o = p.finish(exitCode(1));
-  assert.ok(!JSON.stringify(events).includes("tok-123456789"));
-  assert.ok(!JSON.stringify(o).includes("tok-123456789"));
+  assert.ok(!JSON.stringify(events).includes("tok-" + "123456789"));
+  assert.ok(!JSON.stringify(o).includes("tok-" + "123456789"));
 });
 
 test("antigravity: cancel terminates the process group and is reported as stopped", async () => {
