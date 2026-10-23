@@ -129,7 +129,7 @@ for (const [name, ops] of [["symlink", real], ["hard link", noDevMode]] as const
     assert.deepEqual(promoted, [linkPath]);
     assert.equal(linkKind(linkPath, realFile), first, "re-linked in the same mode");
     assert.deepEqual(leftovers(path.dirname(realFile)), [], "no temp file left next to the real file");
-    assert.deepEqual(fs.readdirSync(path.join(dir, "private")), ["auth.json"], "no second lasting copy");
+    assert.deepEqual(fs.readdirSync(path.join(dir, "private")).filter((n) => !n.endsWith(".forewright-link")), ["auth.json"], "no second lasting copy");
     // a following run starts from a healthy link
     m.beforeRun();
     assert.equal(fs.readFileSync(linkPath, "utf8"), "REFRESHED");

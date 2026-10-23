@@ -55,6 +55,8 @@ const lstatBig = (p: string): fs.BigIntStats | null => {
 };
 
 const sameFile = (a: fs.BigIntStats, b: fs.BigIntStats): boolean => a.dev === b.dev && a.ino === b.ino && a.ino !== 0n;
+/** Sidecar next to a hard-linked file: proof that Forewright made it, so it can be removed once the real file is gone. */
+const markerOf = (linkPath: string): string => `${linkPath}.forewright-link`;
 const samePath = (a: string, b: string): boolean => path.resolve(a) === path.resolve(b);
 
 export interface LinkResult {
@@ -105,6 +107,7 @@ export class LinkManager {
         note = `Could not link ${path.basename(linkPath)} (${code(err) ?? "error"}, then ${code(err2) ?? "error"}). Turn on Developer Mode (Settings, System, For developers), or keep the data folder on the same drive as your engine logins.`;
       }
     }
+    if (mode === "hardlink") fs.writeFileSync(markerOf(linkPath), "", { mode: 0o600 });
     const known = this.files.find((f) => f.link === linkPath);
     if (known) {
       known.mode = mode;
@@ -126,6 +129,7 @@ export class LinkManager {
       mode = "symlink";
     } else {
       mode = "hardlink"; // settle() left a regular file only when it is the same file as the target
+      fs.writeFileSync(markerOf(linkPath), "", { mode: 0o600 });
     }
     const known = this.files.find((f) => f.link === linkPath);
     if (known) {
@@ -133,6 +137,20 @@ export class LinkManager {
       known.target = target;
     } else this.files.push({ target, link: linkPath, mode });
     return mode;
+  }
+
+  /**
+   * Removes a file link Forewright made, for when the real file is gone. A symlink is always ours; a hard link
+   * (or the regular file an engine refresh left in its place) only when its marker exists, so a file the user
+   * put there is never deleted. Ownership is on disk, not in this manager, so it works across processes.
+   */
+  releaseFile(linkPath: string): void {
+    const st = lstatOrNull(linkPath);
+    const marked = fs.existsSync(markerOf(linkPath));
+    if (st && (st.isSymbolicLink() || (st.isFile() && marked))) fs.unlinkSync(linkPath);
+    if (marked) fs.rmSync(markerOf(linkPath), { force: true });
+    const at = this.files.findIndex((f) => f.link === linkPath);
+    if (at >= 0 && !lstatOrNull(linkPath)) this.files.splice(at, 1);
   }
 
   /** Links a directory. A junction is the fallback when symlinks are not allowed. */

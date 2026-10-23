@@ -140,13 +140,7 @@ export function isolatedOpencodeHome(forewrightHome: string, realAuthPath: strin
   if (fs.existsSync(realAuthPath)) {
     auth = links.linkFile(realAuthPath, link);
   } else {
-    let existing: fs.Stats | null = null;
-    try {
-      existing = fs.lstatSync(link);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
-    if (existing?.isSymbolicLink()) fs.unlinkSync(link); // the user's file is gone: drop the dangling link
+    links.releaseFile(link); // the user's file is gone (logged out): drop our link, symlink or hard link, so old credentials stop working
   }
   const flags = {
     OPENCODE_DISABLE_AUTOUPDATE: "1", OPENCODE_DISABLE_SHARE: "1", OPENCODE_DISABLE_CLAUDE_CODE: "1", OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",

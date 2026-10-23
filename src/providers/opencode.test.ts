@@ -8,7 +8,7 @@ import {
   OpencodeJsonParser, parseVerboseModels, readAuthTypes,
 } from "./opencode.js";
 import { baseRequest, drive, exitCode, fixture, linkKind, systemEnv, tmpDir, writeNodeBin } from "./test-helpers.js";
-import { LinkManager } from "./links.js";
+import { LinkManager, type LinkOps } from "./links.js";
 
 const FIX = path.resolve(import.meta.dirname, "../../src/providers/fixtures");
 
@@ -125,6 +125,38 @@ test("opencode: isolated home links auth.json (never copies) and owns every XDG 
   const none = isolatedOpencodeHome(forewright, path.join(tmpDir(), "none.json"));
   assert.equal(fs.existsSync(none.authLink), false);
   assert.equal(none.auth, null);
+});
+
+/** Windows without Developer Mode: symlinks refused, hard links work. */
+const noDevMode: LinkOps = {
+  symlink: () => {
+    throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+  },
+  link: (e, n) => fs.linkSync(e, n),
+};
+
+test("opencode: logout removes a hard-linked auth.json (Windows without Developer Mode)", () => {
+  const forewright = tmpDir();
+  const real = path.join(tmpDir(), "auth.json");
+  fs.writeFileSync(real, "{}");
+  const iso = isolatedOpencodeHome(forewright, real, new LinkManager(noDevMode));
+  assert.equal(iso.auth?.mode, "hardlink");
+  assert.equal(fs.existsSync(iso.authLink), true);
+  fs.rmSync(real); // opencode logout
+  // a later process: no in-memory record of the link
+  const out = isolatedOpencodeHome(forewright, real, new LinkManager(noDevMode));
+  assert.equal(fs.existsSync(out.authLink), false);
+  assert.equal(fs.existsSync(`${out.authLink}.forewright-link`), false);
+  assert.equal(out.auth, null);
+});
+
+test("opencode: a regular auth.json the user put in the private home is never deleted", () => {
+  const forewright = tmpDir();
+  const missing = path.join(tmpDir(), "none.json");
+  const first = isolatedOpencodeHome(forewright, missing);
+  fs.writeFileSync(first.authLink, '{"mine":true}');
+  const again = isolatedOpencodeHome(forewright, missing);
+  assert.equal(fs.readFileSync(again.authLink, "utf8"), '{"mine":true}');
 });
 
 // ---------------------------------------------------------------- argv, config, env
