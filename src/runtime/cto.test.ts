@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeAdapter } from "../providers/fake.js";
-import { call, ctoRequests, eventsOf, isCto, rule, seedPrd, settle, sleep, startHarness, waitFor } from "./test-harness.js";
+import { addTask, call, ctoRequests, eventsOf, isCto, rule, seedPrd, settle, sleep, startHarness, waitFor } from "./test-harness.js";
 
 test("a completion notice that arrives while the CTO is busy is kept and handled once in the next turn, even if posted twice", async () => {
   const adapter = new FakeAdapter({
@@ -148,6 +148,45 @@ test("a retried tool call inside one run is idempotent: same arguments create on
     await waitFor(() => ctoRequests(h).length >= 1, "a CTO turn");
     await settle(h);
     assert.equal(h.rt.store.listTasks().length, 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("the CTO answers in the channel the human wrote in: project, task, direct and cto; a mixed batch answers in each", async () => {
+  const adapter = new FakeAdapter({ rules: [], defaultScript: { outcome: "succeeded", finalText: "Answer." } });
+  const h = await startHarness({ adapter });
+  try {
+    const cto = h.rt.ctoAgent();
+    seedPrd(h);
+    const task = addTask(h, { title: "Thread task" });
+    const replies = () => h.rt.store.listMessages().filter((m) => m.senderKind === "agent" && m.senderId === cto.id);
+    const send = async (params: { channel: "project" | "task" | "direct"; taskId?: string; toAgentIds?: string[]; body: string }) => {
+      const before = ctoRequests(h).length;
+      await h.client.request("chat.send", { projectId: h.projectId, ...params });
+      await waitFor(() => ctoRequests(h).length === before + 1, "a CTO turn");
+      await settle(h);
+    };
+
+    await send({ channel: "project", body: "hi guys" });
+    assert.deepEqual(replies().map((m) => [m.channel, m.taskId]), [["project", null]]);
+    await send({ channel: "task", taskId: task.id, toAgentIds: [cto.id], body: "about the task" });
+    assert.deepEqual([replies().at(-1)!.channel, replies().at(-1)!.taskId], ["task", task.id]);
+    await send({ channel: "direct", toAgentIds: [cto.id], body: "just you" });
+    assert.equal(replies().at(-1)!.channel, "direct");
+    await h.client.request("cto.send", { projectId: h.projectId, body: "cto channel" });
+    await waitFor(() => ctoRequests(h).length === 4, "the cto channel turn");
+    await settle(h);
+    assert.equal(replies().at(-1)!.channel, "cto");
+    assert.equal(replies().length, 4);
+
+    // Two channels in one turn: each gets the reply.
+    h.rt.store.postMessage({ channel: "project", sender: { kind: "human" }, body: "mixed project", recipients: [cto.id] });
+    h.rt.store.postMessage({ channel: "cto", sender: { kind: "human" }, body: "mixed cto", recipients: [cto.id] });
+    h.rt.scheduler.wake("human_message");
+    await waitFor(() => ctoRequests(h).length === 5, "the mixed turn");
+    await settle(h);
+    assert.deepEqual(replies().slice(4).map((m) => m.channel).sort(), ["cto", "project"]);
   } finally {
     await h.close();
   }

@@ -1,8 +1,8 @@
 // The CTO driver: turns the CTO's pending messages into provider runs. A CTO
 // turn is a run of kind "cto" with the coordinator permission profile in the
 // project root. The CTO acts only through its MCP tools; its final text is
-// posted to the cto channel.
-import type { Message } from "../core/store.js";
+// posted where the humans it answers wrote (see replyTargets), else to the cto channel.
+import type { Message, MessageChannel } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { unusableReason } from "./health.js";
@@ -24,7 +24,21 @@ function isRoutine(m: Message): boolean {
   return m.senderKind === "system" && m.dedupeKey !== null && ROUTINE_NOTICE_KEY.test(m.dedupeKey);
 }
 
+type ReplyTarget = { channel: MessageChannel; taskId?: string };
+
+/** Where a turn's final text goes: each distinct channel (and task thread) a human wrote in, or the cto channel. */
+function replyTargets(batch: Message[]): ReplyTarget[] {
+  const out: ReplyTarget[] = [];
+  for (const m of batch) {
+    if (m.senderKind !== "human") continue;
+    if (out.some((t) => t.channel === m.channel && t.taskId === (m.taskId ?? undefined))) continue;
+    out.push(m.taskId ? { channel: m.channel, taskId: m.taskId } : { channel: m.channel });
+  }
+  return out.length > 0 ? out : [{ channel: "cto" }];
+}
+
 export class CtoDriver {
+  private readonly targets = new Map<string, ReplyTarget[]>(); // run id -> where its final text is posted
   private cooldownUntil = 0;
   private error: string | null = null;
 
@@ -107,6 +121,7 @@ export class CtoDriver {
     const adapter = adapterFor(rt, cto);
     store.recordEvent("cto.turn_started", "agent", cto.id, { kind: "system" }, { messages: batch.length });
     const run = store.createRun({ agentId: cto.id, generation: 0, kind: "cto", engine: cto.engine, ...(cto.model ? { model: cto.model } : {}), cwd: rt.root });
+    this.targets.set(run.id, replyTargets(batch));
     if (batch.length > 0) store.markDelivered(batch.map((m) => m.id), cto.id, run.id);
 
     const nameOf = nameOfSender(rt);
@@ -168,10 +183,15 @@ export class CtoDriver {
     const rt = this.rt;
     const { store } = rt;
     store.finishRun(a.run.id, a.generation, outcome);
+    const targets = this.targets.get(a.run.id) ?? [{ channel: "cto" as const }];
+    this.targets.delete(a.run.id);
     switch (outcome.state) {
       case "succeeded":
         if (outcome.finalText && outcome.finalText.trim() !== "") {
-          store.postMessage({ channel: "cto", sender: { kind: "agent", id: a.agent.id }, body: outcome.finalText, recipients: [], dedupeKey: `cto-final:${a.run.id}` });
+          for (const t of targets) {
+            const suffix = t.channel === "cto" ? "" : `:${t.channel}${t.taskId ? `:${t.taskId}` : ""}`;
+            store.postMessage({ ...t, sender: { kind: "agent", id: a.agent.id }, body: outcome.finalText, recipients: [], dedupeKey: `cto-final:${a.run.id}${suffix}` });
+          }
         }
         return;
       case "stopped":
