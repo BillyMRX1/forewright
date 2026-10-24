@@ -12,9 +12,11 @@ import { forewrightHome, socketPath, tokenPath } from "../core/paths.js";
 import { isPipePath } from "../core/platform.js";
 import { maskProxyUrl, maskUrlsInText, readNetworkConfig, summarizeNetwork, type NetworkSetting, type NetworkSummary } from "../core/network.js";
 import { createAdapters, probeAll } from "../providers/registry.js";
+import type { UsageSummary } from "../core/usage.js";
 import { RpcClient } from "../runtime/client.js";
 import { asciiMode } from "../tui/theme.js";
 import { checkReachable, ENGINE_HOSTS, readCaText, type ReachResult } from "./network-check.js";
+import { usageSummary } from "./report.js";
 
 // ---------------------------------------------------------------- service query (shared with `forewright status`)
 
@@ -92,6 +94,8 @@ export interface DoctorInput {
   network?: NetworkInfo;
   /** Windows only: whether symbolic links are allowed without admin rights. Left out on other platforms. */
   developerMode?: DeveloperMode;
+  /** The last week of usage; only the --json output shows it. */
+  usage?: UsageSummary;
 }
 
 export type DeveloperMode = "on" | "off" | "unknown";
@@ -475,6 +479,7 @@ export function renderDoctorJson(input: DoctorInput): string {
     dataFolder: { path: input.dataFolder.path, writable: input.dataFolder.writable },
     ...(input.developerMode !== undefined ? { developerMode: input.developerMode } : {}),
     ...(input.network ? { network: maskedNetwork(input.network) } : {}),
+    ...(input.usage ? { usage: input.usage } : {}),
     engines: sum.rows.map((r) => ({
       engine: r.input.health.engine,
       name: r.name,
@@ -573,6 +578,15 @@ async function readFallback(service: ServiceQuery): Promise<FallbackInfo> {
   }
 }
 
+/** The last 7 days of usage as `{ usage }`, or nothing when the databases cannot be read: usage must never fail the doctor. */
+function readUsage(home: string): { usage: UsageSummary } | Record<string, never> {
+  try {
+    return { usage: usageSummary(home, 7) };
+  } catch {
+    return {};
+  }
+}
+
 export async function runDoctor(args: string[], opts: { includeFake: boolean }): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(DOCTOR_HELP);
@@ -611,6 +625,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
     homeDir: homedir(),
     network,
     ...(isWindows() ? { developerMode: detectDeveloperMode() } : {}),
+    ...(json ? readUsage(home) : {}),
   };
   process.stdout.write(
     json ? renderDoctorJson(input) : renderDoctor(input, { color, ascii: asciiMode(), verbose, width: process.stdout.columns ?? 100 }),

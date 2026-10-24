@@ -1,5 +1,6 @@
 // Pure model of the Home screen: the needs-you rows, the worker rows, the event wording and the row budget. No React.
 
+import { compactTokens, costText, type UsageSummary, type UsageTotals } from "../core/usage.js";
 import type { Decision, ForewrightEvent, RequirementDoc, Task } from "../core/store-types.js";
 import type { ProviderStatus, RuntimeStatus } from "../runtime/protocol.js";
 import type { AgentAttention, NeedItem } from "./attention.js";
@@ -88,9 +89,11 @@ export interface HomeBudget {
   progressRows: number;
   /** Rows of events, header excluded; 0 when there is no room. */
   latestRows: number;
+  /** Engine rows of the usage panel (its rule and header come on top); 0 when there is no room. It only takes rows LATEST can spare. */
+  usageRows: number;
 }
 
-export function homeBudget(h: number, needsCount: number, workersCount: number): HomeBudget {
+export function homeBudget(h: number, needsCount: number, workersCount: number, usageEngines = 0): HomeBudget {
   const needsWanted = Math.max(1, needsCount);
   // Always leave a rule, a header and one row for the workers.
   const needsCap = Math.max(1, Math.min(4, h - 1 - 3));
@@ -117,7 +120,39 @@ export function homeBudget(h: number, needsCount: number, workersCount: number):
       latestRows -= 2;
     }
   }
-  return { needsShown, needsMore, workersShown, progressRows, latestRows };
+  // Usage sits between PROGRESS and LATEST, and only when LATEST keeps at least 4 rows after giving up room for it.
+  let usageRows = 0;
+  if (usageEngines > 0 && latestRows > 0) {
+    const want = Math.min(3, usageEngines);
+    if (latestRows - (2 + want) >= 4) {
+      usageRows = want;
+      latestRows -= 2 + want;
+    }
+  }
+  return { needsShown, needsMore, workersShown, progressRows, latestRows, usageRows };
+}
+
+export interface UsageLine {
+  engine: string;
+  today: string;
+  week: string;
+}
+
+const usageCell = (t: UsageTotals): string => {
+  if (t.runs === 0) return "none";
+  const tokens = t.inputTokens + t.outputTokens + t.cachedInputTokens;
+  const premium = t.premiumRequests > 0 ? `${t.premiumRequests} premium request${t.premiumRequests === 1 ? "" : "s"}` : "";
+  if (tokens === 0) return premium || "no tokens reported";
+  const cost = costText(t);
+  return `${compactTokens(tokens)} tokens${cost === "-" ? "" : `, ${cost}`}${premium ? `, ${premium}` : ""}`;
+};
+
+/** One line per engine that was used in the window: today, then the whole window. Copilot shows premium requests, which is all it reports. */
+export function usageLines(s: UsageSummary): UsageLine[] {
+  return s.byEngine.map((week) => {
+    const today = s.todayByEngine.find((g) => g.key === week.key);
+    return { engine: engineLabel(week.key), today: today ? usageCell(today) : "none", week: usageCell(week) };
+  });
 }
 
 interface NameLookup {

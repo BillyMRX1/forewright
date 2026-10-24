@@ -4,8 +4,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { ValidationError } from "../core/errors.js";
-import { logsDir } from "../core/paths.js";
+import { forewrightHome, logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
+import { loadPrices, readUsageRows, summarizeUsage, windowStart } from "../core/usage.js";
 import type { Message, MessageChannel } from "../core/store.js";
 import type { EngineId, PermissionProfile } from "../core/types.js";
 import type { Daemon } from "./daemon.js";
@@ -161,6 +162,13 @@ export class ClientApi {
       "state.events": async (p) => {
         const rt = await this.rt(p);
         return { events: rt.store.recentEvents(reqInt(p, "sinceSeq"), typeof p["limit"] === "number" ? p["limit"] : 200) };
+      },
+      "state.usage": async (p) => {
+        const rt = await this.rt(p);
+        const days = typeof p["days"] === "number" && Number.isInteger(p["days"]) && p["days"] >= 1 && p["days"] <= 366 ? p["days"] : 7;
+        const now = new Date();
+        const rows = readUsageRows(rt.store.db, windowStart(now, days).toISOString()).filter((r) => r.projectId === rt.projectId);
+        return summarizeUsage(rows, { now, days, prices: loadPrices(forewrightHome()) });
       },
       "evidence.diff": async (p) => this.diff(await this.rt(p), reqStr(p, "taskId", 200)),
       "runs.log": async (p) => {

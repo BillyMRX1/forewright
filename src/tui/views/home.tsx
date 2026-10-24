@@ -6,7 +6,7 @@ import { Box, Text } from "ink";
 import { ListRow, Row, Rule, SafeText, SectionLabel, TextInput, type DLine, type Seg } from "../components.js";
 import { needTarget, useClaim, useCtx, useHintScope, useKeys, useLoad } from "../context.js";
 import { TASK_STATE_LABEL, VIEW, clip, fit, oneLine, progressBar, windowed } from "../format.js";
-import { homeBudget, latestLines, needRows, workerRows, type WorkerRow } from "../home-model.js";
+import { homeBudget, latestLines, needRows, usageLines, workerRows, type WorkerRow } from "../home-model.js";
 import { STATUS_LABEL, palette, statusColor, statusGlyph, sym, taskGlyph, type DisplayStatus } from "../theme.js";
 import { TASK_STATES } from "../../core/types.js";
 import type { Task } from "../../core/store-types.js";
@@ -40,6 +40,7 @@ export function HomeView() {
   const overview = useLoad(() => api.call("state.overview", { projectId }));
   const prd = useLoad(() => api.call("state.prd", { projectId }));
   const events = useLoad(() => api.call("state.events", { projectId, sinceSeq: Math.max(0, ctx.latestSeq() - 60), limit: 60 }));
+  const usage = useLoad(() => api.call("state.usage", { projectId, days: 7 }));
   const [sel, setSel] = useState(0);
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
@@ -79,7 +80,8 @@ export function HomeView() {
   });
 
   // ---------------------------------------------------------------- the dashboard
-  const budget = homeBudget(h, needs.length, workers.length);
+  const usageLn = usage.data ? usageLines(usage.data) : [];
+  const budget = homeBudget(h, needs.length, workers.length, usageLn.length);
   const focused = ctx.focus === "main" && !filtering;
   const avail = Math.max(10, w - 2);
   const needsStart = windowed(needs.length, at < needs.length ? at : 0, budget.needsShown).start;
@@ -203,6 +205,17 @@ export function HomeView() {
           {Array.from({ length: extra }, (_, r) => (
             <Row key={r} line={{ text: "", segs: [...taskCell(notable[r * 2]), ...taskCell(notable[r * 2 + 1])] }} width={w} />
           ))}
+        </>
+      ) : null}
+      {budget.usageRows > 0 ? (
+        <>
+          <Rule width={w} />
+          <SectionLabel title="USAGE" note="estimates, not a bill" width={w} />
+          {usageLn.slice(0, budget.usageRows).map((u) => {
+            const head = fit(u.engine, 9);
+            const text = `  ${head}today ${u.today}   7 days ${u.week}`;
+            return <Row key={u.engine} line={{ text, segs: [{ text: `  ${head}` }, { text: clip(`today ${u.today}   7 days ${u.week}`, Math.max(4, w - 13)), dim: true }] }} width={w} />;
+          })}
         </>
       ) : null}
       {budget.latestRows > 0 ? (

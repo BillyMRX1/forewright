@@ -5,6 +5,7 @@ import type { EngineUse, MethodName, Params, Result, RuntimeStatus, ProviderStat
 import type { Agent, Authority, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
+import { DEFAULT_PRICES, summarizeUsage, type UsageRow } from "../core/usage.js";
 
 /** The moment everything in the fake project happened: four minutes ago, so ages and elapsed times read like a live project. */
 const NOW = new Date(Date.now() - 4 * 60_000).toISOString();
@@ -215,6 +216,8 @@ export class FakeClient implements ClientApi {
   noRuns = false;
   /** Decisions returned by state.inbox as open. Tests may push more. */
   openDecisions: Decision[] = [this.data.decision];
+  /** Runs with usage behind state.usage (none by default, so the usage panel stays hidden). */
+  usageRows: UsageRow[] = [];
   /** Lines returned by runs.log. */
   logLines = ["line one \x1b[31mred\x1b[0m", "line two"];
   /** Events returned by state.events: a few seeded ones, then everything passed to emitEvent. */
@@ -300,6 +303,8 @@ export class FakeClient implements ClientApi {
           if (custom) return { messages: custom };
           return { messages: [{ ...d.messages[0]!, id: "c1", channel: ch, body: `hello in ${String(ch)}` }] };
         }
+        case "state.usage":
+          return summarizeUsage(this.usageRows, { now: new Date(), days: typeof p["days"] === "number" ? p["days"] : 7, prices: DEFAULT_PRICES });
         case "state.events":
           return { events: this.events.filter((e) => e.seq > (p["sinceSeq"] as number)).slice(0, typeof p["limit"] === "number" ? p["limit"] : 200) };
         case "state.channels":

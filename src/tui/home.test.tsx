@@ -71,6 +71,37 @@ describe("Overview", () => {
     assert.match(tiny.h.frame(), /WORKERS/);
   });
 
+  it("shows a small USAGE panel with tokens and estimated cost per engine for today and 7 days", async () => {
+    const api = new FakeClient();
+    const now = new Date();
+    const back = (days: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - days, 12).toISOString();
+    const mk = (engine: "claude" | "codex" | "copilot", model: string | null, at: string, usage: object) => ({ projectId: "p1", projectName: "tips", agentId: "a1", agentName: "Ada", engine, model, at, usage });
+    api.usageRows = [
+      mk("claude", "claude-opus-5-5", now.toISOString(), { inputTokens: 1200, outputTokens: 300, cachedInputTokens: 8500, costUsd: 0.04 }),
+      mk("codex", "mystery-9", now.toISOString(), { inputTokens: 5000, outputTokens: 100 }),
+      mk("codex", "mystery-9", back(2), { inputTokens: 5000, outputTokens: 100 }),
+      mk("copilot", null, back(1), { premiumRequests: 2 }),
+    ];
+    const { h } = await mount({ cols: 140, rows: 50, api });
+    const f = h.frame();
+    assert.match(f, /USAGE.*estimates, not a bill/);
+    assert.match(row(h, /^\s+Claude\s+today/), /Claude\s+today 10k tokens, ~\$0\.04 \(estimate\)\s+7 days 10k tokens, ~\$0\.04 \(estimate\)/);
+    assert.match(row(h, /^\s+Codex\s+today/), /Codex\s+today 5\.1k tokens, no price\s+7 days 10k tokens, no price/);
+    assert.match(row(h, /^\s+Copilot\s+today/), /Copilot\s+today none\s+7 days 2 premium requests/);
+    assert.match(f, /LATEST/, "LATEST keeps its room");
+    assert.ok(api.callsTo("state.usage").length > 0);
+  });
+
+  it("hides the USAGE panel when nothing was used or the terminal is short", async () => {
+    const none = await mount({ cols: 140, rows: 50 });
+    assert.doesNotMatch(none.h.frame(), /USAGE/);
+    const api = new FakeClient();
+    api.usageRows = [{ projectId: "p1", projectName: "tips", agentId: "a1", agentName: "Ada", engine: "claude", model: null, at: new Date().toISOString(), usage: { inputTokens: 1, outputTokens: 1 } }];
+    const short = await mount({ cols: 100, rows: 20, api });
+    assert.doesNotMatch(short.h.frame(), /USAGE/);
+    assert.match(short.h.frame(), /WORKERS/);
+  });
+
   it("Enter on a needs-you decision opens it in the Inbox", async () => {
     const { h } = await mount();
     assert.match(hints(h), /enter open/);

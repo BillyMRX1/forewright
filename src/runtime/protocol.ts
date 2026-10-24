@@ -19,6 +19,7 @@ import type {
   Verification,
 } from "../core/store-types.js";
 import type { Store } from "../core/store.js";
+import type { UsageSummary } from "../core/usage.js";
 import type { FallbackEntryStatus } from "./fallback.js";
 
 export const PROTOCOL_VERSION = 1;
@@ -103,6 +104,8 @@ export interface Methods {
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
   "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
   "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
+  /** Tokens and estimated cost of this project's runs over the last `days` local days (default 7). */
+  "state.usage": { params: { projectId: string; days?: number }; result: UsageSummary };
   "evidence.diff": { params: { projectId: string; taskId: string }; result: { base: string | null; head: string | null; diff: string; truncated: boolean } };
   "runs.log": { params: { projectId: string; runId: string; tailLines?: number }; result: { lines: string[]; path: string } };
   "providers.health": { params: { refresh?: boolean }; result: { providers: ProviderStatus[] } };
