@@ -256,7 +256,8 @@ test("empty git repo: the task blocks with a plain message, projects.initialComm
     await waitFor(() => taskOf(h, "T-1").blockReason === "environment", "the task to block");
     const detail = taskOf(h, "T-1").blockDetail ?? "";
     assert.match(detail, /no commits yet/);
-    assert.match(detail, /Create the initial commit in Settings or run setup again/);
+    assert.match(detail, /The CTO can create an empty initial commit with its create_initial_commit tool/);
+    assert.match(detail, /"Create initial commit" in Settings or the command palette/);
     assert.equal(workRequests(h).length, 0);
 
     const made = await h.client.request("projects.initialCommit", { projectId: h.projectId });
@@ -286,6 +287,69 @@ test("empty git repo without a git identity: projects.initialCommit fails with a
   try {
     await assert.rejects(() => h.client.request("projects.initialCommit", { projectId: h.projectId }), /git config user\.name/);
     assert.throws(() => gitIn(h.repo, "rev-parse", "--verify", "HEAD"), "still no commits");
+  } finally {
+    await h.close();
+    if (keep.g === undefined) delete process.env["GIT_CONFIG_GLOBAL"]; else process.env["GIT_CONFIG_GLOBAL"] = keep.g;
+    if (keep.s === undefined) delete process.env["GIT_CONFIG_NOSYSTEM"]; else process.env["GIT_CONFIG_NOSYSTEM"] = keep.s;
+  }
+});
+
+/** Sends Billy's message to the CTO and returns the finished turn's tool results. */
+async function ctoTurn(h: Awaited<ReturnType<typeof startHarness>>, body: string): Promise<{ prompt: string; results: Array<{ tool: string; isError: boolean; text: string }> }> {
+  const before = ctoRequests(h).length;
+  await h.client.request("cto.send", { projectId: h.projectId, body });
+  const req = await waitFor(() => ctoRequests(h).slice(before).find((r) => r.prompt.includes(body)), "the CTO turn");
+  await waitFor(() => h.rt.store.getRun(req.runId).state === "succeeded", "the CTO turn to finish");
+  return { prompt: req.prompt, results: toolResults(h, req.runId) };
+}
+
+const commitRule = rule((r) => isCto(r) && r.prompt.includes("make the first commit"), { outcome: "succeeded", finalText: "done", toolCalls: [call("create_initial_commit", {})] });
+
+test("empty git repo: the CTO creates the initial commit itself, the blocked task starts, and the tool refuses once there are commits", async () => {
+  const adapter = new FakeAdapter({ rules: [commitRule, rule(isWork, { outcome: "succeeded", writeFiles: { "made.txt": "made\n" } })], defaultScript: { outcome: "succeeded", finalText: "ok" } });
+  const h = await startHarness({ adapter, repo: emptyRepo(true) });
+  try {
+    seedPrd(h);
+    addTask(h, { title: "First code task", assignee: hire(h, "Wren") });
+    poke(h);
+    await waitFor(() => taskOf(h, "T-1").blockReason === "environment", "the task to block");
+
+    const first = await ctoTurn(h, "make the first commit");
+    assert.match(first.prompt, /git repository with no commits yet: call create_initial_commit/, "the digest tells the CTO");
+    const made = first.results.find((r) => r.tool === "create_initial_commit")!;
+    assert.equal(made.isError, false, made.text);
+    assert.match(made.text, /Created the initial commit\..*Billy's git identity/);
+    assert.equal(gitIn(h.repo, "log", "--format=%s %an"), "Initial commit Test User", "made with the user's own identity");
+    const events = h.rt.store.recentEvents(0, 100_000).filter((e) => e.type === "project.initial_commit");
+    assert.deepEqual(events.map((e) => e.actor), [`agent:${h.rt.ctoAgent().id}`]);
+    await waitFor(() => taskOf(h, "T-1").state === "review", "the task to run after the initial commit");
+
+    const again = await ctoTurn(h, "make the first commit again");
+    assert.doesNotMatch(again.prompt, /no commits yet/);
+    const refused = again.results.find((r) => r.tool === "create_initial_commit")!;
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /already has commits, so there is nothing to do/);
+    assert.equal(gitIn(h.repo, "rev-list", "--count", "main"), "1", "no second commit");
+  } finally {
+    await h.close();
+  }
+});
+
+test("empty git repo without a git identity: the CTO's create_initial_commit reports what to fix and creates nothing", async () => {
+  const keep = { g: process.env["GIT_CONFIG_GLOBAL"], s: process.env["GIT_CONFIG_NOSYSTEM"] };
+  const none = path.join(tempDir("forewright-gitcfg-"), "empty-gitconfig");
+  writeFileSync(none, "");
+  process.env["GIT_CONFIG_GLOBAL"] = none;
+  process.env["GIT_CONFIG_NOSYSTEM"] = "1";
+  const adapter = new FakeAdapter({ rules: [commitRule], defaultScript: { outcome: "succeeded", finalText: "ok" } });
+  const h = await startHarness({ adapter, repo: emptyRepo(false) });
+  try {
+    const { results } = await ctoTurn(h, "make the first commit");
+    const failed = results.find((r) => r.tool === "create_initial_commit")!;
+    assert.equal(failed.isError, true);
+    assert.match(failed.text, /^Git does not know who you are .*git config user\.name/);
+    assert.throws(() => gitIn(h.repo, "rev-parse", "--verify", "HEAD"), "still no commits");
+    assert.equal(h.rt.store.recentEvents(0, 100_000).filter((e) => e.type === "project.initial_commit").length, 0);
   } finally {
     await h.close();
     if (keep.g === undefined) delete process.env["GIT_CONFIG_GLOBAL"]; else process.env["GIT_CONFIG_GLOBAL"] = keep.g;

@@ -27,6 +27,7 @@ import { InboxView } from "./views/inbox.js";
 import { SettingsView } from "./views/settings.js";
 import { LogViewer } from "./views/log.js";
 import { SetupWizard } from "./setup.js";
+import { hasCommitsOf } from "./compat.js";
 
 export interface AppProps {
   api: ClientApi;
@@ -150,6 +151,8 @@ export function App(props: AppProps) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [prdOpen, setPrdOpen] = useState(false);
   const [wizard, setWizard] = useState(false);
+  /** False while the repository has no commits (from state.settings); undefined until known. */
+  const [hasCommits, setHasCommits] = useState<boolean | undefined>(undefined);
   const [offer, setOffer] = useState(props.setupOffer === true);
   const [logRun, setLogRun] = useState<string | null>(null);
   const [jump, setJump] = useState<JumpTarget | null>(null);
@@ -316,6 +319,22 @@ export function App(props: AppProps) {
       offConn();
     };
   }, [api, projectId, fail]);
+
+  // An empty repository offers "Create initial commit". Checked until a commit exists; commits do not go away.
+  useEffect(() => {
+    if (!props.isGit || hasCommits === true) return;
+    let cancelled = false;
+    api.call("state.settings", { projectId }).then(
+      (s) => {
+        const known = hasCommitsOf(s);
+        if (!cancelled && known !== undefined) setHasCommits(known);
+      },
+      () => {}, // optional: the offer just stays hidden
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api, projectId, props.isGit, hasCommits, tick]);
 
   // A connection that stays lost is offline, not just reconnecting.
   useEffect(() => {
@@ -594,6 +613,15 @@ export function App(props: AppProps) {
       case "setup":
         setWizard(true);
         return;
+      case "initialCommit":
+        if (hasCommits === true) return notify("This project already has commits.");
+        ask("Create an empty initial commit with your git identity? Agents need it to start work.", async () => {
+          const res = await api.call("projects.initialCommit", { projectId });
+          setHasCommits(true);
+          setTick((n) => n + 1); // Settings reads hasCommits again and drops its action
+          notify(res.message);
+        });
+        return;
       case "quit":
         return quit();
       case "next":
@@ -831,7 +859,7 @@ export function App(props: AppProps) {
               ) : null}
               {paletteOpen ? (
                 <Ctx.Provider value={overlayCtx}>
-                  <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} />
+                  <Palette onClose={() => setPaletteOpen(false)} onPick={pickEntry} noCommits={hasCommits === false} />
                 </Ctx.Provider>
               ) : null}
               {cardMode && shown ? (

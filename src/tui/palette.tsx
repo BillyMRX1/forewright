@@ -22,6 +22,8 @@ export interface PaletteEntry {
 
 export interface EntryOptions {
   paused?: boolean;
+  /** True when the repository has no commits yet; offers "Create initial commit". */
+  noCommits?: boolean;
   /** Where messages can go; each one except the CTO becomes a "Message: ..." entry. */
   channels?: ChannelInfo[];
 }
@@ -42,6 +44,7 @@ export function buildEntries(tasks: Task[], agents: TeamMember[], decisions: Dec
     const slash = slashOf(a.id);
     entries.push({ id: `view:${a.view}`, kind: "view", label: `Go to ${VIEW_NAMES[a.view]}`, ...(slash ? { hint: slash } : {}), target: { view: a.view } });
   });
+  if (opts.noCommits) act("initialCommit", "Create initial commit", "agents need one to start work");
   act("approve", "Approve the proposed PRD");
   act("prd", "Read the PRD");
   if (opts.paused) act("resume", "Resume all work");
@@ -93,11 +96,11 @@ export function filterEntries(entries: PaletteEntry[], query: string): PaletteEn
   return scored.sort((a, b) => a.s - b.s || a.i - b.i).map((x) => x.e);
 }
 
-export function Palette({ onClose, onPick }: { onClose: () => void; onPick: (entry: PaletteEntry) => void }) {
+export function Palette({ onClose, onPick, noCommits }: { onClose: () => void; onPick: (entry: PaletteEntry) => void; noCommits?: boolean }) {
   const ctx = useCtx();
   const [query, setQuery] = useState("");
   const [idx, setIdx] = useState(0);
-  const entries = buildEntries(ctx.tasks, ctx.teamAgents, ctx.openDecisions, { paused: ctx.runtime?.paused === true, channels: ctx.channels });
+  const entries = buildEntries(ctx.tasks, ctx.teamAgents, ctx.openDecisions, { paused: ctx.runtime?.paused === true, noCommits: noCommits === true, channels: ctx.channels });
   const found = filterEntries(entries, query);
   const sel = Math.min(idx, Math.max(0, found.length - 1));
   useInput((_input, key) => {

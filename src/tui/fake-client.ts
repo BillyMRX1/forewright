@@ -336,9 +336,11 @@ export class FakeClient implements ClientApi {
         case "drafts.save":
           this.drafts.set(`${String(p["view"])}/${String(p["key"])}`, String(p["body"]));
           return { ok: true };
-        case "projects.initialCommit":
+        case "projects.initialCommit": {
+          const created = !this.hasCommits;
           this.hasCommits = true;
-          return { ok: true };
+          return created ? { created: true, message: "Created the initial commit." } : { created: false, message: "Nothing to do: this project already has commits." };
+        }
         case "cto.send":
         case "chat.send":
           return { messageId: "new" };

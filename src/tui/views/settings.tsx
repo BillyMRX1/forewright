@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Box, Text } from "ink";
 import { InputBox, SafeText, ScrollLines, type DLine, type Seg } from "../components.js";
 import { useClaim, useCtx, useHintScope, useKeys, useLoad } from "../context.js";
@@ -15,6 +15,7 @@ type Item =
   | { kind: "cto-engine" }
   | { kind: "cto-model" }
   | { kind: "setup" }
+  | { kind: "initial-commit" }
   | { kind: "authority"; name: keyof typeof DEFAULT_AUTHORITY }
   | { kind: "limit"; name: keyof typeof DEFAULT_LIMITS }
   | { kind: "fallback"; list: FallbackList };
@@ -133,6 +134,14 @@ export function SettingsView() {
   useEffect(() => {
     if (fromServer) setFb({ cto: fromServer.cto, workers: fromServer.workers });
   }, [fromServer]);
+  const noCommits = data.data?.hasCommits === false;
+  const items = noCommits ? [{ group: "Engines" as const, item: { kind: "initial-commit" } as Item }, ...ITEMS] : ITEMS;
+  // The commit action leads the list while it exists; keep the cursor on the same item when it goes.
+  const hadAction = useRef(false);
+  useEffect(() => {
+    if (hadAction.current && !noCommits) setSel((i) => Math.max(0, i - 1));
+    hadAction.current = noCommits;
+  }, [noCommits]);
   const cto = (team.data?.agents ?? []).find((a) => a.role === "cto" && !a.retiredAt) ?? null;
   const providers = data.data?.providers ?? [];
   const cycle = <T,>(list: T[], v: T, dir: 1 | -1 = 1): T => list[(Math.max(0, list.indexOf(v)) + dir + list.length) % list.length]!;
@@ -145,6 +154,7 @@ export function SettingsView() {
     if (it.kind === "cto-engine") return data.data!.ctoEngine;
     if (it.kind === "cto-model") return data.data!.ctoModel ?? "(engine default)";
     if (it.kind === "setup") return "Run setup again";
+    if (it.kind === "initial-commit") return "Create initial commit";
     if (it.kind === "authority") return s.authority[it.name];
     if (it.kind === "fallback") return fallbackWords(fb[it.list]);
     return s[it.name];
@@ -220,9 +230,9 @@ export function SettingsView() {
   /** Changes the chosen value one step in `dir`. Numbers open the editor instead. */
   const activate = (dir: 1 | -1, fromEnter: boolean) => {
     if (!data.data) return;
-    const it = ITEMS[sel]!.item;
-    if (it.kind === "setup") {
-      if (fromEnter) ctx.run("setup");
+    const it = items[Math.min(sel, items.length - 1)]!.item;
+    if (it.kind === "setup" || it.kind === "initial-commit") {
+      if (fromEnter) ctx.run(it.kind === "setup" ? "setup" : "initialCommit");
       return;
     }
     if (it.kind === "cto-engine" || it.kind === "cto-model") {
@@ -261,7 +271,7 @@ export function SettingsView() {
   };
 
   const commit = (raw: string) => {
-    const it = ITEMS[sel]?.item;
+    const it = items[sel]?.item;
     if (it === undefined) return;
     if (it.kind !== "authority" && it.kind !== "limit") return;
     const n = Number(raw.trim());
@@ -270,10 +280,10 @@ export function SettingsView() {
     void set(it.kind === "authority" ? `authority.${it.name}` : it.name, n);
   };
 
-  const group = ITEMS[Math.min(sel, ITEMS.length - 1)]!.group;
+  const group = items[Math.min(sel, items.length - 1)]!.group;
   const moveGroup = (dir: 1 | -1) => {
     const g = GROUPS[(GROUPS.indexOf(group) + dir + GROUPS.length) % GROUPS.length]!;
-    setSel(ITEMS.findIndex((x) => x.group === g));
+    setSel(items.findIndex((x) => x.group === g));
   };
 
   useKeys((input, key) => {
@@ -282,7 +292,7 @@ export function SettingsView() {
     if (key.escape) return ctx.back();
     if (key.tab) return moveGroup(key.shift ? -1 : 1);
     if (key.upArrow || input === "k") setSel((i) => Math.max(0, i - 1));
-    else if (key.downArrow || input === "j") setSel((i) => Math.min(ITEMS.length - 1, i + 1));
+    else if (key.downArrow || input === "j") setSel((i) => Math.min(items.length - 1, i + 1));
     else if (key.leftArrow) activate(-1, false);
     else if (key.rightArrow) activate(1, false);
     else if (key.return || input === " ") activate(1, true);
@@ -298,13 +308,13 @@ export function SettingsView() {
   const lines: DLine[] = [];
   let selLine = 0;
   const heading = (t: string) => lines.push({ text: t.toUpperCase(), bold: true, dim: true });
-  const itemsOfGroup = ITEMS.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
-  const labelOf = (it: Item) => (it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "setup" ? "Setup" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} backup order` : LABELS[it.name]!);
+  const itemsOfGroup = items.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
+  const labelOf = (it: Item) => (it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} backup order` : LABELS[it.name]!);
   const labelW = Math.min(Math.max(...itemsOfGroup.map((x) => [...labelOf(x.item)].length)), Math.max(12, Math.floor(inner * 0.6)));
   const pushItem = (it: Item, i: number) => {
     const name = labelOf(it);
     const v = value(it);
-    const shown = it.kind === "setup" ? "[ Run setup again ]" : typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+    const shown = it.kind === "setup" ? "[ Run setup again ]" : it.kind === "initial-commit" ? "[ Create initial commit ]" : typeof v === "boolean" ? (v ? "on" : "off") : String(v);
     const on = i === sel;
     if (on) selLine = lines.length;
     const text = `${name.padEnd(labelW)}  ${shown}`;
@@ -315,6 +325,12 @@ export function SettingsView() {
     }
   };
   if (group === "Engines") {
+    if (noCommits) {
+      heading("Repository");
+      for (const l of wrapText("This repository has no commits yet. Agents branch from a commit, so tasks wait until one exists. This makes an empty commit with your git identity.", inner)) lines.push({ text: l, dim: true });
+      pushItem(items[0]!.item, 0);
+      lines.push({ text: "" });
+    }
     heading("Engines found");
     if (details) for (const p of providers) lines.push(...providerLines(p, inner));
     else {
@@ -333,7 +349,7 @@ export function SettingsView() {
   } else if (group === "Control") {
     heading("Authority");
   } else heading("Limits");
-  for (const x of itemsOfGroup) pushItem(x.item, x.i);
+  for (const x of itemsOfGroup) if (x.item.kind !== "initial-commit") pushItem(x.item, x.i);
   let fbLine = lines.length;
   if (group === "Backups" && fbEdit) {
     const status = data.data.fallbackStatus?.[fbEdit] ?? [];
@@ -381,7 +397,7 @@ export function SettingsView() {
       </Box>
       {editing ? (
         <>
-          <SafeText dimColor>{`New value for ${oneLine(String(ITEMS[sel]?.item.kind === "limit" || ITEMS[sel]?.item.kind === "authority" ? (ITEMS[sel]!.item as { name: string }).name : ""))}`}</SafeText>
+          <SafeText dimColor>{`New value for ${oneLine(String(items[sel]?.item.kind === "limit" || items[sel]?.item.kind === "authority" ? (items[sel]!.item as { name: string }).name : ""))}`}</SafeText>
           <InputBox value={text} onChange={setText} onSubmit={commit} onEscape={() => setEditing(false)} focus={ctx.focus === "main"} placeholder="" width={w} maxRows={1} compact />
         </>
       ) : null}

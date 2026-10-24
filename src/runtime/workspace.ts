@@ -36,7 +36,7 @@ export class WorkspaceManager {
     if (refExists(this.root, `refs/heads/${INTEGRATION_BRANCH}`)) return this.integrationTip();
     const head = gitTry(this.root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
     if (head.code !== 0) {
-      throw new WorkspaceError(`${NO_COMMITS_MARKER}, so work cannot start. Create the initial commit in Settings or run setup again.`, { root: this.root });
+      throw new WorkspaceError(`${NO_COMMITS_MARKER}, so work cannot start. The CTO can create an empty initial commit with its create_initial_commit tool, or you can choose "Create initial commit" in Settings or the command palette (ctrl+p).`, { root: this.root });
     }
     const base = head.stdout.trim();
     git(this.root, ["branch", INTEGRATION_BRANCH, base]);

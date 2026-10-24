@@ -10,7 +10,7 @@ import { ForewrightError, ValidationError } from "../core/errors.js";
 import { ensureProjectDirs } from "../core/paths.js";
 import { authorize } from "../core/policy.js";
 import { redactSecrets } from "../core/safety.js";
-import { type Agent, type Decision, type Run, type Task, Store } from "../core/store.js";
+import { type Agent, type Decision, type MessageSender, type Run, type Task, Store } from "../core/store.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { EventBus } from "./bus.js";
 import { purposeFor, resolveFor } from "./fallback.js";
@@ -340,8 +340,11 @@ export class ProjectRuntime {
     this.store.recordEvent("project.git_initialized", "project", this.projectId, { kind: "system" }, { root: this.root });
   }
 
-  /** Human action: makes the first commit of an empty repository so work can branch from it. */
-  initialCommit(): { created: boolean; message: string } {
+  /**
+   * Makes the first commit of an empty repository so work can branch from it, with the user's own
+   * git identity. Billy asks for it (setup, Settings, palette) or the CTO does (create_initial_commit).
+   */
+  initialCommit(by: MessageSender = { kind: "human" }): { created: boolean; message: string } {
     if (!isGitRepo(this.root)) throw new ValidationError("This folder is not a git repository yet. Initialize git first.", { root: this.root });
     if (hasCommits(this.root)) return { created: false, message: "Nothing to do: this project already has commits." };
     const missing = ["user.name", "user.email"].filter((k) => gitTry(this.root, ["config", "--get", k]).stdout.trim() === "");
@@ -353,7 +356,7 @@ export class ProjectRuntime {
     }
     const r = gitTry(this.root, ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Initial commit"]);
     if (r.code !== 0) throw new ValidationError(`Git could not create the initial commit: ${(r.stderr || r.stdout).trim().slice(0, 400)}`, { root: this.root });
-    this.store.recordEvent("project.initial_commit", "project", this.projectId, { kind: "human" }, { root: this.root });
+    this.store.recordEvent("project.initial_commit", "project", this.projectId, by, { root: this.root });
     this.publish();
     this.scheduler.wake("initial_commit");
     return { created: true, message: "Created the initial commit." };

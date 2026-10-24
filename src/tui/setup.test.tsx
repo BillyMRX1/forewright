@@ -122,21 +122,20 @@ describe("setup wizard: pages", () => {
     assert.match(h.frame(), /Git\s+no\. Agents can plan here; code tasks wait until you approve running git init\./);
   });
 
-  it("page 1 offers an empty initial commit when the repo has none, and calls projects.initialCommit", async () => {
+  it("page 1 offers an empty initial commit first when the repo has none, and enter calls projects.initialCommit", async () => {
     const { h, api } = await wizard({ hasCommits: false });
-    assert.match(h.frame(), /Create an empty initial commit \(needed before agents can work\)/);
-    await down(h);
+    assert.match(h.frame(), /[▸>] Create an empty initial commit \(needed before agents can work\)/, "the default choice");
     await enter(h);
     await h.settle(150);
     assert.deepEqual(api.callsTo("projects.initialCommit").map((c) => c.params), [{ projectId: "p1" }]);
     assert.match(h.frame(), /Created the initial commit\./);
     assert.doesNotMatch(h.frame(), /Create an empty initial commit/, "offered only while there are no commits");
     assert.match(h.frame(), /setup 1\/6/, "still on page 1");
+    assert.match(h.frame(), /[▸>] Continue/, "the cursor lands on Continue");
   });
 
   it("the initial commit is offered for a new folder too, creating the workspace first", async () => {
     const { h, api, createdIds } = await wizard({ create: true, hasCommits: false });
-    await down(h);
     await enter(h);
     await h.settle(150);
     assert.deepEqual(createdIds, ["p1"]);
@@ -164,7 +163,6 @@ describe("setup wizard: pages", () => {
       return original(method as never, params as never);
     }) as typeof api.call;
     const { h } = await wizard({ api, hasCommits: false });
-    await down(h);
     await enter(h);
     await h.settle(150);
     assert.match(h.frame(), /Could not create the initial commit: Git needs your name/);

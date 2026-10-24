@@ -26,9 +26,10 @@ test("agents can never approve a PRD, resolve a decision or change authority", (
 });
 
 test("the CTO can coordinate but not submit work or reviews", () => {
-  for (const a of ["propose_prd", "create_task", "update_task", "assign_task", "hire_agent", "retire_agent", "send_message", "request_decision", "request_integration", "read_state"] as ActionName[]) {
+  for (const a of ["propose_prd", "create_task", "update_task", "assign_task", "hire_agent", "retire_agent", "send_message", "request_decision", "request_integration", "read_state", "create_initial_commit"] as ActionName[]) {
     allowed(cto, a);
   }
+  denied(worker, "create_initial_commit");
   denied(cto, "submit_work");
   denied(cto, "submit_review");
 });

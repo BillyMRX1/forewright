@@ -128,7 +128,7 @@ test("tools/list shows only the tools a token's role may call, and a token dies 
     const names = async (token: string) => ((await daemonRequest(sock, token, "agent.tools.list", {})) as { tools: Array<{ name: string }> }).tools.map((t) => t.name).sort();
 
     const ctoTools = await names(tokenOf(ctoRequests(h)[0]!));
-    assert.ok(ctoTools.includes("propose_prd") && ctoTools.includes("create_task") && ctoTools.includes("hire_agent") && ctoTools.includes("request_merge_to_user_branch"));
+    assert.ok(ctoTools.includes("propose_prd") && ctoTools.includes("create_task") && ctoTools.includes("hire_agent") && ctoTools.includes("request_merge_to_user_branch") && ctoTools.includes("create_initial_commit"));
     assert.ok(!ctoTools.includes("submit_work") && !ctoTools.includes("submit_review") && !ctoTools.includes("approve_prd"));
     const workerTools = await names(tokenOf(workRequests(h)[0]!));
     assert.deepEqual(workerTools, ["get_my_task", "send_message", "submit_work"]);

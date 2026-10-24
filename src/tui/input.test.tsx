@@ -524,6 +524,27 @@ describe("command palette", () => {
     assert.ok(entries.some((e) => e.kind === "decision"));
     assert.ok(buildEntries([], [], [], { paused: true }).some((e) => e.label === "Resume all work"));
     assert.ok(!buildEntries([], [], [], { paused: true }).some((e) => e.label === "Pause all work"));
+    assert.ok(!entries.some((e) => e.label === "Create initial commit"), "only for a repository with no commits");
+    assert.ok(buildEntries([], [], [], { noCommits: true }).some((e) => e.label === "Create initial commit" && e.action === "initialCommit"));
+  });
+
+  it("offers Create initial commit while the repository has no commits, and runs projects.initialCommit after asking", async () => {
+    const api = new FakeClient();
+    api.hasCommits = false;
+    const { h } = await mount({ api });
+    await ctrl(h, "p");
+    await h.send("initial commit");
+    assert.match(h.frame(), /Create initial commit\s+agents need one to start work/);
+    await enter(h);
+    assert.match(h.frame(), /Create an empty initial commit with your git identity\?/);
+    await h.send("y");
+    await h.settle(200);
+    assert.equal(api.callsTo("projects.initialCommit").length, 1);
+    assert.match(h.frame(), /Created the initial commit\./);
+    await ctrl(h, "p");
+    await h.send("initial commit");
+    assert.doesNotMatch(h.frame(), /Create initial commit/, "gone once there is a commit");
+    await esc(h);
   });
 
   it("matches case-insensitive subsequences and ranks closer matches first", () => {

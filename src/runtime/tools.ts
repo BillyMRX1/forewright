@@ -9,7 +9,7 @@ import { redactSecrets, truncate } from "../core/safety.js";
 import { type Agent, type DecisionKind, type DecisionOption, canonicalJson } from "../core/store.js";
 import { LIVE_ENGINES, type AgentRole, type EngineId, type PermissionProfile } from "../core/types.js";
 import { ToolError } from "./errors.js";
-import { gitTry } from "./git.js";
+import { gitTry, hasCommits, isGitRepo } from "./git.js";
 import { unusableReason } from "./health.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { buildStateDigest } from "./prompts.js";
@@ -401,6 +401,27 @@ const TOOLS: ToolDef[] = [
     action: "merge_to_user_branch",
     mutating: true,
     run: (ctx, a) => requestMerge(ctx, optStr(a, "target_branch", 200)),
+  },
+  {
+    name: "create_initial_commit",
+    description:
+      "Only for a git repository with no commits yet (tasks block with \"no commits yet\"): makes an empty first commit with Billy's git identity so work can branch from it. Refused when the repository already has commits. Tell Billy you did it.",
+    properties: {},
+    required: [],
+    roles: ["cto"],
+    action: "create_initial_commit",
+    mutating: true,
+    run: (ctx) => {
+      const { rt } = ctx;
+      if (!isGitRepo(rt.root)) throw new ToolError("This project is not a git repository. Billy has to approve git init first; create_initial_commit only works in an empty git repository.");
+      if (hasCommits(rt.root)) throw new ToolError("This repository already has commits, so there is nothing to do. create_initial_commit only works in a repository with no commits.");
+      const made = rt.initialCommit({ kind: "agent", id: ctx.agent.id });
+      return {
+        created: made.created,
+        commit: gitTry(rt.root, ["rev-parse", "--short", "HEAD"]).stdout.trim(),
+        message: `${made.message} It is empty and uses Billy's git identity. Blocked tasks can start now; tell Billy you made it.`,
+      };
+    },
   },
   // ---- worker
   {

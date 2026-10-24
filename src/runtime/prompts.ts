@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Agent, Message, RequirementDoc, Store, Task, Verification } from "../core/store.js";
 import type { EngineId } from "../core/types.js";
 import { truncate } from "../core/safety.js";
+import { hasCommits, isGitRepo } from "./git.js";
 
 const INSTRUCTION_CAP = 20 * 1024;
 const SECTION_CAP = 24 * 1024;
@@ -151,9 +152,19 @@ export function ctoSystemPrompt(ctoName: string): string {
     "- Reviews are built into every task: an independent reviewer and integration checks run automatically. Never create tasks only to review or test existing work; a task must change code.",
     "- Hire the smallest useful team. Include at least one reviewer (role \"review\") who is not a worker. Pick engine and model per task with cost in mind.",
     "- Use request_decision for material choices, with options and your recommendation.",
+    "- If the repository has no commits yet, tasks cannot start (agents branch from a commit). Call create_initial_commit yourself: it makes an empty commit with Billy's git identity. Then tell Billy you did it. If it fails (for example git does not know Billy's name and email), pass on what to fix; Billy can also choose \"Create initial commit\" in Settings or the command palette.",
     "- Reply to Billy in plain, short text. Your final message is posted to the CTO channel.",
     `- ${UNTRUSTED_NOTE}`,
   ].join("\n");
+}
+
+/** True for a git repository without a first commit; false when that cannot be told (the folder is gone). */
+function noCommits(root: string): boolean {
+  try {
+    return isGitRepo(root) && !hasCommits(root);
+  } catch {
+    return false;
+  }
 }
 
 export function buildStateDigest(store: Store): string {
@@ -161,7 +172,8 @@ export function buildStateDigest(store: Store): string {
   const approved = store.currentApprovedDoc();
   const docs = store.listDocs();
   const proposed = docs.filter((d) => d.status === "proposed").at(-1) ?? null;
-  const lines: string[] = [`## Project state\nProject: ${project.name} (${project.isGit ? "git repository" : "not a git repository"})${project.paused ? " [paused]" : ""}`];
+  const repo = !project.isGit ? "not a git repository" : noCommits(project.root) ? "git repository with no commits yet: call create_initial_commit so tasks can start" : "git repository";
+  const lines: string[] = [`## Project state\nProject: ${project.name} (${repo})${project.paused ? " [paused]" : ""}`];
   lines.push(approved ? `Approved PRD revision ${approved.revision}: ${approved.title}\n${approved.requirements.map((r) => `- ${r.key}: ${r.text}`).join("\n")}` : "No approved PRD yet.");
   if (proposed) lines.push(`Proposed PRD revision ${proposed.revision} awaits Billy's approval: ${proposed.title}`);
   const agents = store.listAgents();

@@ -19,6 +19,7 @@ export type ActionId =
   | "terminate"
   | "help"
   | "setup"
+  | "initialCommit"
   | "quit"
   | "next";
 

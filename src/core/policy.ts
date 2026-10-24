@@ -21,6 +21,7 @@ export type ActionName =
   | "submit_work"
   | "submit_review"
   | "request_integration"
+  | "create_initial_commit"
   | "merge_to_user_branch"
   | "publish"
   | "destructive"
@@ -75,6 +76,8 @@ const CTO_ACTIONS: ReadonlySet<ActionName> = new Set([
   "request_decision",
   "request_integration",
   "read_state",
+  // Only the first, empty commit of a repository with none; the tool refuses otherwise.
+  "create_initial_commit",
   "merge_to_user_branch",
   "publish",
   "destructive",

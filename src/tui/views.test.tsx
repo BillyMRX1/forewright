@@ -383,6 +383,25 @@ describe("Settings", () => {
     assert.match(f, /\[ Run setup again \]/);
     assert.match(f, /Execution and state are local to this Mac/);
     assert.match(f, /Anthropic for Claude Code, OpenAI for Codex/);
+    assert.doesNotMatch(f, /initial commit/i, "only offered while the repository has no commits");
+  });
+
+  it("an empty repository offers Create initial commit first; enter asks, then calls projects.initialCommit and the action goes away", async () => {
+    const api = new FakeClient();
+    api.hasCommits = false;
+    const { h } = await mount({ cols: 140, rows: 40, view: VIEW.settings, api });
+    assert.match(h.frame(), /REPOSITORY/);
+    assert.match(h.frame(), /This repository has no commits yet\./);
+    assert.match(h.frame(), /[▸>] Initial commit\s+\[ Create initial commit \]/, "the cursor starts on it");
+    await enter(h);
+    assert.match(h.frame(), /Create an empty initial commit with your git identity\?/);
+    assert.equal(api.callsTo("projects.initialCommit").length, 0, "asks first");
+    await h.send("y");
+    await h.settle(200);
+    assert.deepEqual(api.callsTo("projects.initialCommit").map((c) => c.params), [{ projectId: "p1" }]);
+    assert.match(h.frame(), /Created the initial commit\./);
+    assert.doesNotMatch(h.frame(), /\[ Create initial commit \]/);
+    assert.match(h.frame(), /[▸>] CTO engine/, "the cursor moves to the next item");
   });
 
   it("d shows each engine's capabilities, including what is not supported", async () => {

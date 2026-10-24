@@ -267,7 +267,7 @@ export function SetupWizard(props: SetupWizardProps) {
   const offerCommit = props.isGit && hasCommits === false;
   const step1Options = (): string[] => {
     const base = props.create && !created ? ["Create workspace and continue", "Skip setup, use recommended defaults", "Quit"] : ["Continue", "Skip setup, use recommended defaults"];
-    return offerCommit ? [base[0]!, COMMIT_OPTION, ...base.slice(1)] : base;
+    return offerCommit ? [COMMIT_OPTION, ...base] : base; // first, so enter makes the commit agents need
   };
 
   /** Makes the empty initial commit through the service (the workspace is created first when it does not exist yet). */
