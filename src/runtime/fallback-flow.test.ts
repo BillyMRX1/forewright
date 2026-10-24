@@ -45,7 +45,7 @@ test("CTO: with [codex] the next turn runs on codex, messages are delivered once
     assert.equal(h.rt.ctoAgent().engine, "claude", "the agent's configured engine is untouched");
     assert.equal(ctoOf(copilot).length, 0);
 
-    const claudeSession = h.rt.store.getAgentSession(cto.id, "claude");
+    const claudeSession = h.rt.store.getAgentSession(cto.id, "claude", "cto");
     assert.ok(claudeSession);
     clock.advance(61 * MIN);
     await h.client.request("cto.send", { projectId: h.projectId, body: "ping two" });
@@ -139,7 +139,7 @@ test("changing the CTO engine never reuses another engine's session", async () =
     const cto = h.rt.ctoAgent();
     await h.client.request("cto.send", { projectId: h.projectId, body: "one" });
     await waitFor(() => ctoOf(claude).length === 1 && h.rt.active.size === 0, "the first turn");
-    const s1 = h.rt.store.getAgentSession(cto.id, "claude");
+    const s1 = h.rt.store.getAgentSession(cto.id, "claude", "cto");
     assert.ok(s1);
     await h.client.request("agents.update", { projectId: h.projectId, agentId: cto.id, engine: "codex" });
     await h.client.request("cto.send", { projectId: h.projectId, body: "two" });
@@ -224,7 +224,7 @@ test("worker: both engines at their limit blocks the task, and after the primary
     await waitFor(() => taskOf(h, "T-1").blockReason === "quota", "the quota block once both engines are at their limit");
     assert.equal(workOf(claude).length, 1);
     assert.equal(workOf(codex).length, 1);
-    const claudeSession = h.rt.store.getAgentSession(wren.id, "claude");
+    const claudeSession = h.rt.store.getAgentSession(wren.id, "claude", t.id);
     assert.ok(claudeSession);
     clock.advance(61 * MIN);
     h.rt.scheduler.tick("test");

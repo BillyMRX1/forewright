@@ -133,7 +133,7 @@ export class CtoDriver {
     const nameOf = nameOfSender(rt);
     const taskShort = (id: string) => store.getTask(id).shortId;
     // A session belongs to one engine: resume only the CTO's own session on the engine that runs now.
-    const ownSession = store.getAgentSession(cto.id, cto.engine);
+    const ownSession = store.getAgentSession(cto.id, cto.engine, "cto");
     const resume = adapter.capabilities.resume && ownSession ? ownSession : undefined;
     const earlier = store.listRuns().filter((r) => r.kind === "cto" && r.id !== run.id && r.state !== "queued");
     const previous = earlier.at(-1);
@@ -212,7 +212,7 @@ export class CtoDriver {
       default: {
         store.requeueDeliveries(a.agent.id, a.run.id);
         if (a.resumeSessionId && looksLikeSessionLoss(`${outcome.error ?? ""} ${outcome.errorDetail ?? ""}`)) {
-          store.clearAgentSession(a.agent.id, a.agent.engine);
+          store.clearAgentSession(a.agent.id, a.agent.engine, "cto");
           store.recordEvent("cto.session_reset", "agent", a.agent.id, { kind: "system" }, { lostSession: a.resumeSessionId, reason: outcome.error });
           return; // the next turn starts fresh with a context summary and the same messages
         }

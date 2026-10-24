@@ -48,17 +48,17 @@ test("fallback lists reject unknown engines, the test double, duplicates, bad mo
 test("sessions are kept per engine and never cross engines", () => {
   const { store } = makeEnv();
   const a = store.hireAgent({ name: "W", role: "backend", engine: "claude", permission: "workspace_write" });
-  store.setAgentSession(a.id, "claude", "S-claude");
-  store.setAgentSession(a.id, "codex", "S-codex");
-  assert.equal(store.getAgentSession(a.id, "claude"), "S-claude");
-  assert.equal(store.getAgentSession(a.id, "codex"), "S-codex");
-  assert.equal(store.getAgentSession(a.id, "copilot"), null);
+  store.setAgentSession(a.id, "claude", "cto", "S-claude");
+  store.setAgentSession(a.id, "codex", "cto", "S-codex");
+  assert.equal(store.getAgentSession(a.id, "claude", "cto"), "S-claude");
+  assert.equal(store.getAgentSession(a.id, "codex", "cto"), "S-codex");
+  assert.equal(store.getAgentSession(a.id, "copilot", "cto"), null);
   assert.equal(store.getAgent(a.id).providerSessionId, "S-claude", "the agent's own session is the one of its own engine");
   store.updateAgent(a.id, { engine: "codex" }, HUMAN);
   assert.equal(store.getAgent(a.id).providerSessionId, "S-codex", "changing the engine shows the session of the new engine, never the old one");
-  store.clearAgentSession(a.id, "codex");
-  assert.equal(store.getAgentSession(a.id, "codex"), null);
-  assert.equal(store.getAgentSession(a.id, "claude"), "S-claude", "clearing one engine keeps the others");
+  store.clearAgentSession(a.id, "codex", "cto");
+  assert.equal(store.getAgentSession(a.id, "codex", "cto"), null);
+  assert.equal(store.getAgentSession(a.id, "claude", "cto"), "S-claude", "clearing one engine keeps the others");
 });
 
 test("migration 2 moves each agent's single session into the per-engine table", () => {

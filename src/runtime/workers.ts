@@ -186,8 +186,10 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
 
     const tmp = path.join(ws.worktreePath, ".forewright-tmp");
     mkdirSync(tmp, { recursive: true });
-    const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId && r.engine === agent.engine).at(-1); // never another engine's session
-    const canResume = adapterFor(rt, agent).capabilities.resume && prior !== undefined && !(prior.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
+    // Resume only this agent's session for this task on this engine: never another task's or engine's.
+    const session = store.getAgentSession(agent.id, agent.engine, task.id);
+    const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId && r.engine === agent.engine).at(-1);
+    const canResume = adapterFor(rt, agent).capabilities.resume && session !== null && !(prior?.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
     launchRun(rt, {
       run,
       agent,
@@ -205,7 +207,7 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
         GIT_COMMITTER_NAME: agent.name,
         GIT_COMMITTER_EMAIL: "agent@forewright.local",
       },
-      ...(canResume && prior?.providerSessionId ? { resumeSessionId: prior.providerSessionId } : {}),
+      ...(canResume && session ? { resumeSessionId: session } : {}),
       onOutcome: (a, outcome) => handleWorkOutcome(rt, a, outcome),
     });
     rt.publish();

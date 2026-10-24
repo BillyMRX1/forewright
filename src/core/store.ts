@@ -398,7 +398,10 @@ export class Store {
         t.id,
       );
       this.appendEvent("task.transitioned", "task", t.id, actorLabel(opts.actor), { from: t.state, to });
-      if (to === "cancelled") this.freeAgentFor(t.id);
+      if (to === "cancelled") {
+        this.freeAgentFor(t.id);
+        this.clearPurposeSessions(t.id);
+      }
       return this.getTask(t.id);
     });
   }
@@ -633,6 +636,7 @@ export class Store {
       }
       this.run("UPDATE task SET state = 'done', lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?", this.nowIso(), t.id);
       this.appendEvent("task.completed", "task", t.id, "system", { candidateCommit: t.candidateCommit });
+      this.clearPurposeSessions(t.id); // nobody resumes a finished task
       this.freeAgentFor(t.id);
       this.refreshReadiness();
       return this.getTask(t.id);
@@ -768,7 +772,7 @@ export class Store {
     tx(this.db, () => {
       if (ev.kind === "session_started" && ev.sessionId) {
         this.run("UPDATE run SET provider_session_id = ? WHERE id = ?", ev.sessionId, runId);
-        this.setAgentSession(run.agentId, run.engine, ev.sessionId);
+        this.recordRunSession(run, ev.sessionId);
       }
       // Tool calls are summarized by tool name; their JSON input stays in the raw log.
       const summary = ev.kind === "tool_call" ? (ev.toolName ?? "a tool") : (ev.text ?? ev.toolName ?? ev.kind);
@@ -805,7 +809,7 @@ export class Store {
         outcome.sessionId,
         runId,
       );
-      if (outcome.sessionId) this.setAgentSession(run.agentId, run.engine, outcome.sessionId);
+      if (outcome.sessionId) this.recordRunSession(run, outcome.sessionId);
       this.setAgentActivity(run.agentId, `Run ${outcome.state}`, null, outcome.state === "quota_wait" ? "waiting" : "idle");
       this.appendEvent("run.finished", "run", runId, "system", { state: outcome.state, exitCode: outcome.exitCode, signal: outcome.signal, error: outcome.error });
       return this.getRun(runId);
@@ -875,7 +879,7 @@ export class Store {
       permission: r["permission"] as PermissionProfile,
       lifecycle: r["lifecycle"] as AgentLifecycle,
       currentTaskId: (r["current_task_id"] as string | null) ?? null,
-      providerSessionId: this.getAgentSession(r["id"] as string, r["engine"] as EngineId),
+      providerSessionId: this.latestAgentSession(r["id"] as string, r["engine"] as EngineId),
       createdAt: r["created_at"] as string,
       retiredAt: (r["retired_at"] as string | null) ?? null,
       lastEventAt: (r["last_event_at"] as string | null) ?? null,
@@ -967,6 +971,7 @@ export class Store {
         throw new ValidationError(`${a.name} still has active work (${busy.map((b) => b["short_id"]).join(", ")}); reassign it first.`);
       }
       this.run("UPDATE agent SET retired_at = ?, lifecycle = 'retired', current_task_id = NULL WHERE id = ?", this.nowIso(), id);
+      this.clearAgentSession(id); // a retired agent never resumes anything
       this.appendEvent("agent.retired", "agent", id, actorLabel(actor));
     });
   }
@@ -1759,26 +1764,65 @@ export class Store {
     this.setAgentActivity(agentId, summary, null);
   }
 
-  /** The provider session an agent holds for one engine. Sessions never cross engines. */
-  getAgentSession(agentId: string, engine: EngineId): string | null {
-    return (this.one("SELECT session_id FROM agent_session WHERE agent_id = ? AND engine = ?", agentId, engine)?.["session_id"] as string | undefined) ?? null;
-  }
-
-  setAgentSession(agentId: string, engine: EngineId, sessionId: string): void {
-    this.run(
-      `INSERT INTO agent_session (agent_id, engine, session_id, updated_at) VALUES (?,?,?,?)
-       ON CONFLICT(agent_id, engine) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at`,
-      agentId,
-      engine,
-      sessionId,
-      this.nowIso(),
+  /**
+   * The session registry. A provider session belongs to one agent, one engine and one
+   * purpose: a task id (work and review runs of that task), "cto", or "chat" (reserved).
+   * Sessions never cross engines or purposes.
+   */
+  getAgentSession(agentId: string, engine: EngineId, purpose: string): string | null {
+    return (
+      (this.one("SELECT session_id FROM agent_session WHERE agent_id = ? AND engine = ? AND purpose = ?", agentId, engine, purpose)?.["session_id"] as string | undefined) ?? null
     );
   }
 
-  /** Forgets the agent's session for one engine (a lost session), or for every engine when none is given. */
-  clearAgentSession(agentId: string, engine?: EngineId): void {
-    if (engine) this.run("DELETE FROM agent_session WHERE agent_id = ? AND engine = ?", agentId, engine);
-    else this.run("DELETE FROM agent_session WHERE agent_id = ?", agentId);
+  setAgentSession(agentId: string, engine: EngineId, purpose: string, sessionId: string, runId?: string): void {
+    const now = this.nowIso();
+    this.run(
+      `INSERT INTO agent_session (agent_id, engine, purpose, session_id, created_at, updated_at, last_run_id) VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(agent_id, engine, purpose) DO UPDATE SET
+         created_at = CASE WHEN session_id = excluded.session_id THEN created_at ELSE excluded.created_at END,
+         session_id = excluded.session_id, updated_at = excluded.updated_at, last_run_id = excluded.last_run_id`,
+      agentId,
+      engine,
+      purpose,
+      sessionId,
+      now,
+      now,
+      runId ?? null,
+    );
+  }
+
+  /** Forgets an agent's sessions: one purpose on one engine (a lost session), or everything the filters leave open. */
+  clearAgentSession(agentId: string, engine?: EngineId, purpose?: string): void {
+    const where = ["agent_id = ?"];
+    const args: string[] = [agentId];
+    if (engine) {
+      where.push("engine = ?");
+      args.push(engine);
+    }
+    if (purpose) {
+      where.push("purpose = ?");
+      args.push(purpose);
+    }
+    this.run(`DELETE FROM agent_session WHERE ${where.join(" AND ")}`, ...args);
+  }
+
+  /** Every agent's sessions for one purpose; a finished or cancelled task does not leave sessions behind. */
+  clearPurposeSessions(purpose: string): void {
+    this.run("DELETE FROM agent_session WHERE purpose = ?", purpose);
+  }
+
+  /** The agent's newest session on an engine, whatever its purpose. For display only, never for resuming. */
+  private latestAgentSession(agentId: string, engine: EngineId): string | null {
+    return (
+      (this.one("SELECT session_id FROM agent_session WHERE agent_id = ? AND engine = ? ORDER BY updated_at DESC, purpose LIMIT 1", agentId, engine)?.["session_id"] as string | undefined) ?? null
+    );
+  }
+
+  /** A run's purpose is the CTO's own session or the task it works on. A run with neither keeps no session. */
+  private recordRunSession(run: Run, sessionId: string): void {
+    const purpose = run.kind === "cto" ? "cto" : run.taskId;
+    if (purpose) this.setAgentSession(run.agentId, run.engine, purpose, sessionId, run.id);
   }
 
   /** Puts messages that a failed run received back to pending so the next run sees them. */
