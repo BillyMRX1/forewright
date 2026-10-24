@@ -14,7 +14,7 @@ import { deriveAttention, needsYouItems, nextNeedItem, type UnseenDone } from ".
 import { ToastCard, TopBar, type ConnView } from "./shell.js";
 import { Sidebar, buildSidebar } from "./sidebar.js";
 import { Palette, type PaletteEntry } from "./palette.js";
-import { ConfirmCard, HelpModal, PrdViewer } from "./modals.js";
+import { ConfirmCard, HelpModal, OutcomeCard, PrdViewer } from "./modals.js";
 import { footerHints } from "./keys.js";
 import { viewOfAction, type ActionId } from "./commands.js";
 import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, resetTimePhrase, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
@@ -160,8 +160,9 @@ export function App(props: AppProps) {
   /** False while the repository has no commits (from state.settings); undefined until known. */
   const [hasCommits, setHasCommits] = useState<boolean | undefined>(undefined);
   const [offer, setOffer] = useState(props.setupOffer === true);
-  /** Finished tasks Billy has not yet answered the "merged as is?" question for; the first one is asked. Skippable, never blocks. */
-  const [outcomeQ, setOutcomeQ] = useState<Array<{ taskId: string; shortId: string }>>([]);
+  /** Finished tasks Billy has not answered the "how did it merge" question for, oldest first. Opt-in: the w key opens the question. */
+  const [outcomeQ, setOutcomeQ] = useState<Array<{ taskId: string; shortId: string; title: string }>>([]);
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
   const [outcomeMinutes, setOutcomeMinutes] = useState("");
   const [logRun, setLogRun] = useState<string | null>(null);
   const [jump, setJump] = useState<JumpTarget | null>(null);
@@ -234,8 +235,8 @@ export function App(props: AppProps) {
         break;
       case "task.completed":
         withTask(ev.entityId, (t) => {
-          raise("finished", `${t.shortId} finished: ${t.title}`, { kind: "task", taskId: t.id });
-          setOutcomeQ((q) => (q.some((x) => x.taskId === t.id) ? q : [...q, { taskId: t.id, shortId: t.shortId }].slice(-5)));
+          raise("finished", `${t.shortId} finished: ${t.title} ${sym().dot} press w to record how it merged`, { kind: "task", taskId: t.id });
+          setOutcomeQ((q) => (q.some((x) => x.taskId === t.id) ? q : [...q, { taskId: t.id, shortId: t.shortId, title: t.title }].slice(-10)));
         });
         break;
       case "run.finished": {
@@ -420,14 +421,14 @@ export function App(props: AppProps) {
   const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 6).slice(0, 3) : [];
   const errorRows = error ? 1 + detailLines.length : 0;
   const outcomeAsk = outcomeQ[0] ?? null;
-  const offerRows = offer || outcomeAsk !== null ? 1 : 0;
+  const offerRows = offer ? 1 : 0;
   const bodyHeight = Math.max(2, rows - 3 - errorRows - offerRows);
   const mainW = showSide ? cols - sideW - 1 : cols;
   const bodyWidth = Math.max(8, mainW - 2);
 
   // ---- focus
   const focus: Zone = rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
-  const overlay = help || confirm !== null || logRun !== null || paletteOpen || prdOpen || wizard;
+  const overlay = help || outcomeOpen || confirm !== null || logRun !== null || paletteOpen || prdOpen || wizard;
   const modal = overlay || offer;
 
   const ask = useCallback((text: string, onYes: () => Promise<void> | void) => setConfirm({ text, onYes }), []);
@@ -578,6 +579,7 @@ export function App(props: AppProps) {
     if (!asked) return;
     setOutcomeQ((q) => q.slice(1));
     setOutcomeMinutes("");
+    if (outcomeQ.length <= 1) setOutcomeOpen(false);
     api.call("tasks.outcome", { projectId, taskId: asked.taskId, ...(fixMinutes !== undefined ? { fixMinutes } : {}) }).then(() => {}, fail);
   };
 
@@ -702,6 +704,20 @@ export function App(props: AppProps) {
       } else if (input === "n" || input === "N" || key.escape) setConfirm(null);
       return;
     }
+    if (outcomeOpen) {
+      if (key.escape) {
+        setOutcomeOpen(false);
+        setOutcomeMinutes("");
+      } else if (input === "s" || input === "S") {
+        setOutcomeQ((q) => q.slice(1));
+        setOutcomeMinutes("");
+        if (outcomeQ.length <= 1) setOutcomeOpen(false);
+      } else if (input === "y" || input === "Y") answerOutcome();
+      else if (/^[0-9]$/.test(input)) setOutcomeMinutes((m) => (m + input).slice(0, 5));
+      else if (key.backspace || key.delete) setOutcomeMinutes((m) => m.slice(0, -1));
+      else if (key.return && outcomeMinutes !== "") answerOutcome(Number(outcomeMinutes));
+      return;
+    }
     if (help) {
       if (key.escape || input === "?" || input === "q") setHelp(false);
       return;
@@ -730,16 +746,9 @@ export function App(props: AppProps) {
     if (key.ctrl && input === "e") return setErrorOpen((o) => !o);
     // Everything below is for when no text box has focus.
     if (typing) return;
-    if (outcomeAsk !== null && !key.ctrl && !key.meta) {
-      if (key.escape) {
-        setOutcomeQ((q) => q.slice(1));
-        setOutcomeMinutes("");
-        return;
-      }
-      if (/^[0-9]$/.test(input)) return setOutcomeMinutes((m) => (m + input).slice(0, 5));
-      if (key.backspace || key.delete) return setOutcomeMinutes((m) => m.slice(0, -1));
-      if (key.return && outcomeMinutes !== "") return answerOutcome(Number(outcomeMinutes));
-      if (input === "y" || input === "Y") return answerOutcome();
+    if (input === "w") {
+      if (outcomeAsk === null) return notify("No finished task is waiting for an answer.");
+      return setOutcomeOpen(true);
     }
     if (key.ctrl || key.meta) return;
     if (focus === "sidebar") {
@@ -826,8 +835,8 @@ export function App(props: AppProps) {
   const paused = runtime?.paused === true;
   const cardMode = shown !== null && cols >= 70 && rows >= 20;
   const sidebarOnly = !showSide && focus === "sidebar" && !overlay;
-  const scope = confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
-  const hintText = footerHints(scope, cols - 2, { needs: needs.length, toast: shown?.target != null, typing, prd: snap.proposedPrd });
+  const scope = outcomeOpen ? "outcome" : confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
+  const hintText = footerHints(scope, cols - 2, { needs: needs.length, toast: shown?.target != null, typing, prd: snap.proposedPrd, outcome: outcomeAsk !== null });
   const showView = !overlay && !sidebarOnly;
   const titleName = view === VIEW.agent ? (snap.agents.find((a) => a.id === agentId)?.name ?? "Agent") : VIEW_NAMES[view]!;
 
@@ -876,6 +885,7 @@ export function App(props: AppProps) {
                 {viewEl}
               </Box>
               {confirm ? <ConfirmCard text={confirm.text} width={bodyWidth} height={bodyHeight} /> : null}
+              {outcomeOpen && outcomeAsk ? <OutcomeCard shortId={outcomeAsk.shortId} title={outcomeAsk.title} minutes={outcomeMinutes} left={outcomeQ.length - 1} width={bodyWidth} height={bodyHeight} /> : null}
               {help ? (
                 <Ctx.Provider value={overlayCtx}>
                   <HelpModal width={bodyWidth} height={bodyHeight} />
@@ -910,13 +920,6 @@ export function App(props: AppProps) {
               {"Set up engines for this project?"}
             </SafeText>
             <Text dimColor>{"  enter to start, esc to skip"}</Text>
-          </Box>
-        ) : null}
-        {outcomeAsk !== null && !offer ? (
-          <Box height={1} flexShrink={0} paddingX={1}>
-            <SafeText color={colors.attention} bold width={Math.max(8, cols - 2)}>
-              {`${outcomeAsk.shortId} done. Merged as is? y = yes, or minutes spent fixing: ${outcomeMinutes === "" ? "_" : outcomeMinutes} (enter), esc = skip`}
-            </SafeText>
           </Box>
         ) : null}
         {error ? (

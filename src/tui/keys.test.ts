@@ -36,7 +36,7 @@ describe("key table", () => {
   });
 
   it("bare letters and digits are only bound where no text box has focus", () => {
-    const idle = new Set(["idle", "sidebar", "home", "home.worker.edit", "cto", "cto.input.empty", "chat", "chat.input.empty", "agent", "agent.input.empty", "tasks", "tasks.detail", "tasks.detail.final", "inbox", "inbox.options", "inbox.prd", "settings", "settings.fallback", "prd", "log", "help", "confirm"]);
+    const idle = new Set(["idle", "sidebar", "home", "home.worker.edit", "cto", "cto.input.empty", "chat", "chat.input.empty", "agent", "agent.input.empty", "tasks", "tasks.detail", "tasks.detail.final", "inbox", "inbox.options", "inbox.prd", "settings", "settings.fallback", "prd", "log", "help", "confirm", "outcome"]);
     for (const b of BINDINGS) {
       if (b.keys.some((k) => /^[a-zA-Z0-9]$/.test(k))) assert.ok(idle.has(b.scope), `${b.id} binds a bare letter in scope ${b.scope}, which has a text box`);
     }
@@ -56,7 +56,7 @@ describe("key table", () => {
   it("hint lines always end with help and never exceed the width", () => {
     for (const width of [24, 40, 80, 140]) {
       for (const [scope] of SCOPE_TITLES) {
-        if (["help", "confirm", "palette", "prd", "log"].includes(scope)) continue;
+        if (["help", "confirm", "palette", "prd", "log", "outcome"].includes(scope)) continue;
         for (const typing of [false, true]) {
           const f = footerHints(scope, width, { needs: 2, toast: true, typing });
           assert.ok([...f].length <= width, `hint too wide at ${width} for ${scope}: ${f}`);

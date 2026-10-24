@@ -27,6 +27,20 @@ export function ConfirmCard({ text, width, height }: { text: string; width: numb
   );
 }
 
+/** Asks how the oldest finished task merged. Answers go to the app's key handler; this only shows the question. */
+export function OutcomeCard({ shortId, title, minutes, left, width, height }: { shortId: string; title: string | null; minutes: string; left: number; width: number; height: number }) {
+  const w = Math.max(24, Math.min(64, width));
+  return (
+    <Box height={height} width={width} alignItems="center" justifyContent="center">
+      <Box borderStyle={borderStyle()} borderColor={palette.attention} flexDirection="column" paddingX={1} width={w} flexShrink={0}>
+        <SafeText bold>{`${shortId}${title ? ` ${title}` : ""}: how did it merge?`}</SafeText>
+        <Text>{`y = merged as is, or minutes spent fixing: ${minutes === "" ? "_" : minutes}`}</Text>
+        <Text dimColor>{`enter save ${sym().dot} s skip ${sym().dot} esc close${left > 0 ? ` ${sym().dot} ${left} more waiting` : ""}`}</Text>
+      </Box>
+    </Box>
+  );
+}
+
 export function HelpModal({ width, height }: { width: number; height: number }) {
   return (
     <Box flexDirection="column" height={height} width={width}>

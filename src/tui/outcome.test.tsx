@@ -1,62 +1,95 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { VIEW, closeAll, enter, esc, mount } from "./test-support.js";
+import { VIEW, closeAll, enter, esc, hints, mount } from "./test-support.js";
 
 afterEach(closeAll);
 
-const asked = /T-4 done\. Merged as is\?/;
+const asked = /T-4 .*: how did it merge\?/;
 
-describe("the merged-as-is prompt", () => {
-  it("appears when a task is done, and y answers 'merged as is'", async () => {
+describe("the how-it-merged question", () => {
+  it("is only a notice when a task is done: keys keep their normal meaning", async () => {
     const { h, api } = await mount({ view: VIEW.home });
     api.emitEvent("task.completed", "task", "t4");
     await h.settle(100);
+    assert.match(h.frame(), /T-4 finished: Write tests · press w to/);
+    assert.doesNotMatch(h.frame(), asked);
+    await h.send("3"); // still jumps to the Tasks view
+    await h.settle(150);
+    assert.match(h.frame(), /Tasks/);
+    assert.doesNotMatch(h.frame(), asked);
+    await esc(h); // still goes back to the sidebar, not into a prompt
+    assert.equal(api.callsTo("tasks.outcome").length, 0);
+  });
+
+  it("w opens the modal; y answers 'merged as is'", async () => {
+    const { h, api } = await mount({ view: VIEW.home });
+    api.emitEvent("task.completed", "task", "t4");
+    await h.settle(100);
+    await h.send("w");
+    await h.settle(100);
     assert.match(h.frame(), asked);
+    assert.match(hints(h), /y as is/);
     await h.send("y");
     await h.settle(100);
     assert.doesNotMatch(h.frame(), asked);
-    const calls = api.callsTo("tasks.outcome");
-    assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0]!.params, { projectId: "p1", taskId: "t4" });
+    assert.deepEqual(api.callsTo("tasks.outcome").map((c) => c.params), [{ projectId: "p1", taskId: "t4" }]);
   });
 
-  it("a number and enter record the minutes spent fixing", async () => {
+  it("digits and enter record the minutes spent fixing", async () => {
     const { h, api } = await mount({ view: VIEW.home });
     api.emitEvent("task.completed", "task", "t4");
     await h.settle(100);
+    await h.send("w");
     await h.send("2");
     await h.send("5");
-    assert.match(h.frame(), /fixing: 25 \(enter\)/);
+    assert.match(h.frame(), /fixing: 25/);
     await enter(h);
     await h.settle(100);
     assert.doesNotMatch(h.frame(), asked);
     assert.deepEqual(api.callsTo("tasks.outcome").map((c) => c.params), [{ projectId: "p1", taskId: "t4", fixMinutes: 25 }]);
   });
 
-  it("Esc skips it and stores nothing; the next finished task is asked after", async () => {
+  it("Esc closes without recording, and w asks again; finished tasks queue oldest first", async () => {
     const { h, api } = await mount({ view: VIEW.home });
     api.emitEvent("task.completed", "task", "t4");
     api.emitEvent("task.completed", "task", "t2");
     await h.settle(100);
+    await h.send("w");
+    await h.settle(100);
     assert.match(h.frame(), asked);
+    assert.match(h.frame(), /1 more waiting/);
     await esc(h);
     await h.settle(100);
     assert.doesNotMatch(h.frame(), asked);
-    assert.match(h.frame(), /T-2 done\. Merged as is\?/);
-    await esc(h);
-    await h.settle(100);
-    assert.doesNotMatch(h.frame(), /Merged as is\?/);
     assert.equal(api.callsTo("tasks.outcome").length, 0);
+    await h.send("w");
+    await h.settle(100);
+    assert.match(h.frame(), asked, "still the oldest");
+    await h.send("y");
+    await h.settle(100);
+    await h.send("w");
+    await h.settle(100);
+    assert.match(h.frame(), /T-2 .*: how did it merge\?/);
+    await h.send("s"); // skip stores nothing
+    await h.settle(100);
+    assert.doesNotMatch(h.frame(), /how did it merge/);
+    assert.equal(api.callsTo("tasks.outcome").length, 1);
   });
 
-  it("does not take keys while a text box has focus", async () => {
+  it("w with nothing waiting says so, and does not open anything", async () => {
+    const { h } = await mount({ view: VIEW.home });
+    await h.send("w");
+    await h.settle(100);
+    assert.match(h.frame(), /No finished task is waiting/);
+    assert.doesNotMatch(h.frame(), /how did it merge/);
+  });
+
+  it("w typed in a message box is just text", async () => {
     const { h, api } = await mount({ view: VIEW.cto });
     api.emitEvent("task.completed", "task", "t4");
     await h.settle(100);
-    assert.match(h.frame(), asked);
-    await h.send("y");
+    await h.send("w");
     await h.settle(50);
-    assert.match(h.frame(), asked, "typing a y in the message box is not an answer");
-    assert.equal(api.callsTo("tasks.outcome").length, 0);
+    assert.doesNotMatch(h.frame(), asked);
   });
 });

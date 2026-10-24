@@ -23,7 +23,7 @@ export interface Binding {
   description: string;
   scope: KeyScope;
   /** Shown in the hint line when there is room. "needs", "toast" and "prd" only show when there is something to act on. */
-  footer?: true | "needs" | "toast" | "prd";
+  footer?: true | "needs" | "toast" | "prd" | "outcome";
 }
 
 /** Titles for the help modal, in display order. */
@@ -61,6 +61,7 @@ export const SCOPE_TITLES: Array<[KeyScope, string]> = [
   ["log", "Log viewer"],
   ["help", "This help"],
   ["confirm", "Confirmations"],
+  ["outcome", "How a finished task merged"],
 ];
 
 /** The hint bar never shows more than this many hints, `? help` included. */
@@ -83,6 +84,7 @@ export const BINDINGS: Binding[] = [
   { id: "tab.cycle", keys: ["tab"], label: "tab", action: "sidebar", description: "switch between the sidebar and the pane", scope: "idle" },
   { id: "settings", keys: [","], label: ",", action: "settings", description: "open Settings", scope: "idle" },
   { id: "next.need.key", keys: ["n"], label: "n", action: "needs you", description: "jump to the next thing that needs you (ctrl+n works in a text box too)", scope: "idle", footer: "needs" },
+  { id: "outcome.open", keys: ["w"], label: "w", action: "how it merged", description: "after a task is done: say whether you merged it as it was, or how many minutes you spent fixing it (optional, any time)", scope: "idle", footer: "outcome" },
   { id: "back", keys: ["q"], label: "q", action: "back", description: "close what is open; at a top-level pane with nothing open it quits (asks first while agents run)", scope: "idle" },
   { id: "esc.sidebar", keys: ["esc"], label: "esc", action: "sidebar", description: "go back to the sidebar from anywhere (a draft in a message box is kept)", scope: "idle" },
   { id: "help", keys: ["?"], label: "?", action: "help", description: "this help (/help works in a message box)", scope: "idle", footer: true },
@@ -231,6 +233,11 @@ export const BINDINGS: Binding[] = [
 
   { id: "confirm.yes", keys: ["y"], label: "y", action: "yes", description: "confirm", scope: "confirm", footer: true },
   { id: "confirm.no", keys: ["n", "esc"], label: "n", action: "no", description: "cancel (esc works too)", scope: "confirm", footer: true },
+
+  { id: "outcome.asis", keys: ["y"], label: "y", action: "as is", description: "merged as it was, nothing to fix", scope: "outcome", footer: true },
+  { id: "outcome.minutes", keys: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "enter"], label: "0-9", action: "minutes", description: "type the minutes you spent fixing it, then enter (backspace deletes)", scope: "outcome", footer: true },
+  { id: "outcome.skip", keys: ["s"], label: "s", action: "skip", description: "do not record this one, and ask about the next", scope: "outcome", footer: true },
+  { id: "outcome.close", keys: ["esc"], label: "esc", action: "close", description: "close without recording; the question stays available on w", scope: "outcome", footer: true },
 ];
 
 export function bindingsFor(scope: KeyScope): Binding[] {
@@ -259,7 +266,7 @@ export function keyLabel(label: string): string {
 }
 
 /** Scopes of overlays: they show only their own keys. */
-const MODAL_SCOPES = new Set<KeyScope>(["help", "confirm", "palette", "prd", "log"]);
+const MODAL_SCOPES = new Set<KeyScope>(["help", "confirm", "palette", "prd", "log", "outcome"]);
 
 export interface FooterFlags {
   needs: number;
@@ -268,6 +275,8 @@ export interface FooterFlags {
   typing: boolean;
   /** Whether a PRD is waiting for approval. Hints about approving show only then; left out means they show. */
   prd?: boolean;
+  /** Finished tasks are waiting for the "how did it merge" answer. */
+  outcome?: boolean;
 }
 
 function hint(b: Binding): string {
@@ -294,6 +303,7 @@ export function footerEntries(scope: KeyScope, width: number, flags: FooterFlags
   for (const b of own) items.push({ text: hint(b), prio: 0, order: order++ });
   if (flags.needs > 0) items.push({ text: `${hint(needs)} (${flags.needs})`, prio: 1, order: order++ });
   if (flags.toast) items.push({ text: hint(toast), prio: 1, order: order++ });
+  if (flags.outcome && !flags.typing) items.push({ text: hint(BINDINGS.find((b) => b.id === "outcome.open")!), prio: 1, order: order++ });
   items.push({ text: hint(palette), prio: 2, order: order++ });
   const tail = flags.typing ? "/help" : hint(BINDINGS.find((b) => b.id === "help")!);
   const chosen: typeof items = [];
