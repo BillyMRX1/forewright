@@ -115,6 +115,19 @@ export type NormalizedEventKind =
   | "completed" // well-formed final result from the provider
   | "diagnostic"; // anything unrecognized, kept for the raw log
 
+/**
+ * What one run used. `inputTokens` is the fresh input (cache writes included) and `cachedInputTokens` the input
+ * served from the provider's cache, so the two never overlap. Every field is optional: old rows and engines that
+ * report less simply leave fields out.
+ */
+export interface RunUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  costUsd?: number; // as reported by the CLI itself
+  premiumRequests?: number; // Copilot
+}
+
 export interface NormalizedEvent {
   runId: Id;
   generation: number;
@@ -123,7 +136,7 @@ export interface NormalizedEvent {
   text?: string;
   sessionId?: string;
   toolName?: string;
-  usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  usage?: RunUsage;
   retryAfter?: string; // ISO time, when quota reset is known
   raw?: string; // original line, already redacted and truncated
 }
@@ -138,7 +151,7 @@ export interface RunOutcome {
   signal: string | null;
   error: string | null; // plain language
   errorDetail: string | null; // technical, redacted
-  usage: { inputTokens?: number; outputTokens?: number; costUsd?: number } | null;
+  usage: RunUsage | null;
   retryAfter: string | null;
 }
 

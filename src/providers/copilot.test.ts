@@ -27,6 +27,7 @@ test("copilot fixture: success with a denied curl is visible and still succeeds"
   const { events, outcome } = drive(parserFor, fixture("copilot-success.jsonl"));
   assert.equal(outcome.state, "succeeded");
   assert.equal(outcome.sessionId, SID);
+  assert.deepEqual(outcome.usage, { premiumRequests: 1 }, "Copilot reports premium requests, not tokens");
   assert.match(outcome.finalText ?? "", /Created a\.txt/);
   assert.match(outcome.finalText ?? "", /forewright note: 1 tool action\(s\) were denied/);
   assert.match(outcome.finalText ?? "", /bash: Permission to run this tool was denied/);

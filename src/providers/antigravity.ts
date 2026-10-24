@@ -577,7 +577,9 @@ export class AntigravityStreamParser implements EngineParser {
     this.resultError = str(r["error"]) ?? null;
     const u = isObj(r["usage"]) ? r["usage"] : null;
     if (u) {
-      this.usage = { inputTokens: num(u["input_tokens"]) ?? 0, outputTokens: num(u["output_tokens"]) ?? 0 };
+      // Like Gemini's own counts, input_tokens is assumed to include the cached part; split it out.
+      const cached = num(u["cache_read_tokens"]);
+      this.usage = { inputTokens: Math.max(0, (num(u["input_tokens"]) ?? 0) - (cached ?? 0)), outputTokens: num(u["output_tokens"]) ?? 0, ...(cached !== undefined ? { cachedInputTokens: cached } : {}) };
       this.emit({ kind: "usage", usage: this.usage });
     }
     const denied = r["denied_actions"];

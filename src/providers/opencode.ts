@@ -581,10 +581,14 @@ export class OpencodeJsonParser implements EngineParser {
     if (!part) return this.emit({ kind: "diagnostic", text: "step_finish without a part", raw });
     const tokens = isObj(part["tokens"]) ? part["tokens"] : {};
     const prev = this.usage ?? { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    const cache = isObj(tokens["cache"]) ? tokens["cache"] : null;
+    const cacheRead = cache ? num(cache["read"]) : undefined;
+    const cacheWrite = cache ? (num(cache["write"]) ?? 0) : 0;
     this.usage = {
-      inputTokens: (prev.inputTokens ?? 0) + (num(tokens["input"]) ?? 0),
+      inputTokens: (prev.inputTokens ?? 0) + (num(tokens["input"]) ?? 0) + cacheWrite,
       outputTokens: (prev.outputTokens ?? 0) + (num(tokens["output"]) ?? 0),
       costUsd: (prev.costUsd ?? 0) + (num(part["cost"]) ?? 0),
+      ...(cacheRead !== undefined || prev.cachedInputTokens !== undefined ? { cachedInputTokens: (prev.cachedInputTokens ?? 0) + (cacheRead ?? 0) } : {}),
     };
     this.emit({ kind: "usage", usage: this.usage });
     this.lastReason = str(part["reason"]) ?? null;

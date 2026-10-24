@@ -228,7 +228,7 @@ test("opencode: end to end with a fake binary: success, isolation env, config in
   assert.equal(out.state, "succeeded", JSON.stringify(out));
   assert.equal(out.finalText, "OK");
   assert.equal(out.sessionId, "ses_f0c31cfaeffeP2mHAwdsueshnn");
-  assert.deepEqual(out.usage, { inputTokens: 5844, outputTokens: 3, costUsd: 0 });
+  assert.deepEqual(out.usage, { inputTokens: 5844, outputTokens: 3, costUsd: 0, cachedInputTokens: 1941 });
   assert.ok(events.every((e) => e.runId === "run-1" && e.generation === 3));
   assert.ok(events.some((e) => e.kind === "completed"));
 
@@ -358,6 +358,13 @@ test("opencode parser: success fixture", () => {
   assert.equal(outcome.finalText, "OK");
   assert.equal(outcome.sessionId, "ses_f0c31cfaeffeP2mHAwdsueshnn");
   assert.deepEqual(events.map((e) => e.kind), ["session_started", "assistant_text", "usage", "completed"]);
+});
+
+test("opencode parser: cache reads are kept apart, cache writes count as input, and steps add up", () => {
+  const step = (input: number, read: number, write: number) =>
+    JSON.stringify({ type: "step_finish", sessionID: "s", part: { type: "step-finish", reason: "tool-calls", tokens: { input, output: 2, cache: { read, write } }, cost: 0 } });
+  const { outcome } = drive((emit) => new OpencodeJsonParser({ runId: "run-1", generation: 3 }, emit, []), [step(100, 50, 10), step(20, 5, 0)]);
+  assert.deepEqual(outcome.usage, { inputTokens: 130, outputTokens: 4, costUsd: 0, cachedInputTokens: 55 });
 });
 
 test("opencode parser: an MCP tool call is reported and the final step text is the result", () => {

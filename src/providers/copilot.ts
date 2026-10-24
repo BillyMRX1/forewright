@@ -120,7 +120,7 @@ export class CopilotAdapter implements ProviderAdapter {
       "With no model chosen, Copilot picks one automatically (often a small, fast model). Choose a model explicitly for CTO and review work.",
       "The model list is the catalog documented by the Copilot CLI; your plan may not include every entry.",
       "Copilot has no turn limit flag, so the max turns setting is not applied. It has no system prompt flag, so system instructions are placed at the top of the prompt.",
-      "Copilot does not report token counts in its JSON output, so usage is not recorded.",
+      "Copilot does not report token counts in its JSON output; only the number of premium requests a run used is recorded.",
       "Project instruction files (AGENTS.md, CLAUDE.md, GEMINI.md, .github/copilot-instructions.md) are not loaded (--no-custom-instructions). Skills and agents under the project's .github folder may still load.",
       "Tool permissions are policy flags, not an operating system sandbox.",
     ],
@@ -276,6 +276,7 @@ export class CopilotJsonParser implements EngineParser {
   private completed = false;
   private resultSeen = false;
   private failureText: string | null = null;
+  private usage: RunOutcome["usage"] = null;
   private quotaSignal = false;
   private limitHit = false;
   private readonly tools = new Map<string, string>();
@@ -397,7 +398,10 @@ export class CopilotJsonParser implements EngineParser {
     }
     const usage = isObj(msg["usage"]) ? msg["usage"] : {};
     const premium = num(usage["premiumRequests"]);
-    if (premium !== undefined) this.emit({ kind: "diagnostic", text: `Copilot premium requests used: ${premium}` });
+    if (premium !== undefined) {
+      this.usage = { premiumRequests: premium };
+      this.emit({ kind: "usage", usage: this.usage });
+    }
     if (code === 0 && this.finalText !== null && this.failureText === null) {
       this.completed = true;
       this.emit({ kind: "completed", text: this.finalText, sessionId: this.sessionId ?? undefined, raw });
@@ -421,7 +425,7 @@ export class CopilotJsonParser implements EngineParser {
     const outcome = decideOutcome({
       req: this.req, exit, completed: this.completed, failureText: this.failureText,
       quotaSignal: this.quotaSignal && !this.limitHit, retryAfterHint: null, stderrTail: stderr,
-      sessionId: this.sessionAnnounced ? this.sessionId : null, finalText: this.finalText, usage: null, secrets: this.secrets, now: this.now(),
+      sessionId: this.sessionAnnounced ? this.sessionId : null, finalText: this.finalText, usage: this.usage, secrets: this.secrets, now: this.now(),
     });
     if (this.limitHit && outcome.state === "quota_wait") {
       // Our own per-run credit cap is not a provider quota wait: waiting would not help.

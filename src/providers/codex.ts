@@ -278,7 +278,10 @@ export class CodexJsonlParser implements EngineParser {
         return; // nothing to report
       case "turn.completed": {
         const u = isObj(msg["usage"]) ? msg["usage"] : {};
-        this.usage = { inputTokens: num(u["input_tokens"]) ?? 0, outputTokens: num(u["output_tokens"]) ?? 0 };
+        // Codex counts cached tokens inside input_tokens; split them out so the two never overlap.
+        const cached = num(u["cached_input_tokens"]);
+        const input = num(u["input_tokens"]) ?? 0;
+        this.usage = { inputTokens: Math.max(0, input - (cached ?? 0)), outputTokens: num(u["output_tokens"]) ?? 0, ...(cached !== undefined ? { cachedInputTokens: cached } : {}) };
         this.emit({ kind: "usage", usage: this.usage });
         this.completed = true;
         return this.emit({ kind: "completed", text: this.lastMessage ?? undefined, sessionId: this.sessionId ?? undefined, raw: line });

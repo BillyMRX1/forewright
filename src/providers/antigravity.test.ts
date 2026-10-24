@@ -67,12 +67,18 @@ fs.writeFileSync(${JSON.stringify(path.join(dir, "home.txt"))}, home);
 fs.writeFileSync(${JSON.stringify(path.join(dir, "linkkind.txt"))}, JSON.stringify({ lstatLink: fs.lstatSync(require("path").join(gem, "oauth_creds.json")).isSymbolicLink() }));
 `;
 
+test("antigravity: cache_read_tokens are split out of input_tokens", () => {
+  const line = '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"fine\\n","usage":{"input_tokens":1000,"output_tokens":7,"cache_read_tokens":600}}}';
+  const { outcome } = drive((emit) => new AntigravityStreamParser({ runId: "run-1", generation: 3, permission: "read_only" }, emit, []), [line]);
+  assert.deepEqual(outcome.usage, { inputTokens: 400, outputTokens: 7, cachedInputTokens: 600 });
+});
+
 test("antigravity: success fixture parses to a succeeded outcome with session id, usage and text", () => {
   const { events, outcome } = drive((emit) => new AntigravityStreamParser({ runId: "run-1", generation: 3, permission: "read_only" }, emit, []), fixture("antigravity-success.jsonl"));
   assert.equal(outcome.state, "succeeded");
   assert.equal(outcome.finalText, "OK");
   assert.equal(outcome.sessionId, "16056667-880c-4540-832d-82bb177ed5bc");
-  assert.deepEqual(outcome.usage, { inputTokens: 13370, outputTokens: 1 });
+  assert.deepEqual(outcome.usage, { inputTokens: 13370, outputTokens: 1, cachedInputTokens: 0 });
   const kinds = events.map((e) => e.kind);
   assert.ok(kinds.includes("session_started") && kinds.includes("assistant_text") && kinds.includes("completed") && kinds.includes("usage"));
   assert.equal(events.find((e) => e.kind === "assistant_text")?.text, "OK");

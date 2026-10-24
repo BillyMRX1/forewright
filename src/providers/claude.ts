@@ -288,8 +288,9 @@ export class ClaudeStreamParser implements EngineParser {
 
   private onResult(msg: Json, raw: string): void {
     const usage = isObj(msg["usage"]) ? msg["usage"] : {};
-    const inputTokens = (num(usage["input_tokens"]) ?? 0) + (num(usage["cache_creation_input_tokens"]) ?? 0) + (num(usage["cache_read_input_tokens"]) ?? 0);
-    const u: NonNullable<RunOutcome["usage"]> = { inputTokens, outputTokens: num(usage["output_tokens"]) ?? 0 };
+    // Cache reads are kept apart from fresh input (cache writes count as input) so they can be priced separately.
+    const inputTokens = (num(usage["input_tokens"]) ?? 0) + (num(usage["cache_creation_input_tokens"]) ?? 0);
+    const u: NonNullable<RunOutcome["usage"]> = { inputTokens, outputTokens: num(usage["output_tokens"]) ?? 0, cachedInputTokens: num(usage["cache_read_input_tokens"]) ?? 0 };
     const cost = num(msg["total_cost_usd"]);
     if (cost !== undefined) u.costUsd = cost;
     this.usage = u;

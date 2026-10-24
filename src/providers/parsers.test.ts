@@ -18,6 +18,8 @@ test("claude: real success fixture yields succeeded with session id and usage", 
   assert.equal(outcome.finalText, "OK");
   assert.match(outcome.sessionId ?? "", /^[0-9a-f-]{36}$/);
   assert.ok(outcome.usage?.costUsd !== undefined);
+  // cache reads are reported on their own; cache writes count as fresh input (2 + 4273)
+  assert.deepEqual(outcome.usage, { inputTokens: 4275, outputTokens: 4, cachedInputTokens: 8154, costUsd: 0.0359028 });
   assert.ok(events.some((e) => e.kind === "session_started" && e.sessionId));
   assert.ok(events.some((e) => e.kind === "assistant_text" && e.text === "OK"));
   assert.ok(events.some((e) => e.kind === "completed"));
@@ -134,6 +136,13 @@ test("codex: real success fixture completes (last message file supplied by the a
   assert.match(outcome.sessionId ?? "", /^[0-9a-f-]{36}$/);
   assert.ok(events.some((e) => e.kind === "completed"));
   assert.ok(events.some((e) => e.kind === "assistant_text" && e.text === "OK"));
+});
+
+test("codex: cached tokens are split out of input_tokens", () => {
+  const { outcome } = drive(codex, fixture("codex-success.jsonl"));
+  assert.deepEqual(outcome.usage, { inputTokens: 14345 - 12288, outputTokens: 5, cachedInputTokens: 12288 });
+  // a turn without the cached field leaves it out rather than reporting a made-up zero
+  assert.deepEqual(drive(codex, CODEX_DONE).outcome.usage, { inputTokens: 10, outputTokens: 2 });
 });
 
 test("codex: exit 0 without turn.completed is uncertain", () => {
