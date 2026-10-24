@@ -191,6 +191,7 @@ describe("attention on Home", () => {
     await h.settle(500);
     assert.match(paneLines(h).find((l) => /^   Bo\b/.test(l)) ?? "", /Bo\s+Codex.*✓/);
     assert.match(h.frame(), /✓ Bo/, "the sidebar marks it done too");
+    await esc(h); // skip the "merged as is?" prompt, which would take the next esc and digit
     // open the worker and look at it
     await ctrl(h, "p");
     await h.send("Bo (");

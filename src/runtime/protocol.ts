@@ -124,6 +124,7 @@ export interface Methods {
     result: { agent: Agent };
   };
   "tasks.reassign": { params: { projectId: string; taskId: string; agentId: string; note: string }; result: { task: Task } };
+  "tasks.outcome": { params: { projectId: string; taskId: string; fixMinutes?: number }; result: { ok: true } };
   "drafts.save": { params: { projectId: string; view: string; key: string; body: string }; result: { ok: true } };
   "drafts.get": { params: { projectId: string; view: string; key: string }; result: { body: string | null } };
 

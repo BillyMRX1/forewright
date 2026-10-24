@@ -338,6 +338,8 @@ export class FakeClient implements ClientApi {
           return { lines: this.logLines, path: "/tmp/run.log" };
         case "drafts.get":
           return { body: this.drafts.get(`${String(p["view"])}/${String(p["key"])}`) ?? null };
+        case "tasks.outcome":
+          return { ok: true };
         case "drafts.save":
           this.drafts.set(`${String(p["view"])}/${String(p["key"])}`, String(p["body"]));
           return { ok: true };

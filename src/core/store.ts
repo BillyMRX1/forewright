@@ -1695,6 +1695,32 @@ export class Store {
     );
   }
 
+  /**
+   * Billy's answer about a finished task: merged as it was (`fixMinutes` left out), or the minutes he spent fixing it.
+   * Answering again replaces the earlier answer. Nothing else reads or waits on this.
+   */
+  recordTaskOutcome(taskId: string, answer: { fixMinutes?: number }): void {
+    const minutes = answer.fixMinutes;
+    if (minutes !== undefined && !(Number.isInteger(minutes) && minutes >= 0 && minutes <= 100_000)) {
+      throw new ValidationError("Minutes spent fixing must be a whole number of 0 or more.", { fixMinutes: minutes });
+    }
+    tx(this.db, () => {
+      const t = this.getTask(taskId);
+      // 0 minutes is the same as merged as is
+      const asIs = minutes === undefined || minutes === 0;
+      this.run(
+        `INSERT INTO task_outcome (task_id, project_id, merged_as_is, fix_minutes, answered_at) VALUES (?,?,?,?,?)
+         ON CONFLICT(task_id) DO UPDATE SET merged_as_is = excluded.merged_as_is, fix_minutes = excluded.fix_minutes, answered_at = excluded.answered_at`,
+        t.id,
+        this.projectId,
+        asIs ? 1 : 0,
+        asIs ? null : (minutes as number),
+        this.nowIso(),
+      );
+      this.appendEvent("task.outcome_recorded", "task", t.id, "human", { mergedAsIs: asIs, fixMinutes: asIs ? null : minutes });
+    });
+  }
+
   getDraft(view: string, key: string): string | null {
     return (this.one("SELECT body FROM draft WHERE project_id = ? AND view = ? AND key = ?", this.projectId, view, key)?.["body"] as string | undefined) ?? null;
   }

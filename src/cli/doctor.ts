@@ -12,11 +12,12 @@ import { forewrightHome, socketPath, tokenPath } from "../core/paths.js";
 import { isPipePath } from "../core/platform.js";
 import { maskProxyUrl, maskUrlsInText, readNetworkConfig, summarizeNetwork, type NetworkSetting, type NetworkSummary } from "../core/network.js";
 import { createAdapters, probeAll } from "../providers/registry.js";
+import type { OutcomeSummary } from "../core/outcomes.js";
 import type { UsageSummary } from "../core/usage.js";
 import { RpcClient } from "../runtime/client.js";
 import { asciiMode } from "../tui/theme.js";
 import { checkReachable, ENGINE_HOSTS, readCaText, type ReachResult } from "./network-check.js";
-import { usageSummary } from "./report.js";
+import { outcomeSummary, usageSummary } from "./report.js";
 
 // ---------------------------------------------------------------- service query (shared with `forewright status`)
 
@@ -96,6 +97,8 @@ export interface DoctorInput {
   developerMode?: DeveloperMode;
   /** The last week of usage; only the --json output shows it. */
   usage?: UsageSummary;
+  /** How the last week's finished tasks turned out; only the --json output shows it. */
+  outcomes?: OutcomeSummary;
 }
 
 export type DeveloperMode = "on" | "off" | "unknown";
@@ -480,6 +483,7 @@ export function renderDoctorJson(input: DoctorInput): string {
     ...(input.developerMode !== undefined ? { developerMode: input.developerMode } : {}),
     ...(input.network ? { network: maskedNetwork(input.network) } : {}),
     ...(input.usage ? { usage: input.usage } : {}),
+    ...(input.outcomes ? { outcomes: input.outcomes } : {}),
     engines: sum.rows.map((r) => ({
       engine: r.input.health.engine,
       name: r.name,
@@ -587,6 +591,15 @@ function readUsage(home: string): { usage: UsageSummary } | Record<string, never
   }
 }
 
+/** The last 7 days of task outcomes as `{ outcomes }`, or nothing when the databases cannot be read. */
+function readOutcomes(home: string): { outcomes: OutcomeSummary } | Record<string, never> {
+  try {
+    return { outcomes: outcomeSummary(home, 7) };
+  } catch {
+    return {};
+  }
+}
+
 export async function runDoctor(args: string[], opts: { includeFake: boolean }): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(DOCTOR_HELP);
@@ -626,6 +639,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
     network,
     ...(isWindows() ? { developerMode: detectDeveloperMode() } : {}),
     ...(json ? readUsage(home) : {}),
+    ...(json ? readOutcomes(home) : {}),
   };
   process.stdout.write(
     json ? renderDoctorJson(input) : renderDoctor(input, { color, ascii: asciiMode(), verbose, width: process.stdout.columns ?? 100 }),

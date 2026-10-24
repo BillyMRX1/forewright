@@ -4,9 +4,10 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { openDb } from "../core/db.js";
 import { forewrightHome } from "../core/paths.js";
+import { outcomeText, readTaskOutcomes, summarizeOutcomes, type OutcomeGroup, type OutcomeSummary, type TaskOutcome } from "../core/outcomes.js";
 import { NOT_REPORTED, costText, loadPrices, pricesPath, readUsageRows, summarizeUsage, tokensText, windowStart, type UsageGroup, type UsageRow, type UsageSummary } from "../core/usage.js";
 
-export const REPORT_HELP = `forewright report: what your agents used, per project, agent and day.
+export const REPORT_HELP = `forewright report: what your agents used, per project, agent and day, and how their tasks turned out.
 
 Usage:
   forewright report [--days N] [--json]
@@ -14,24 +15,27 @@ Usage:
   --days N   look back N local days, today included (default 7, at most 366)
   --json     print the numbers as JSON
 
+Outcomes cover tasks that reached done: first-pass review rate, retries, review rounds, time, and whether you merged
+them as they were (answer the prompt in the TUI when a task is done). Task type is the role of the agent that did the work.
+
 Dollar amounts are estimates: Claude's own reported cost when it gives one, otherwise tokens times a price table.
 Edit the prices in prices.json in the data folder (the report prints its path). Models without a price show "no price".
 `;
 
 export const DEFAULT_REPORT_DAYS = 7;
 
-/** Usage rows of every project database under the data folder. A database that cannot be read is skipped. */
-export function collectUsageRows(home: string, since: Date): UsageRow[] {
+/** Reads every project database under the data folder with `read`. A database that cannot be read is skipped. */
+function collectRows<T>(home: string, read: (db: ReturnType<typeof openDb>) => T[]): T[] {
   const projects = path.join(home, "projects");
   if (!existsSync(projects)) return [];
-  const rows: UsageRow[] = [];
+  const rows: T[] = [];
   for (const id of readdirSync(projects)) {
     const file = path.join(projects, id, "state.db");
     if (!existsSync(file)) continue;
     try {
       const db = openDb(file);
       try {
-        rows.push(...readUsageRows(db, since.toISOString()));
+        rows.push(...read(db));
       } finally {
         db.close();
       }
@@ -40,6 +44,17 @@ export function collectUsageRows(home: string, since: Date): UsageRow[] {
     }
   }
   return rows;
+}
+
+/** Usage rows of every project database under the data folder. */
+export const collectUsageRows = (home: string, since: Date): UsageRow[] => collectRows(home, (db) => readUsageRows(db, since.toISOString()));
+
+/** Finished-task outcomes of every project database under the data folder. */
+export const collectTaskOutcomes = (home: string, since: Date): TaskOutcome[] => collectRows(home, (db) => readTaskOutcomes(db, since.toISOString()));
+
+/** The outcome summary for the data folder: also what `forewright doctor --json` puts under `outcomes`. */
+export function outcomeSummary(home: string, days: number, now: Date = new Date()): OutcomeSummary {
+  return summarizeOutcomes(collectTaskOutcomes(home, windowStart(now, days)), { now, days });
 }
 
 /** The usage summary for the data folder: also what `forewright doctor --json` puts under `usage`. */
@@ -55,7 +70,23 @@ function section(title: string, groups: Array<UsageGroup & { extra?: string }>):
   return ["", title, ...groups.map((g) => line({ ...g, name: g.name.length > w ? `${g.name.slice(0, w - 1)}~` : g.name }, w, g.extra ?? ""))];
 }
 
-export function renderReport(s: UsageSummary, home: string): string {
+function outcomeSection(title: string, groups: OutcomeGroup[]): string[] {
+  if (groups.length === 0) return [];
+  const w = Math.min(28, Math.max(...groups.map((g) => g.name.length)));
+  return ["", title, ...groups.map((g) => `  ${(g.name.length > w ? `${g.name.slice(0, w - 1)}~` : g.name).padEnd(w)}  ${outcomeText(g)}`)];
+}
+
+export function renderOutcomes(o: OutcomeSummary): string[] {
+  const out = ["", `Outcomes for the last ${o.days} day${o.days === 1 ? "" : "s"} (tasks that reached done)`];
+  if (o.totals.tasksDone === 0) return [...out, "", "No finished tasks in this window."];
+  out.push("", `Total: ${outcomeText(o.totals)}`);
+  out.push(...outcomeSection("By engine (who did the work)", o.byEngine));
+  out.push(...outcomeSection("By model", o.byModel));
+  out.push(...outcomeSection("By task type (the worker's role)", o.byType));
+  return out;
+}
+
+export function renderReport(s: UsageSummary, home: string, outcomes?: OutcomeSummary): string {
   const out = [`Usage for the last ${s.days} day${s.days === 1 ? "" : "s"} (all dollar amounts are estimates)`];
   if (s.totals.runs === 0) {
     out.push("", "No runs with recorded usage in this window.");
@@ -66,6 +97,7 @@ export function renderReport(s: UsageSummary, home: string): string {
     out.push(...section("By engine", s.byEngine));
     out.push(...section("By day (local time)", s.byDay.filter((g) => g.runs > 0)));
   }
+  if (outcomes) out.push(...renderOutcomes(outcomes));
   out.push("", "Subscription usage left");
   for (const e of s.subscription) out.push(`  ${e.engine.padEnd(12)}${e.reported ? e.note : NOT_REPORTED}`);
   out.push("", `Prices are estimates, per million tokens. Edit them in ${pricesPath(home)}.`);
@@ -94,6 +126,7 @@ export function runReport(args: string[], io: { out: (s: string) => void; err: (
     }
   }
   const summary = usageSummary(home, days, now);
-  io.out(json ? `${JSON.stringify(summary, null, 2)}\n` : renderReport(summary, home));
+  const outcomes = outcomeSummary(home, days, now);
+  io.out(json ? `${JSON.stringify({ ...summary, outcomes }, null, 2)}\n` : renderReport(summary, home, outcomes));
   return 0;
 }

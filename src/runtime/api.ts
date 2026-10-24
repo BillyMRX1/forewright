@@ -280,6 +280,11 @@ export class ClientApi {
         rt.scheduler.wake("reassign");
         return { task: rt.store.getTask(t.id) };
       },
+      "tasks.outcome": async (p) => {
+        const rt = await this.rt(p);
+        rt.store.recordTaskOutcome(reqStr(p, "taskId", 200), typeof p["fixMinutes"] === "number" ? { fixMinutes: p["fixMinutes"] } : {});
+        return { ok: true };
+      },
       "drafts.save": async (p) => {
         (await this.rt(p)).store.saveDraft(reqStr(p, "view", 100), reqStr(p, "key", 200), typeof p["body"] === "string" ? p["body"] : "");
         return { ok: true };

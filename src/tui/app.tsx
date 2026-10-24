@@ -160,6 +160,9 @@ export function App(props: AppProps) {
   /** False while the repository has no commits (from state.settings); undefined until known. */
   const [hasCommits, setHasCommits] = useState<boolean | undefined>(undefined);
   const [offer, setOffer] = useState(props.setupOffer === true);
+  /** Finished tasks Billy has not yet answered the "merged as is?" question for; the first one is asked. Skippable, never blocks. */
+  const [outcomeQ, setOutcomeQ] = useState<Array<{ taskId: string; shortId: string }>>([]);
+  const [outcomeMinutes, setOutcomeMinutes] = useState("");
   const [logRun, setLogRun] = useState<string | null>(null);
   const [jump, setJump] = useState<JumpTarget | null>(null);
   const [confirm, setConfirm] = useState<{ text: string; onYes: () => Promise<void> | void; quit?: boolean } | null>(null);
@@ -230,7 +233,10 @@ export function App(props: AppProps) {
         raise("needs_you", "A PRD is waiting for your approval", { kind: "cto" });
         break;
       case "task.completed":
-        withTask(ev.entityId, (t) => raise("finished", `${t.shortId} finished: ${t.title}`, { kind: "task", taskId: t.id }));
+        withTask(ev.entityId, (t) => {
+          raise("finished", `${t.shortId} finished: ${t.title}`, { kind: "task", taskId: t.id });
+          setOutcomeQ((q) => (q.some((x) => x.taskId === t.id) ? q : [...q, { taskId: t.id, shortId: t.shortId }].slice(-5)));
+        });
         break;
       case "run.finished": {
         const state = p["state"];
@@ -413,7 +419,8 @@ export function App(props: AppProps) {
   const sideW = !showSide ? cols : cols >= 120 ? 32 : cols >= 100 ? 28 : cols >= 84 ? 26 : 24;
   const detailLines = error && errorOpen ? wrapText(error.detail ?? "No further details.", cols - 6).slice(0, 3) : [];
   const errorRows = error ? 1 + detailLines.length : 0;
-  const offerRows = offer ? 1 : 0;
+  const outcomeAsk = outcomeQ[0] ?? null;
+  const offerRows = offer || outcomeAsk !== null ? 1 : 0;
   const bodyHeight = Math.max(2, rows - 3 - errorRows - offerRows);
   const mainW = showSide ? cols - sideW - 1 : cols;
   const bodyWidth = Math.max(8, mainW - 2);
@@ -565,6 +572,15 @@ export function App(props: AppProps) {
     jumpTo(needTarget(item));
   };
 
+  /** Stores Billy's answer for the task being asked about (nothing else waits on it) and moves to the next one. */
+  const answerOutcome = (fixMinutes?: number) => {
+    const asked = outcomeQ[0];
+    if (!asked) return;
+    setOutcomeQ((q) => q.slice(1));
+    setOutcomeMinutes("");
+    api.call("tasks.outcome", { projectId, taskId: asked.taskId, ...(fixMinutes !== undefined ? { fixMinutes } : {}) }).then(() => {}, fail);
+  };
+
   const quit = () => {
     const doQuit = () => {
       exit();
@@ -714,6 +730,17 @@ export function App(props: AppProps) {
     if (key.ctrl && input === "e") return setErrorOpen((o) => !o);
     // Everything below is for when no text box has focus.
     if (typing) return;
+    if (outcomeAsk !== null && !key.ctrl && !key.meta) {
+      if (key.escape) {
+        setOutcomeQ((q) => q.slice(1));
+        setOutcomeMinutes("");
+        return;
+      }
+      if (/^[0-9]$/.test(input)) return setOutcomeMinutes((m) => (m + input).slice(0, 5));
+      if (key.backspace || key.delete) return setOutcomeMinutes((m) => m.slice(0, -1));
+      if (key.return && outcomeMinutes !== "") return answerOutcome(Number(outcomeMinutes));
+      if (input === "y" || input === "Y") return answerOutcome();
+    }
     if (key.ctrl || key.meta) return;
     if (focus === "sidebar") {
       if (key.upArrow || input === "k") return moveSelection(-1);
@@ -883,6 +910,13 @@ export function App(props: AppProps) {
               {"Set up engines for this project?"}
             </SafeText>
             <Text dimColor>{"  enter to start, esc to skip"}</Text>
+          </Box>
+        ) : null}
+        {outcomeAsk !== null && !offer ? (
+          <Box height={1} flexShrink={0} paddingX={1}>
+            <SafeText color={colors.attention} bold width={Math.max(8, cols - 2)}>
+              {`${outcomeAsk.shortId} done. Merged as is? y = yes, or minutes spent fixing: ${outcomeMinutes === "" ? "_" : outcomeMinutes} (enter), esc = skip`}
+            </SafeText>
           </Box>
         ) : null}
         {error ? (
