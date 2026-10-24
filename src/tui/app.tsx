@@ -139,7 +139,13 @@ export function App(props: AppProps) {
     if (scope !== null) setHintScopeState(scope);
   }, []);
   const [tick, setTick] = useState(0);
-  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
+  const [runtime, setRuntimeState] = useState<RuntimeStatus | null>(null);
+  /** Bumped by every status that arrives from a command or a push, so a slower full refresh that started earlier cannot overwrite it with older data. */
+  const runtimeStamp = useRef(0);
+  const setRuntime = useCallback((status: RuntimeStatus) => {
+    runtimeStamp.current += 1;
+    setRuntimeState(status);
+  }, []);
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   const [unseen, setUnseen] = useState<UnseenDone[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
@@ -345,6 +351,7 @@ export function App(props: AppProps) {
 
   useEffect(() => {
     let cancelled = false;
+    const stamp = runtimeStamp.current;
     Promise.all([
       api.call("state.runtime", { projectId }),
       api.call("state.inbox", { projectId }),
@@ -356,7 +363,7 @@ export function App(props: AppProps) {
     ]).then(
       ([rt, inbox, team, board, prd, chans, chat]) => {
         if (cancelled) return;
-        setRuntime(rt);
+        if (stamp === runtimeStamp.current) setRuntimeState(rt);
         const tasks = TASK_STATES.flatMap((st) => board.board[st]);
         setSnap({ agents: team.agents, tasks, decisions: inbox.open, proposedPrd: prd.doc?.status === "proposed", channels: chans.channels, chat: chat.messages.map((m) => ({ createdAt: m.createdAt, fromHuman: m.senderKind === "human" })) });
         if (chatSeenAt.current === null) chatSeenAt.current = chat.messages.reduce((m, x) => (x.createdAt > m ? x.createdAt : m), "");

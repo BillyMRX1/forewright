@@ -54,7 +54,8 @@ test("fake: quota, malformed and stale-generation scripts", async () => {
 test("fake: hang until cancelled resolves stopped and leaves no process behind", async () => {
   const a = new FakeAdapter({ defaultScript: { outcome: "succeeded", hangUntilCancelled: true, spawnGrandchild: true, ignoreSigterm: true } });
   const h = a.start(baseRequest({ timeoutMs: 60_000 }), () => {});
-  for (let i = 0; i < 100 && !h.process; i++) await new Promise((r) => setTimeout(r, 20));
+  // The owned process is identified by a PowerShell CIM query on Windows, which takes seconds on a busy machine.
+  for (let i = 0; i < 1000 && !h.process; i++) await new Promise((r) => setTimeout(r, 20));
   assert.ok(h.process);
   const proc = h.process;
   assert.equal(await isOwnedAlive(proc), true);
