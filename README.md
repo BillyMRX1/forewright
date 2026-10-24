@@ -1,12 +1,12 @@
 # Forewright: an agentic department in your terminal
 
-`forewright` gives each project its own small engineering department. A CTO agent talks through the problem with you, writes a versioned PRD, plans tasks, hires specialist agents, and drives the work to completion. You watch and steer from a keyboard-driven terminal UI. Everything that runs, runs on your Mac: a background service owns execution and state, and the terminal UI is just a client, so closing it never stops your agents.
+`forewright` gives each project its own small engineering department. A CTO agent talks through the problem with you, writes a versioned PRD, plans tasks, hires specialist agents, and drives the work to completion. You watch and steer from a keyboard-driven terminal UI. Everything that runs, runs on your own computer: a background service owns execution and state, and the terminal UI is just a client, so closing it never stops your agents.
 
 Agents are the coding command line tools you already use (Claude Code, Codex, Antigravity `agy`, OpenCode and GitHub Copilot CLI), run through their supported non-interactive interfaces. Role, engine, model and permissions are separate settings, so a Claude CTO can direct Codex, OpenCode or Copilot workers.
 
 ## Requirements
 
-- macOS on Apple silicon (Linux is untested).
+- macOS and native Windows are supported. Linux is untested.
 - Node.js 24 or newer.
 - At least one of Claude Code, the Codex CLI, Antigravity (`agy`), OpenCode or the GitHub Copilot CLI installed and logged in with your own account. `forewright doctor` shows which ones are ready.
 - `git` (code tasks need a git repository; plain folders support planning only).
@@ -79,15 +79,15 @@ What the controls do:
 
 ## The service
 
-The service (`forewright serve`) owns execution and persistence for all your projects. It listens on a unix socket in the data directory, protected by directory and file permissions and a token file.
+The service (`forewright serve`) owns execution and persistence for all your projects. On macOS and Linux it listens on a unix socket in the data directory, protected by directory and file permissions and a token file. On Windows it listens on a named pipe (`\\.\pipe\forewright-<id>`) instead, protected by the pipe's default access rules and the same token file.
 
 - Foreground: `forewright serve` in a terminal, stop with `Ctrl+C`.
 - On demand: running `forewright` starts it in the background when nothing is listening. Log: `daemon.log` in the data directory.
-- At login (optional, macOS launchd): `forewright service install`, `forewright service status`, `forewright service uninstall`. The service file is `~/Library/LaunchAgents/local.forewright.daemon.plist`. It restarts the service if it crashes.
+- At login (optional, macOS only, launchd): `forewright service install`, `forewright service status`, `forewright service uninstall`. The service file is `~/Library/LaunchAgents/local.forewright.daemon.plist`. It restarts the service if it crashes. On Windows these commands report that they only work on macOS; there `forewright` starts the service on demand, and `forewright serve` can run in a terminal.
 
 ## Where data lives
 
-The data directory is `~/Library/Application Support/forewright` on macOS (override with `FOREWRIGHT_HOME`).
+The data directory is `~/Library/Application Support/forewright` on macOS and `%LOCALAPPDATA%\Forewright` on Windows (override with `FOREWRIGHT_HOME`).
 
 ```
 registry.json               known projects and last seen paths
@@ -127,7 +127,7 @@ Variables already set in the environment always win over these settings. A proxy
 
 ## Known limitations
 
-- Work pauses when the Mac sleeps. Local processes do not continue during ordinary sleep, and `forewright` does not claim otherwise. The service reconciles when the Mac wakes.
+- Work pauses when the computer sleeps. Local processes do not continue during ordinary sleep, and `forewright` does not claim otherwise. The service reconciles when the computer wakes.
 - Git worktrees separate agents' files and branches. They are not security sandboxes: an agent with the `workspace_write` permission can run commands as you.
 - Agents launched by `forewright` run with isolated config homes, so they do not read your personal hooks, memory files or plugins. Project instruction files at the repository root (`CLAUDE.md` and `AGENTS.md`) are still given to agents: Codex and Antigravity read `AGENTS.md` themselves, and `forewright` includes these files in the prompts of the other engines.
 - Provider model lists come from what each CLI exposes. Where a CLI cannot list models, Settings shows documented aliases and says so.

@@ -2,6 +2,23 @@
 
 Resumable log of the build. Newest state first.
 
+## Status (2026-10-24)
+
+Native Windows is supported alongside macOS. Work since 2026-10-01 covers platform support, provider access, the terminal UI and first-run experience.
+
+- [x] Native Windows: the service listens on a named pipe (unix socket elsewhere), process start times and short paths work, and Windows child processes get the environment they need. Tests run on macOS, Linux and Windows in GitHub Actions.
+- [x] Corporate proxies and custom certificates: proxy and CA settings are passed to every engine, can be saved per user when they are set only in system settings, and `forewright doctor` reports the proxy in use (login hidden) and whether each engine's API host is reachable.
+- [x] Usage-limit fallback: when a provider reports a limit, work moves to the first usable backup in the user's own order, only to engines the user listed, and returns to its own engine after the reset.
+- [x] First-run setup wizard: a welcome page for folders with no workspace yet, with the resolved root, git status and a choice to create the workspace.
+- [x] TUI redesign around Home, CTO, Tasks and Inbox, laid out like the herdr project (patterns only, original code): a persistent sidebar, a top status bar, a PAUSED badge, and drafts kept per conversation.
+- [x] Batched CTO wake-ups: routine progress no longer wakes the CTO. The wake-up limit is 60 per hour, and hitting it shows as a notice and a status on the CTO row.
+- [x] Empty repo setup: the CTO and Billy can create the initial commit of an empty repository, from a CTO tool and from Settings or the command palette.
+- [x] OpenCode logins: a hard-linked login file is removed on logout when the real file is gone (Windows).
+- [x] CTO replies are posted in the channel they came from.
+- [x] Test credentials no longer trip secret scanners (`.gitguardian.yaml`).
+
+Verification: `npm test`, see latest run.
+
 ## Status (2026-10-01, later)
 
 Five engines are supported: Claude Code, Codex, Antigravity (`agy`), OpenCode and GitHub Copilot CLI. The TUI gained an attention model inspired by the herdr project (patterns only, original code).
@@ -53,3 +70,4 @@ All four milestones are implemented and committed. A live end to end run with re
 - Enforce `autoLocalEdits`, `autoChecks` and `allowApiBilling`, and make `autoIntegrateToForewrightBranch = false` create an approval request.
 - Claude as a reviewer has only been verified by tests after the permission fix, not in a live run.
 - TUI: wide character width, independent scrolling in board and inbox detail.
+- Planned work is now tracked as batches in GitHub issue #16. The items above stay open until they are done.
