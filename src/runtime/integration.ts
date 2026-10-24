@@ -9,6 +9,7 @@ import { logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
 import type { Task } from "../core/store.js";
 import { describeCheck, runCheck, type CheckResult } from "./checks.js";
+import { approvalGate } from "./gates.js";
 import { git, gitLine, gitTry } from "./git.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { hasValidReview } from "./review.js";
@@ -29,6 +30,35 @@ function hasIntegrationPass(rt: ProjectRuntime, t: Task): boolean {
     );
 }
 
+/** The commands integration runs for a task: its own verify commands plus the project's checks. */
+function checkCommands(rt: ProjectRuntime, t: Task): string[] {
+  return [...t.verifyCommands, ...(rt.store.getSetting<string[]>("projectChecks") ?? [])];
+}
+
+/**
+ * Whether this task may be integrated now. With the authority settings on it always may; otherwise Billy's
+ * approval is needed (one decision per commit and scope, used up when integration starts), and until it
+ * comes the task waits blocked in the Inbox. Running checks (autoChecks) is covered by the same approval.
+ */
+function integrationApproved(rt: ProjectRuntime, t: Task): boolean {
+  const { autoIntegrateToForewrightBranch, autoChecks } = rt.store.getSettings().authority;
+  const runsChecks = !autoChecks && checkCommands(rt, t).length > 0;
+  if (autoIntegrateToForewrightBranch && !runsChecks) return true;
+  const what = [!autoIntegrateToForewrightBranch ? `merge it into ${INTEGRATION_BRANCH}` : "", runsChecks ? "run its checks" : ""].filter((x) => x !== "").join(" and ");
+  const commit = t.candidateCommit!;
+  return (
+    approvalGate(rt, {
+      action: { action: "integrate", taskId: t.id, commit, taskRevision: t.revision, requirementRevision: t.requirementRevision, merge: !autoIntegrateToForewrightBranch, checks: runsChecks },
+      title: `${t.shortId}: ${what}?`,
+      question: `${t.shortId} "${t.title}" passed review (commit ${commit.slice(0, 10)}). May Forewright ${what}? Checks run in a separate integration workspace, and ${INTEGRATION_BRANCH} only moves if they pass.`,
+      approve: { label: "Go ahead", consequence: `Forewright will ${what}. Your own branch is not touched.` },
+      decline: { label: "Not now", consequence: `${t.shortId} stays in review and nothing runs or merges.` },
+      impact: `${t.shortId} cannot be finished until this is answered.`,
+      consume: true,
+    }) === "approved"
+  );
+}
+
 /** Picks the next reviewed task and starts integrating it in the background. */
 export function integrateNext(rt: ProjectRuntime): void {
   if (rt.integrating) return;
@@ -37,12 +67,15 @@ export function integrateNext(rt: ProjectRuntime): void {
   const candidates = store
     .listTasks({ states: ["review"] })
     .filter((t) => t.blockReason === null && t.candidateCommit !== null && t.assigneeAgentId !== null && rt.activeForTask(t.id).length === 0 && hasValidReview(rt, t));
-  const next = candidates[0];
-  if (!next) return;
-  if (!store.getSettings().authority.autoIntegrateToForewrightBranch) {
-    rt.notifyCto(`integration-disabled:${next.id}:${next.candidateCommit}`, `${next.shortId} passed review, but integration into ${INTEGRATION_BRANCH} is turned off in the authority settings, so it waits.`);
-    return;
+  // A task waiting for Billy's approval is blocked, so it drops out of the candidates and the next one gets its turn.
+  let next: Task | undefined;
+  for (const t of candidates) {
+    if (hasIntegrationPass(rt, t) || integrationApproved(rt, t)) {
+      next = t;
+      break;
+    }
   }
+  if (!next) return;
   if (hasIntegrationPass(rt, next)) {
     // A previous attempt recorded the pass but did not finish: complete it.
     try {
@@ -110,7 +143,7 @@ async function integrate(rt: ProjectRuntime, task: Task): Promise<void> {
   }
 
   const mergeSha = gitLine(wt, ["rev-parse", "HEAD"]);
-  const commands = [...task.verifyCommands, ...(store.getSetting<string[]>("projectChecks") ?? [])];
+  const commands = checkCommands(rt, task);
   const extraEnv = { PORT: String(taskPort(task.shortId)), FOREWRIGHT_TASK_TMP: path.join(wt, ".forewright-tmp") };
   mkdirSync(logsDir(rt.projectId), { recursive: true });
   const results: Array<{ result: CheckResult; logFile: string }> = [];

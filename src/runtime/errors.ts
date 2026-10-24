@@ -19,6 +19,13 @@ export class ProviderUnavailableError extends ForewrightError {
   }
 }
 
+/** A run was refused before it started because it would bill an API key and the project does not allow that. */
+export class BillingBlockedError extends ForewrightError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("billing_blocked", message, details);
+  }
+}
+
 export class RpcError extends ForewrightError {
   readonly rpcCode: number;
   constructor(rpcCode: number, code: string, message: string, details?: Record<string, unknown>) {

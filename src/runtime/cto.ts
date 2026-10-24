@@ -8,6 +8,7 @@ import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution 
 import { unusableReason } from "./health.js";
 import { buildCtoPrompt, buildEngineSwitchNotice, buildResetSummary, buildStateDigest, ctoSystemPrompt, formatMessage, readInstructionFiles } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
+import { billingProblem } from "./billing.js";
 import { ProviderUnavailableError } from "./errors.js";
 import { type ActiveRun, adapterFor, launchRun } from "./runs.js";
 import { looksLikeSessionLoss, nameOfSender } from "./workers.js";
@@ -84,6 +85,11 @@ export class CtoDriver {
     const problem = unusableReason(health, engine);
     if (problem) {
       this.fail(`The CTO cannot run: ${problem}`, `unusable:${engine}:${problem}`);
+      return;
+    }
+    const billing = billingProblem(rt, engine);
+    if (billing) {
+      this.fail(`The CTO cannot run: ${billing}`, `billing:${engine}`);
       return;
     }
     this.error = null;

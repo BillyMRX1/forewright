@@ -424,8 +424,8 @@ describe("Settings", () => {
     assert.match(h.frame(), /Workers \(work and review runs\) backup order/);
     assert.doesNotMatch(h.frame(), /CTO engine/);
     await tab(h);
-    assert.match(h.frame(), /Edit files in agent workspaces without asking \(not active yet\)\s+on/);
-    assert.match(h.frame(), /Allow API billing for agents \(not active yet\)/);
+    assert.match(h.frame(), /Edit files in agent workspaces without asking \(off: asks in the Inbox per task\)\s+on/);
+    assert.match(h.frame(), /Allow API billing for agents \(off: runs that bill an API key are refused\)/);
     await tab(h);
     assert.match(h.frame(), /Concurrent workers\s+2/);
     assert.doesNotMatch(h.frame(), /Merge into your own branch/);
@@ -439,7 +439,7 @@ describe("Settings", () => {
     const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
     await tab(h);
     await tab(h); // Control
-    assert.match(h.frame(), /▸ Edit files in agent workspaces without asking \(not active yet\)\s+on/);
+    assert.match(h.frame(), /▸ Edit files in agent workspaces without asking \(off: asks in the Inbox per task\)\s+on/);
     await enter(h);
     await h.settle(100);
     let call = api.callsTo("settings.set")[0]?.params as { key: string; value: unknown };

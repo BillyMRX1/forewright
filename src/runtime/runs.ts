@@ -8,7 +8,8 @@ import { logsDir } from "../core/paths.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import type { Agent, Run, RunKind, Task } from "../core/store.js";
 import type { McpServerSpec, NormalizedEvent, OwnedProcess, PermissionProfile, ProviderAdapter, RunHandle, RunOutcome } from "../core/types.js";
-import { ProviderUnavailableError } from "./errors.js";
+import { billingProblem } from "./billing.js";
+import { BillingBlockedError, ProviderUnavailableError } from "./errors.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import type { TokenScope } from "./tokens.js";
 
@@ -57,6 +58,9 @@ export function adapterFor(rt: ProjectRuntime, agent: Agent): ProviderAdapter {
   if (a.isTestDouble && !rt.deps.testMode) {
     throw new ProviderUnavailableError(`${agent.name} uses a test double, which is not allowed outside test mode.`, { engine: agent.engine });
   }
+  // The one pre-run billing check: every start path (CTO, work, review) goes through here before it claims anything.
+  const billing = billingProblem(rt, agent.engine);
+  if (billing) throw new BillingBlockedError(billing, { engine: agent.engine });
   return a;
 }
 

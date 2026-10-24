@@ -8,7 +8,8 @@ import { truncate } from "../core/safety.js";
 import type { Agent, Message, Run, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { describeCheck, runCheck } from "./checks.js";
-import { GitError, ProviderUnavailableError, WorkspaceError } from "./errors.js";
+import { BillingBlockedError, GitError, ProviderUnavailableError, WorkspaceError } from "./errors.js";
+import { approvalGate } from "./gates.js";
 import { git, gitTry, isDirty, revParse } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { buildEngineHandoff, buildWorkerPrompt, formatMessage, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
@@ -49,6 +50,24 @@ export function sendBackForRepair(rt: ProjectRuntime, taskId: string, key: strin
 
 // ---------------------------------------------------------------- dispatch
 
+/**
+ * With autoLocalEdits off, a worker that can edit files does not start until Billy approved this task
+ * (and its current scope) in the Inbox. The approval stays valid for the repair rounds of the same task.
+ */
+function localEditsApproved(rt: ProjectRuntime, t: Task, agent: Agent): boolean {
+  if (rt.store.getSettings().authority.autoLocalEdits || agent.permission !== "workspace_write") return true;
+  return (
+    approvalGate(rt, {
+      action: { action: "local_edits", taskId: t.id, taskRevision: t.revision, requirementRevision: t.requirementRevision },
+      title: `${t.shortId}: let ${agent.name} edit files?`,
+      question: `${agent.name} is ready to start ${t.shortId} "${t.title}". Starting means editing files in a separate workspace for this task (your own folder is not touched). May it start?`,
+      approve: { label: "Let it start", consequence: `${agent.name} starts and edits files in the task workspace.` },
+      decline: { label: "Not now", consequence: `${t.shortId} stays blocked and no agent edits files for it.` },
+      consume: false,
+    }) === "approved"
+  );
+}
+
 export function dispatchWork(rt: ProjectRuntime): void {
   const { store } = rt;
   if (!store.getProject().isGit) return;
@@ -60,10 +79,16 @@ export function dispatchWork(rt: ProjectRuntime): void {
     if (agent.retiredAt || agent.lifecycle === "paused" || rt.activeForAgent(agent.id)) continue;
     const res = resolveFor(rt, agent, "work");
     if (res.wait) continue;
+    if (!localEditsApproved(rt, t, agent)) continue;
     try {
       startWork(rt, t, agent, res);
     } catch (err) {
       if (err instanceof LeaseConflictError) continue; // another scheduler won the claim
+      if (err instanceof BillingBlockedError) {
+        store.setBlocked(t.id, "environment", err.message);
+        rt.notifyCto(`billing:${t.id}:${t.updatedAt}`, `${t.shortId} cannot start: ${err.message}`);
+        continue;
+      }
       if (err instanceof WorkspaceError || err instanceof GitError) {
         store.setBlocked(t.id, "environment", err.message);
         rt.notifyCto(`env:${t.id}:${t.updatedAt}`, `${t.shortId} cannot start: ${err.message}`);
@@ -278,7 +303,10 @@ async function finishWork(rt: ProjectRuntime, a: ActiveRun): Promise<void> {
   mkdirSync(logsDir(rt.projectId), { recursive: true });
   const extraEnv = { PORT: String(taskPort(task.shortId)), FOREWRIGHT_TASK_TMP: path.join(wt, ".forewright-tmp") };
   let n = 0;
-  for (const command of task.verifyCommands) {
+  // With autoChecks off nothing runs here: the task's checks wait for Billy's approval at integration, which is
+  // also where a pass is recorded as evidence, so the task cannot become done without them.
+  const verify = settings.authority.autoChecks ? task.verifyCommands : [];
+  for (const command of verify) {
     n++;
     const logFile = path.join(logsDir(rt.projectId), `${a.run.id}-check-${n}.log`);
     const result = await runCheck(command, { cwd: wt, extraEnv, timeoutMs: settings.runTimeoutMs, logFile, signal: rt.abort.signal });
@@ -323,5 +351,5 @@ async function finishWork(rt: ProjectRuntime, a: ActiveRun): Promise<void> {
     if (err instanceof StaleGenerationError) return;
     throw err;
   }
-  rt.notifyCto(`notice:${a.run.id}:work_done`, `${a.agent.name} finished work on ${task.shortId} "${task.title}" (commit ${head.slice(0, 10)}). Checks passed; it now waits for an independent review.`);
+  rt.notifyCto(`notice:${a.run.id}:work_done`, `${a.agent.name} finished work on ${task.shortId} "${task.title}" (commit ${head.slice(0, 10)}). ${settings.authority.autoChecks ? "Checks passed" : "Its checks have not run (they need Billy's approval)"}; it now waits for an independent review.`);
 }

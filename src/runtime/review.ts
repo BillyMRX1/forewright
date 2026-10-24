@@ -5,6 +5,7 @@ import { StaleGenerationError } from "../core/errors.js";
 import { truncate } from "../core/safety.js";
 import type { Agent, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
+import { BillingBlockedError } from "./errors.js";
 import { gitTry } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { buildReviewPrompt, readInstructionFiles, reviewSystemPrompt } from "./prompts.js";
@@ -80,6 +81,10 @@ export function dispatchReviews(rt: ProjectRuntime): void {
     try {
       startReview(rt, t, picked.agent, picked.res);
     } catch (err) {
+      if (err instanceof BillingBlockedError) {
+        rt.notifyCto(`billing:review:${picked.agent.engine}`, `The review of ${t.shortId} cannot start: ${err.message}`);
+        continue;
+      }
       rt.reportInternalError(`starting the review of ${t.shortId}`, err);
     }
   }

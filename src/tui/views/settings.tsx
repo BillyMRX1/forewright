@@ -44,14 +44,14 @@ const MODES = ["ask", "auto", "deny"] as const;
 const NOT_SUPPORTED = "Not supported";
 
 const LABELS: Record<string, string> = {
-  autoLocalEdits: "Edit files in agent workspaces without asking (not active yet)",
-  autoChecks: "Run checks without asking (not active yet)",
-  autoIntegrateToForewrightBranch: "Merge finished work into the Forewright branch",
+  autoLocalEdits: "Edit files in agent workspaces without asking (off: asks in the Inbox per task)",
+  autoChecks: "Run checks without asking (off: asks in the Inbox per task)",
+  autoIntegrateToForewrightBranch: "Merge finished work into the Forewright branch without asking (off: asks in the Inbox per task)",
   mergeToUserBranch: "Merge into your own branch",
   publish: "Publish (push, release)",
   destructive: "Destructive actions",
   spendLimitUsd: "Spend limit in USD (0 = no API spend)",
-  allowApiBilling: "Allow API billing for agents (not active yet)",
+  allowApiBilling: "Allow API billing for agents (off: runs that bill an API key are refused)",
   maxConcurrentWorkers: "Concurrent workers",
   maxTurnsPerRun: "Turns per run",
   runTimeoutMs: "Run timeout (ms)",

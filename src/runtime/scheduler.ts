@@ -2,6 +2,8 @@
 // tick(); a watchdog timer calls tick("watchdog") which only reconciles and
 // starts work if something actionable changed. The watchdog never calls a model
 // on its own.
+import type { EngineId } from "../core/types.js";
+import { billingBlockEngine, billingProblem } from "./billing.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { NOT_GIT_MARKER } from "./project-runtime.js";
 import { dispatchReviews } from "./review.js";
@@ -97,6 +99,11 @@ export class Scheduler {
     const isGit = isGitRepo(rt.root);
     if (isGit !== project.isGit) store.ensureProject({ name: project.name, root: project.root, isGit });
     const open = store.listTasks({ states: ["planned", "ready"] });
+    // A task refused for API billing starts again once the engine no longer bills per use or the setting allows it.
+    for (const t of open) {
+      const engine = t.blockReason === "environment" ? billingBlockEngine(t.blockDetail) : null;
+      if (engine !== null && billingProblem(rt, engine as EngineId) === null) store.clearBlocked(t.id);
+    }
     if (isGit) {
       for (const t of open) {
         if (t.blockReason !== "environment") continue;

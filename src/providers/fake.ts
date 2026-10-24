@@ -44,6 +44,8 @@ export interface FakeAdapterOptions {
   coordinationTools?: "mcp" | "none";
   /** Make the probe report the engine as not signed in. */
   signedOut?: boolean;
+  /** Sign-in method the probe reports (default "test-double"); "api_key" simulates a pay-per-use login. */
+  authMethod?: string;
   rules?: FakeRule[];
   defaultScript?: FakeScript;
   /** Called synchronously at the start of every run, before the child is spawned. */
@@ -67,6 +69,7 @@ export class FakeAdapter implements ProviderAdapter {
   readonly requests: RunRequest[] = [];
 
   private readonly signedOut: boolean;
+  private readonly authMethod: string;
 
   constructor(opts: FakeAdapterOptions = {}) {
     this.engine = opts.engine ?? "fake";
@@ -76,6 +79,7 @@ export class FakeAdapter implements ProviderAdapter {
       notes: ["Test double: scripted output from a local process. Not a live provider."],
     };
     this.signedOut = opts.signedOut ?? false;
+    this.authMethod = opts.authMethod ?? "test-double";
     this.onStart = opts.onStart;
     this.readStartTime = opts.readStartTime;
     this.rules = opts.rules ?? [];
@@ -84,7 +88,7 @@ export class FakeAdapter implements ProviderAdapter {
 
   async probe(): Promise<ProviderHealth> {
     return {
-      engine: this.engine, binaryPath: process.execPath, version: "test-double", authenticated: !this.signedOut, authMethod: "test-double",
+      engine: this.engine, binaryPath: process.execPath, version: "test-double", authenticated: !this.signedOut, authMethod: this.authMethod,
       models: [], modelsSource: "none", problems: [], checkedAt: new Date().toISOString(), isTestDouble: true,
     };
   }

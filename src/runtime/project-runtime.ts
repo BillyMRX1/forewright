@@ -15,6 +15,7 @@ import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { EventBus } from "./bus.js";
 import { purposeFor, resolveFor } from "./fallback.js";
 import { CtoDriver } from "./cto.js";
+import { isGateDecision } from "./gates.js";
 import { git, gitLine, gitTry, hasCommits, isGitRepo, revParse } from "./git.js";
 import type { ProviderHealthCache } from "./health.js";
 import type { EngineUse, RuntimeStatus } from "./protocol.js";
@@ -311,6 +312,13 @@ export class ProjectRuntime {
       `decision:${decision.id}`,
       `Billy answered "${decision.title}" with "${chosen?.label ?? decision.resolutionOption}"${decision.resolutionNote ? `: ${decision.resolutionNote}` : ""}.`,
     );
+    if (isGateDecision(decision) && !approved) {
+      // Billy said no: the task stays blocked with a clear reason until he unblocks it (which asks again).
+      for (const id of decision.affectedTaskIds) {
+        const t = this.store.getTask(id);
+        if (t.blockReason === null && !["done", "cancelled"].includes(t.state)) this.store.setBlocked(id, "human_input", `Declined by Billy: ${decision.title}`);
+      }
+    }
     try {
       if (decision.kind === "git_init" && approved) this.initGit(decision);
       if (decision.kind === "merge" && approved) this.executeMerge(decision.id);

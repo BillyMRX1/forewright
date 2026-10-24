@@ -67,7 +67,6 @@ All four milestones are implemented and committed. A live end to end run with re
 
 ## Open items
 
-- Enforce `autoLocalEdits`, `autoChecks` and `allowApiBilling`, and make `autoIntegrateToForewrightBranch = false` create an approval request.
 - Claude as a reviewer has only been verified by tests after the permission fix, not in a live run.
 - TUI: wide character width, independent scrolling in board and inbox detail.
 - Planned work is now tracked as batches in GitHub issue #16. The items above stay open until they are done.
