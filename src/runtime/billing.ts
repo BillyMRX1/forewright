@@ -8,11 +8,24 @@ export const BILLING_BLOCK_PREFIX = "Blocked by the API billing setting";
 
 const API_BILLED = /api[_ -]?key|pay[- ]?(?:per|as)|metered/i;
 
-/** Plain reason a run on this engine would bill an API key while that is not allowed, or null when it may start. */
+/** True while billing cannot be judged yet because the engine has not been probed. */
+export function billingUnconfirmed(rt: Pick<ProjectRuntime, "store" | "deps">, engine: EngineId): boolean {
+  return !rt.store.getSettings().authority.allowApiBilling && rt.deps.health.cached(engine) === null;
+}
+
+/**
+ * Plain reason a run on this engine would bill an API key while that is not allowed, or null when it may start.
+ * Fails closed: no probe result, or a probe that failed (no binary found, timed out), means the login is unknown
+ * and the run is refused. A probe that worked but reports no method (OpenCode works without a login) is allowed,
+ * because the adapters strip API keys from the environment.
+ */
 export function billingProblem(rt: Pick<ProjectRuntime, "store" | "deps">, engine: EngineId): string | null {
   if (rt.store.getSettings().authority.allowApiBilling) return null;
-  const method = rt.deps.health.cached(engine)?.authMethod ?? "";
-  if (!API_BILLED.test(method)) return null;
+  const health = rt.deps.health.cached(engine);
+  if (health === null || health.binaryPath === null) {
+    return `${BILLING_BLOCK_PREFIX} (${engine}): could not confirm how ${engine} is logged in, so it may bill an API key. It will be checked again shortly.`;
+  }
+  if (!API_BILLED.test(health.authMethod ?? "")) return null;
   return `${BILLING_BLOCK_PREFIX} (${engine}): ${engine} is signed in with an API key, which bills per use. Sign ${engine} in with its subscription, or turn on "Allow API billing" in Settings.`;
 }
 

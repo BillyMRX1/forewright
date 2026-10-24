@@ -84,7 +84,7 @@ export class Scheduler {
     if (paused) return;
     store.refreshReadiness();
     rt.clearExpiredQuota();
-    this.gateEnvironment();
+    this.gateEnvironment(reason);
     integrateNext(rt);
     dispatchReviews(rt);
     dispatchWork(rt);
@@ -92,7 +92,7 @@ export class Scheduler {
   }
 
   /** Code tasks in a folder that is not a git repository stay blocked until Billy decides. */
-  private gateEnvironment(): void {
+  private gateEnvironment(reason: string): void {
     const rt = this.rt;
     const { store } = rt;
     const project = store.getProject();
@@ -102,7 +102,10 @@ export class Scheduler {
     // A task refused for API billing starts again once the engine no longer bills per use or the setting allows it.
     for (const t of open) {
       const engine = t.blockReason === "environment" ? billingBlockEngine(t.blockDetail) : null;
-      if (engine !== null && billingProblem(rt, engine as EngineId) === null) store.clearBlocked(t.id);
+      if (engine === null) continue;
+      if (billingProblem(rt, engine as EngineId) === null) store.clearBlocked(t.id);
+      // An unconfirmed login is probed again on the slow watchdog beat, not on every wake.
+      else if (reason.includes("watchdog")) void rt.deps.health.refresh().then(() => this.wake("health"));
     }
     if (isGit) {
       for (const t of open) {

@@ -85,6 +85,7 @@ export function dispatchWork(rt: ProjectRuntime): void {
     } catch (err) {
       if (err instanceof LeaseConflictError) continue; // another scheduler won the claim
       if (err instanceof BillingBlockedError) {
+        if (err.details?.["pending"] === true) continue; // probing now; the scheduler wakes when it is answered
         store.setBlocked(t.id, "environment", err.message);
         rt.notifyCto(`billing:${t.id}:${t.updatedAt}`, `${t.shortId} cannot start: ${err.message}`);
         continue;

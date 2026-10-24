@@ -8,7 +8,7 @@ import { logsDir } from "../core/paths.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import type { Agent, Run, RunKind, Task } from "../core/store.js";
 import type { McpServerSpec, NormalizedEvent, OwnedProcess, PermissionProfile, ProviderAdapter, RunHandle, RunOutcome } from "../core/types.js";
-import { billingProblem } from "./billing.js";
+import { billingProblem, billingUnconfirmed } from "./billing.js";
 import { BillingBlockedError, ProviderUnavailableError } from "./errors.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import type { TokenScope } from "./tokens.js";
@@ -60,7 +60,12 @@ export function adapterFor(rt: ProjectRuntime, agent: Agent): ProviderAdapter {
   }
   // The one pre-run billing check: every start path (CTO, work, review) goes through here before it claims anything.
   const billing = billingProblem(rt, agent.engine);
-  if (billing) throw new BillingBlockedError(billing, { engine: agent.engine });
+  if (billing) {
+    // Never probed: probe now, then let the scheduler look again. The run is refused until the answer is known.
+    const pending = billingUnconfirmed(rt, agent.engine);
+    if (pending) void rt.deps.health.forEngine(agent.engine).then(() => rt.scheduler.wake("health"), () => {});
+    throw new BillingBlockedError(billing, { engine: agent.engine, pending });
+  }
   return a;
 }
 

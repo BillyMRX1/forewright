@@ -82,6 +82,7 @@ export function dispatchReviews(rt: ProjectRuntime): void {
       startReview(rt, t, picked.agent, picked.res);
     } catch (err) {
       if (err instanceof BillingBlockedError) {
+        if (err.details?.["pending"] === true) continue;
         rt.notifyCto(`billing:review:${picked.agent.engine}`, `The review of ${t.shortId} cannot start: ${err.message}`);
         continue;
       }

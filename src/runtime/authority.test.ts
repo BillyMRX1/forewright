@@ -271,3 +271,57 @@ test("allowApiBilling off: a subscription login runs normally, and the CTO and r
     await h2.close();
   }
 });
+
+/** Forget every probe result, as if the service had just started. */
+const forgetProbes = (h: Harness): void => (h.daemon.health as unknown as { cache: Map<string, unknown> }).cache.clear();
+
+test("allowApiBilling off fails closed: with no probe result yet the engine is probed first, and an API-key login is refused", async () => {
+  const adapter = new FakeAdapter({ authMethod: "api_key", rules: [writesA, passReview] });
+  const h = await startHarness({ adapter });
+  try {
+    await h.daemon.health.refresh();
+    forgetProbes(h);
+    setup(h);
+    poke(h);
+    const blocked = await waitFor(() => (taskOf(h, "T-1").blockReason === "environment" ? taskOf(h, "T-1") : null), "the task to be blocked for billing");
+    assert.match(blocked.blockDetail ?? "", /bills per use/);
+    assert.notEqual(h.daemon.health.cached("fake"), null, "the engine was probed");
+    assert.equal(adapter.requests.filter((r) => r.permission === "workspace_write").length, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("allowApiBilling off fails closed: with no probe result yet a subscription login runs once the probe has answered", async () => {
+  const h = await startHarness({ adapter: new FakeAdapter({ authMethod: "subscription", rules: [writesA, passReview] }) });
+  try {
+    await h.daemon.health.refresh();
+    forgetProbes(h);
+    setup(h);
+    poke(h);
+    await waitFor(() => taskOf(h, "T-1").state === "done", "the task to finish after the probe");
+    assert.notEqual(h.daemon.health.cached("fake"), null);
+  } finally {
+    await h.close();
+  }
+});
+
+test("allowApiBilling off fails closed: a probe that failed refuses the run with a clear reason", async () => {
+  class UnprobeableAdapter extends FakeAdapter {
+    override async probe() {
+      return { ...(await super.probe()), binaryPath: null, authenticated: "unknown" as const, authMethod: null, problems: ["Probe failed: timed out"] };
+    }
+  }
+  const adapter = new UnprobeableAdapter({ rules: [writesA, passReview] });
+  const h = await startHarness({ adapter });
+  try {
+    await h.daemon.health.refresh();
+    setup(h);
+    poke(h);
+    const blocked = await waitFor(() => (taskOf(h, "T-1").blockReason === "environment" ? taskOf(h, "T-1") : null), "the task to be blocked");
+    assert.match(blocked.blockDetail ?? "", /could not confirm how fake is logged in/);
+    assert.equal(adapter.requests.filter((r) => r.permission === "workspace_write").length, 0);
+  } finally {
+    await h.close();
+  }
+});
