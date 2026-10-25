@@ -19,7 +19,7 @@ test("claude: real success fixture yields succeeded with session id and usage", 
   assert.match(outcome.sessionId ?? "", /^[0-9a-f-]{36}$/);
   assert.ok(outcome.usage?.costUsd !== undefined);
   // cache reads are reported on their own; cache writes count as fresh input (2 + 4273)
-  assert.deepEqual(outcome.usage, { inputTokens: 4275, outputTokens: 4, cachedInputTokens: 8154, costUsd: 0.0359028 });
+  assert.deepEqual(outcome.usage, { inputTokens: 4275, outputTokens: 4, cachedInputTokens: 8154, costUsd: 0.0359028, contextTokens: 12429 });
   assert.ok(events.some((e) => e.kind === "session_started" && e.sessionId));
   assert.ok(events.some((e) => e.kind === "assistant_text" && e.text === "OK"));
   assert.ok(events.some((e) => e.kind === "completed"));

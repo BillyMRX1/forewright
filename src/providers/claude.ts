@@ -183,6 +183,7 @@ export class ClaudeStreamParser implements EngineParser {
   private quotaSignal = false;
   private retryAfterHint: string | null = null;
   private lastAssistantText: string | null = null;
+  private lastTurnContext: number | null = null;
   private readonly stderr = new StderrTail();
 
   constructor(
@@ -249,6 +250,12 @@ export class ClaudeStreamParser implements EngineParser {
       this.emit({ kind: "diagnostic", text: "Assistant message without content", raw });
       return;
     }
+    // Each assistant message carries the usage of its own model request: input + cache = the context of that turn.
+    const turn = isObj(message) && isObj(message["usage"]) ? message["usage"] : null;
+    if (turn) {
+      const ctx = (num(turn["input_tokens"]) ?? 0) + (num(turn["cache_creation_input_tokens"]) ?? 0) + (num(turn["cache_read_input_tokens"]) ?? 0);
+      if (ctx > 0) this.lastTurnContext = ctx;
+    }
     for (const block of content) {
       if (!isObj(block)) continue;
       const t = block["type"];
@@ -293,6 +300,7 @@ export class ClaudeStreamParser implements EngineParser {
     const u: NonNullable<RunOutcome["usage"]> = { inputTokens, outputTokens: num(usage["output_tokens"]) ?? 0, cachedInputTokens: num(usage["cache_read_input_tokens"]) ?? 0 };
     const cost = num(msg["total_cost_usd"]);
     if (cost !== undefined) u.costUsd = cost;
+    if (this.lastTurnContext !== null) u.contextTokens = this.lastTurnContext;
     this.usage = u;
     this.emit({ kind: "usage", usage: u });
 

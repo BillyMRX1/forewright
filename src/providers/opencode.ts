@@ -588,6 +588,8 @@ export class OpencodeJsonParser implements EngineParser {
       inputTokens: (prev.inputTokens ?? 0) + (num(tokens["input"]) ?? 0) + cacheWrite,
       outputTokens: (prev.outputTokens ?? 0) + (num(tokens["output"]) ?? 0),
       costUsd: (prev.costUsd ?? 0) + (num(part["cost"]) ?? 0),
+      // this step's own request: the context of the latest model turn (not summed)
+      ...((num(tokens["input"]) ?? 0) + (cacheRead ?? 0) + cacheWrite > 0 ? { contextTokens: (num(tokens["input"]) ?? 0) + (cacheRead ?? 0) + cacheWrite } : prev.contextTokens !== undefined ? { contextTokens: prev.contextTokens } : {}),
       ...(cacheRead !== undefined || prev.cachedInputTokens !== undefined ? { cachedInputTokens: (prev.cachedInputTokens ?? 0) + (cacheRead ?? 0) } : {}),
     };
     this.emit({ kind: "usage", usage: this.usage });

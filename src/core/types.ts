@@ -125,6 +125,13 @@ export interface RunUsage {
   outputTokens?: number;
   cachedInputTokens?: number;
   costUsd?: number; // as reported by the CLI itself
+  /**
+   * Input + cached tokens of the run's LAST model request: how full the context was at the end. Only engines whose
+   * stream reports usage per model turn fill it (Claude: assistant messages; OpenCode: step_finish). Codex, Antigravity
+   * and Copilot report run totals or nothing, so it stays unset and sessions on those engines are never rotated early
+   * (overflow recovery still covers them).
+   */
+  contextTokens?: number;
   premiumRequests?: number; // Copilot
 }
 

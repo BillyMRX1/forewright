@@ -44,3 +44,18 @@ test("overflow wording across engines is recognised, ordinary failures and usage
   ]) assert.equal(looksLikeContextOverflow(text), true, text);
   for (const text of ["You've hit your usage limit", "Rate limit exceeded", "Unexpected server error", "no conversation found with session ID"]) assert.equal(looksLikeContextOverflow(text), false, text);
 });
+
+test("claude: contextTokens is the last model turn's input + cache, not the summed run totals", () => {
+  const turn = (input: number, read: number) => JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "step" }], usage: { input_tokens: input, cache_creation_input_tokens: 0, cache_read_input_tokens: read, output_tokens: 5 } } });
+  const result = JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "done", session_id: "s", total_cost_usd: 0.1, usage: { input_tokens: 30, cache_creation_input_tokens: 0, cache_read_input_tokens: 270_000, output_tokens: 15 } });
+  const { outcome } = drive((emit) => new ClaudeStreamParser(REQ, emit, []), [turn(10, 80_000), turn(10, 90_000), turn(10, 100_000), result]);
+  assert.equal(outcome.usage?.cachedInputTokens, 270_000, "the run totals are summed over turns");
+  assert.equal(outcome.usage?.contextTokens, 100_010);
+});
+
+test("opencode: contextTokens is the last step's input + cache", () => {
+  const step = (input: number, read: number) => JSON.stringify({ type: "step_finish", sessionID: "s", part: { reason: "tool-calls", cost: 0, tokens: { input, output: 3, cache: { read, write: 0 } } } });
+  const { outcome } = drive((emit) => new OpencodeJsonParser(REQ, emit, []), [step(100, 50_000), step(100, 60_000)], exitCode(1));
+  assert.equal(outcome.usage?.contextTokens, 60_100);
+  assert.equal(outcome.usage?.cachedInputTokens, 110_000);
+});

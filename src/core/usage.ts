@@ -55,11 +55,10 @@ export function contextWindowFor(model: string | null | undefined): number {
   return best === null ? DEFAULT_CONTEXT_WINDOW : (CONTEXT_WINDOWS[best] as number);
 }
 
-/** What a run put in the model's context: fresh plus cached input tokens. Null when the run reported no input. */
+/** How full the context was at the run's last model turn. Null when the engine does not report per-turn usage (run totals would overcount). */
 export function contextTokens(usage: RunUsage | null | undefined): number | null {
-  if (!usage) return null;
-  const n = (usage.inputTokens ?? 0) + (usage.cachedInputTokens ?? 0);
-  return n > 0 ? n : null;
+  const n = usage?.contextTokens;
+  return n !== undefined && n > 0 ? n : null;
 }
 
 /** True when the run used more than `percent` percent of the model's context window. */

@@ -145,8 +145,9 @@ test("worker second overflow: the task is blocked with an Inbox item and the CTO
 });
 
 test("rotation: a CTO session whose last run used more than the configured share of the context window is replaced before the next turn", async () => {
-  // no model is set, so the conservative default window of 128000 tokens applies; 80% of it is 102400
-  const usage = (tokens: number): FakeScript => ({ outcome: "succeeded", finalText: "ok", events: [{ kind: "usage", usage: { inputTokens: 10_000, cachedInputTokens: tokens - 10_000 } }] });
+  // no model is set, so the conservative default window of 128000 tokens applies; 80% of it is 102400.
+  // Every run also reports 510000 summed tokens: only the last turn's contextTokens counts.
+  const usage = (tokens: number): FakeScript => ({ outcome: "succeeded", finalText: "ok", events: [{ kind: "usage", usage: { inputTokens: 10_000, cachedInputTokens: 500_000, contextTokens: tokens } }] });
   const sizes = [110_000, 100_000, 100_000, 100_000];
   let turn = 0;
   const adapter = new FakeAdapter({ rules: [rule(isCto, () => usage(sizes[turn++] ?? 1000))] });
@@ -180,7 +181,7 @@ test("rotation: a worker whose last run filled the context starts the next attem
     { outcome: "succeeded", writeFiles: { "a.txt": "v3\n" }, toolCalls: [call("submit_work", { summary: "done" })] },
   );
   adapter.rules.unshift(
-    rule((r) => isWork(r) && adapter.requests.filter(isWork).length === 1, { outcome: "succeeded", writeFiles: { "a.txt": "v1\n" }, toolCalls: [call("submit_work", { summary: "done" })], events: [{ kind: "usage", usage: { inputTokens: 200_000, cachedInputTokens: 0 } }] }),
+    rule((r) => isWork(r) && adapter.requests.filter(isWork).length === 1, { outcome: "succeeded", writeFiles: { "a.txt": "v1\n" }, toolCalls: [call("submit_work", { summary: "done" })], events: [{ kind: "usage", usage: { inputTokens: 200_000, contextTokens: 200_000 } }] }),
   );
   const h = await startHarness({ adapter });
   try {
@@ -205,8 +206,9 @@ test("context windows: known models match by name, unknown models get the conser
   assert.equal(contextWindowFor("gemini-3.8-flash-low"), 1_000_000);
   assert.equal(contextWindowFor("some-new-model"), 128_000);
   assert.equal(contextWindowFor(null), 128_000);
-  assert.equal(overContextShare({ inputTokens: 100_000, cachedInputTokens: 61_000 }, "claude-opus-5-5", 80), true);
-  assert.equal(overContextShare({ inputTokens: 100_000, cachedInputTokens: 59_000 }, "claude-opus-5-5", 80), false);
+  assert.equal(overContextShare({ contextTokens: 161_000 }, "claude-opus-5-5", 80), true);
+  assert.equal(overContextShare({ contextTokens: 159_000 }, "claude-opus-5-5", 80), false);
+  assert.equal(overContextShare({ inputTokens: 900_000, cachedInputTokens: 900_000 }, "claude-opus-5-5", 80), false, "run totals (summed over turns) never trigger a rotation");
   assert.equal(overContextShare(null, "claude-opus-5-5", 80), false);
   assert.equal(overContextShare({ outputTokens: 5 }, null, 80), false, "a run that reported no input never triggers a rotation");
 });
