@@ -2,6 +2,7 @@ import type { NormalizedEvent, RunHandle, RunOutcome, RunRequest, OwnedProcess }
 import { LineSplitter, spawnOwned, terminateGroup, type StartTimeRead } from "./process.js";
 import { TerminationError } from "./errors.js";
 import { redact, safeRaw, truncate } from "./redact.js";
+import { CONTEXT_OVERFLOW_ERROR, looksLikeContextOverflow } from "./overflow.js";
 import { looksLikeQuota, parseRetryAfter } from "./quota.js";
 
 export interface ExitInfo {
@@ -201,6 +202,9 @@ export function decideOutcome(f: RunFacts): RunOutcome {
 
   const failure = f.failureText ? redact(f.failureText, f.secrets) : null;
   const quotaText = failure ?? (f.exit.code !== 0 ? stderr : "");
+  if (!f.completed && !f.quotaSignal && looksLikeContextOverflow(quotaText)) {
+    return { ...base, state: "failed", contextOverflow: true, error: CONTEXT_OVERFLOW_ERROR, errorDetail: detail(failure ?? undefined) };
+  }
   if (!f.completed && (f.quotaSignal || looksLikeQuota(quotaText))) {
     const retryAfter = f.retryAfterHint ?? parseRetryAfter(quotaText, f.now);
     return {

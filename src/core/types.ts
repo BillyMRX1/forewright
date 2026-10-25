@@ -153,6 +153,8 @@ export interface RunOutcome {
   errorDetail: string | null; // technical, redacted
   usage: RunUsage | null;
   retryAfter: string | null;
+  /** The run failed because the conversation no longer fits the model's context window (state is "failed"). */
+  contextOverflow?: boolean;
 }
 
 export interface OwnedProcess {

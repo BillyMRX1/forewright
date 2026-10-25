@@ -202,6 +202,8 @@ export interface Limits {
   maxRepairLoops: number;
   maxCtoWakeupsPerHour: number;
   maxMessagesPerThreadPerHour: number;
+  /** Start the next turn in a fresh session once the last run used more than this percent of the model's context window. */
+  contextRotatePercent: number;
 }
 
 /** One step of the user-ordered fallback list: an engine and an optional model of that engine. */
@@ -242,6 +244,7 @@ export const DEFAULT_LIMITS: Limits = {
   maxRepairLoops: 2,
   maxCtoWakeupsPerHour: 60,
   maxMessagesPerThreadPerHour: 30,
+  contextRotatePercent: 80,
 };
 
 export const DEFAULT_AUTHORITY: Authority = {

@@ -926,6 +926,10 @@ export class Store {
       if (outcome.state === "stopped") {
         this.run(`UPDATE task SET ${release} WHERE id = ?`, now, t.id);
         this.appendEvent("task.transitioned", "task", t.id, "system", { from: "working", to: "ready", reason: "run_stopped" });
+      } else if (outcome.contextOverflow) {
+        // The conversation got too long: the next attempt starts a fresh session. That is not a retry.
+        this.run(`UPDATE task SET ${release} WHERE id = ?`, now, t.id);
+        this.appendEvent("task.context_overflow", "task", t.id, "system", { runId });
       } else if (outcome.state === "quota_wait") {
         this.run(`UPDATE task SET ${release}, block_reason = 'quota', block_detail = ? WHERE id = ?`, now, `Provider quota reached${outcome.retryAfter ? `; retry after ${outcome.retryAfter}` : ""}`, t.id);
         this.appendEvent("task.blocked", "task", t.id, "system", { reason: "quota", retryAfter: outcome.retryAfter });

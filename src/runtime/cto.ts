@@ -12,10 +12,12 @@ import { billingProblem } from "./billing.js";
 import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { ProviderUnavailableError } from "./errors.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
+import { overflowedRun, sessionIsFull } from "./overflow.js";
 import { looksLikeSessionLoss, nameOfSender } from "./workers.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const FAILURE_COOLDOWN_MS = 60 * 1000;
+const OVERFLOW_ACTION = "cto_context_overflow";
 
 // Routine progress notices (work finished with checks passing, review verdicts, a task integrated
 // that is not the last one) never start a CTO turn by themselves. They stay pending and are
@@ -43,6 +45,8 @@ export class CtoDriver {
   private readonly targets = new Map<string, ReplyTarget[]>(); // run id -> where its final text is posted
   private cooldownUntil = 0;
   private error: string | null = null;
+  /** The CTO's conversation just overflowed: the one fresh-session turn that follows ignores the cooldown and the wake-up limit. */
+  private resetPending = false;
 
   constructor(private readonly rt: ProjectRuntime) {}
 
@@ -68,7 +72,8 @@ export class CtoDriver {
     if (pending.length === 0) return;
     if (pending.every(isRoutine)) return; // routine notices wait for a real trigger
     const now = rt.clock.now().getTime();
-    if (now < this.cooldownUntil) return;
+    if (this.overflowBlocked()) return; // a fresh session overflowed too: Billy decides first
+    if (now < this.cooldownUntil && !this.resetPending) return;
     const res = resolveFor(rt, cto, "cto");
     if (res.wait) return; // the CTO's engine is waiting for a usage limit and no fallback can take over
     const engine = res.engine;
@@ -97,7 +102,9 @@ export class CtoDriver {
 
     const limit = store.getSettings().maxCtoWakeupsPerHour;
     const since = new Date(now - HOUR_MS).toISOString();
-    if (store.countEvents("cto.turn_started", since) >= limit) {
+    // The turn that overflowed does not count as a wake-up, and neither does its fresh-session replacement.
+    const wakeups = Math.max(0, store.countEvents("cto.turn_started", since) - store.countEvents("cto.context_overflow", since));
+    if (wakeups >= limit && !this.resetPending) {
       // No Inbox decision: a notice event, once per window. Messages stay pending.
       const windowStart = store.firstEventAt("cto.turn_started", since) ?? since;
       if (store.countEvents("cto.rate_limited", windowStart) === 0) {
@@ -112,6 +119,10 @@ export class CtoDriver {
     } catch (err) {
       if (!(err instanceof LeaseConflictError)) throw err; // the CTO is running something else: look again when it finishes
     }
+  }
+
+  private overflowBlocked(): boolean {
+    return this.rt.store.listDecisions().some((d) => d.status === "open" && (d.boundAction as { action?: string } | null)?.action === OVERFLOW_ACTION);
   }
 
   private fail(message: string, key: string): void {
@@ -146,9 +157,20 @@ export class CtoDriver {
     const nameOf = nameOfSender(rt);
     const taskShort = (id: string) => store.getTask(id).shortId;
     // A session belongs to one engine: resume only the CTO's own session on the engine that runs now.
-    const ownSession = store.getAgentSession(cto.id, cto.engine, "cto");
-    const resume = adapter.capabilities.resume && ownSession ? ownSession : undefined;
+    let ownSession = store.getAgentSession(cto.id, cto.engine, "cto");
     const earlier = store.listRuns().filter((r) => r.kind === "cto" && r.id !== run.id && r.state !== "queued");
+    // A conversation that overflowed is never resumed, and one that is nearly full is replaced before it overflows.
+    const hereRuns = earlier.filter((r) => r.engine === cto.engine);
+    const overflowed = overflowedRun(hereRuns.at(-1));
+    const rotate = !overflowed && ownSession !== null && sessionIsFull(rt, hereRuns, cto.model);
+    if (ownSession !== null && (overflowed || rotate)) {
+      store.clearAgentSession(cto.id, cto.engine, "cto");
+      ownSession = null;
+    }
+    const freshReason = overflowed ? "overflow" : rotate ? "rotation" : null;
+    if (freshReason) store.recordEvent("session.reset", "agent", cto.id, { kind: "system" }, { agentId: cto.id, role: "cto", reason: freshReason });
+    this.resetPending = false;
+    const resume = adapter.capabilities.resume && ownSession ? ownSession : undefined;
     const previous = earlier.at(-1);
     const switchedFrom = previous && previous.engine !== cto.engine ? previous.engine : null;
     let contextSummary: string | undefined;
@@ -156,7 +178,10 @@ export class CtoDriver {
     if (!resume && earlier.length > 0) {
       const batchIds = new Set(batch.map((m) => m.id));
       const recent = store.listMessages({ channel: "cto", limit: 20 }).filter((m) => !batchIds.has(m.id)).map((m) => formatMessage(m, nameOf, taskShort));
-      summaryParts.push(buildResetSummary(store.currentApprovedDoc(), recent, switchedFrom ? `## Context (this engine has no earlier session of yours)` : undefined));
+      const heading = freshReason
+        ? `## Context (your earlier conversation ${freshReason === "overflow" ? "got too long" : "was nearly full"}, so this is a fresh session)`
+        : switchedFrom ? `## Context (this engine has no earlier session of yours)` : undefined;
+      summaryParts.push(buildResetSummary(store.currentApprovedDoc(), recent, heading));
     }
     if (switchedFrom) {
       const lastHere = earlier.filter((r) => r.engine === cto.engine).at(-1);
@@ -198,6 +223,30 @@ export class CtoDriver {
     return active;
   }
 
+  /**
+   * The CTO's conversation no longer fits the model. The session is forgotten and the same messages go to a fresh
+   * session built from a summary, with no cooldown and no wake-up counted. A fresh session that overflows too
+   * pauses the CTO with an Inbox item instead of looping.
+   */
+  private handleOverflow(a: ActiveRun, outcome: RunOutcome): void {
+    const { store } = this.rt;
+    store.clearAgentSession(a.agent.id, a.agent.engine, "cto");
+    store.recordEvent("cto.context_overflow", "agent", a.agent.id, { kind: "system" }, { lostSession: a.resumeSessionId ?? null, reason: outcome.errorDetail ?? outcome.error });
+    if (a.resumeSessionId) {
+      this.resetPending = true;
+      return; // the next turn starts fresh with a context summary and the same messages
+    }
+    this.error = "The CTO's conversation does not fit the model's context window even in a fresh session.";
+    store.requestDecision({
+      kind: "question",
+      title: "The CTO is paused: its context does not fit the model",
+      question: `${this.error} The CTO is paused instead of trying again. Shorten what it has to read (for example by archiving old tasks) or pick a model with a larger context window in Settings, then answer to let it try again.`,
+      options: [{ key: "retry", label: "Let the CTO try again", consequence: "The CTO starts a new fresh-session turn.", approves: true }],
+      recommendation: "retry",
+      boundAction: { action: OVERFLOW_ACTION },
+    });
+  }
+
   private async handleOutcome(a: ActiveRun, outcome: RunOutcome): Promise<void> {
     const rt = this.rt;
     const { store } = rt;
@@ -233,6 +282,10 @@ export class CtoDriver {
         return;
       default: {
         store.requeueDeliveries(a.agent.id, a.run.id);
+        if (outcome.contextOverflow) {
+          this.handleOverflow(a, outcome);
+          return;
+        }
         if (a.resumeSessionId && looksLikeSessionLoss(`${outcome.error ?? ""} ${outcome.errorDetail ?? ""}`)) {
           store.clearAgentSession(a.agent.id, a.agent.engine, "cto");
           store.recordEvent("cto.session_reset", "agent", a.agent.id, { kind: "system" }, { lostSession: a.resumeSessionId, reason: outcome.error });

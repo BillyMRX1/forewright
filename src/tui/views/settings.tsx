@@ -59,6 +59,7 @@ const LABELS: Record<string, string> = {
   maxRepairLoops: "Repair loops",
   maxCtoWakeupsPerHour: "CTO wakeups per hour",
   maxMessagesPerThreadPerHour: "Messages per thread per hour",
+  contextRotatePercent: "Start a fresh session after this % of the context window",
 };
 
 /** Health of a provider as a short colored word. */

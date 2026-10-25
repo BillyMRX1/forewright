@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1790796773404,"sessionID":"ses_f0c31cfaeffeP2mHAwdsueshnn","part":{"id":"prt_0f3ce38020013giiG1RmkrCsZp","messageID":"msg_0f3ce3163001P9BloMvMQtf3HV","sessionID":"ses_f0c31cfaeffeP2mHAwdsueshnn","type":"step-start"}}
+{"type":"error","timestamp":1790796775001,"sessionID":"ses_f0c31cfaeffeP2mHAwdsueshnn","error":{"name":"APIError","data":{"message":"prompt is too long: 213462 tokens > 200000 maximum","statusCode":400,"isRetryable":false}}}

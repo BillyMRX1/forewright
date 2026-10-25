@@ -1,0 +1,1 @@
+{"type":"session.error","data":{"errorType":"query","message":"CAPIError: 400 prompt token count of 141873 exceeds the limit of 128000","statusCode":400},"timestamp":"2026-09-30T19:40:12.101Z"}

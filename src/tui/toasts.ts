@@ -73,3 +73,11 @@ export function engineNoticeText(type: "engine.fallback" | "engine.restored" | "
   const until = resetTimePhrase(p["until"]);
   return `${engineLabel(str(p["engine"], "An engine"))} usage limit reached. ${who} waits until ${until}.`;
 }
+
+/** Notice for a conversation that was replaced by a fresh session (it overflowed, or was nearly full). `who` is "CTO" or a task id. */
+export function sessionResetNoticeText(p: Record<string, unknown>, who: string): string {
+  const cto = p["role"] === "cto";
+  const owner = cto ? "CTO's" : `${who}'s`;
+  const what = cto ? "started a fresh session with a summary" : "started a fresh session with a handoff";
+  return p["reason"] === "rotation" ? `${owner} conversation was nearly full; ${what}` : `${owner} conversation got too long; ${what}`;
+}

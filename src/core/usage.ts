@@ -32,6 +32,42 @@ export const DEFAULT_PRICES: PriceTable = {
   "gemini-2.5-flash": { input: 0.3, output: 2.5, cached: 0.075 },
 };
 
+/**
+ * Context window sizes in tokens, matched like the prices (the model name contains the key, longest key wins).
+ * Used to rotate a session before it fills up. Conservative on purpose: an unknown model gets DEFAULT_CONTEXT_WINDOW.
+ */
+export const CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-opus": 200_000,
+  "claude-sonnet": 200_000,
+  "claude-haiku": 200_000,
+  "gpt-5": 272_000,
+  "gemini-3": 1_000_000,
+  "gemini-2.5": 1_000_000,
+};
+
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+export function contextWindowFor(model: string | null | undefined): number {
+  if (!model) return DEFAULT_CONTEXT_WINDOW;
+  const name = model.toLowerCase();
+  let best: string | null = null;
+  for (const key of Object.keys(CONTEXT_WINDOWS)) if (name.includes(key) && (best === null || key.length > best.length)) best = key;
+  return best === null ? DEFAULT_CONTEXT_WINDOW : (CONTEXT_WINDOWS[best] as number);
+}
+
+/** What a run put in the model's context: fresh plus cached input tokens. Null when the run reported no input. */
+export function contextTokens(usage: RunUsage | null | undefined): number | null {
+  if (!usage) return null;
+  const n = (usage.inputTokens ?? 0) + (usage.cachedInputTokens ?? 0);
+  return n > 0 ? n : null;
+}
+
+/** True when the run used more than `percent` percent of the model's context window. */
+export function overContextShare(usage: RunUsage | null | undefined, model: string | null | undefined, percent: number): boolean {
+  const used = contextTokens(usage);
+  return used !== null && used > (contextWindowFor(model) * percent) / 100;
+}
+
 export const PRICES_FILE = "prices.json";
 export const pricesPath = (home: string): string => path.join(home, PRICES_FILE);
 

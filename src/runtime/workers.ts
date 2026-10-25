@@ -12,10 +12,11 @@ import { BillingBlockedError, GitError, ProviderUnavailableError, WorkspaceError
 import { approvalGate } from "./gates.js";
 import { git, gitTry, isDirty, revParse } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
-import { buildEngineHandoff, buildWorkerPrompt, formatMessage, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
+import { buildEngineHandoff, buildSessionHandoff, buildWorkerPrompt, formatMessage, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
 import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
+import { overflowedRun, sessionIsFull } from "./overflow.js";
 
 export const taskPort = (shortId: string): number => 41000 + Number(shortId.slice(2)) * 10;
 
@@ -117,6 +118,20 @@ function lastReport(rt: ProjectRuntime, run: Run): string | null {
   return null;
 }
 
+/** `git diff --stat` of what a worktree holds so far: uncommitted, committed on the task branch, and new files. */
+function workspaceDiffStat(worktreePath: string): string {
+  return [
+    gitTry(worktreePath, ["diff", "--stat", "HEAD"]).stdout,
+    gitTry(worktreePath, ["diff", "--stat", `${INTEGRATION_BRANCH}...HEAD`]).stdout,
+    (() => {
+      const fresh = gitTry(worktreePath, ["ls-files", "--others", "--exclude-standard"]).stdout.trim();
+      return fresh === "" ? "" : `New files not yet tracked:\n${fresh}`;
+    })(),
+  ]
+    .filter((x) => x.trim() !== "")
+    .join("\n");
+}
+
 export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolution?: Extract<Resolution, { wait: false }>): void {
   const { store } = rt;
   let res = resolution;
@@ -159,24 +174,23 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
     // The previous work attempt on this task. A different engine means a switch (usage limit, or the primary is back):
     // the new engine gets what the last attempt reported and the current state of the files.
     const lastAttempt = store.listRuns({ taskId: task.id }).filter((r) => r.kind === "work" && r.id !== run.id && r.state !== "queued").at(-1);
+    // A session that overflowed is never resumed, and one that is nearly full is replaced before it overflows.
+    let session = store.getAgentSession(agent.id, agent.engine, task.id);
+    const sessionRuns = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.engine === agent.engine && r.state !== "queued");
+    const overflowed = overflowedRun(sessionRuns.at(-1));
+    const rotate = !overflowed && session !== null && sessionIsFull(rt, sessionRuns, agent.model);
+    if (session !== null && (overflowed || rotate)) {
+      store.clearAgentSession(agent.id, agent.engine, task.id);
+      session = null;
+    }
+    const freshReason = overflowed ? "overflow" : rotate ? "rotation" : null;
     let engineHandoff: string | undefined;
     if (lastAttempt && lastAttempt.engine !== agent.engine) {
-      engineHandoff = buildEngineHandoff({
-        engine: agent.engine,
-        previousEngine: lastAttempt.engine,
-        previousReport: lastReport(rt, lastAttempt),
-        diffStat: [
-          gitTry(ws.worktreePath, ["diff", "--stat", "HEAD"]).stdout,
-          gitTry(ws.worktreePath, ["diff", "--stat", `${INTEGRATION_BRANCH}...HEAD`]).stdout,
-          (() => {
-            const fresh = gitTry(ws.worktreePath, ["ls-files", "--others", "--exclude-standard"]).stdout.trim();
-            return fresh === "" ? "" : `New files not yet tracked:\n${fresh}`;
-          })(),
-        ]
-          .filter((x) => x.trim() !== "")
-          .join("\n"),
-      });
+      engineHandoff = buildEngineHandoff({ engine: agent.engine, previousEngine: lastAttempt.engine, previousReport: lastReport(rt, lastAttempt), diffStat: workspaceDiffStat(ws.worktreePath) });
+    } else if (lastAttempt && freshReason) {
+      engineHandoff = buildSessionHandoff({ reason: freshReason, previousReport: lastReport(rt, lastAttempt), diffStat: workspaceDiffStat(ws.worktreePath) });
     }
+    if (freshReason) store.recordEvent("session.reset", "task", task.id, { kind: "system" }, { agentId: agent.id, role: "worker", taskId: task.id, reason: freshReason });
 
     const cto = rt.ctoAgent();
     const prompt = buildWorkerPrompt({
@@ -196,9 +210,8 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
     const tmp = path.join(ws.worktreePath, ".forewright-tmp");
     mkdirSync(tmp, { recursive: true });
     // Resume only this agent's session for this task on this engine: never another task's or engine's.
-    const session = store.getAgentSession(agent.id, agent.engine, task.id);
     const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId && r.engine === agent.engine).at(-1);
-    const canResume = adapterFor(rt, agent).capabilities.resume && session !== null && !(prior?.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
+    const canResume = adapterFor(rt, agent).capabilities.resume && session !== null && !overflowed && !(prior?.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
     launchRun(rt, {
       run,
       agent,
@@ -279,10 +292,36 @@ async function handleWorkOutcome(rt: ProjectRuntime, a: ActiveRun, outcome: RunO
       return;
     }
     default:
+      if (outcome.contextOverflow) {
+        handleWorkOverflow(rt, a, task);
+        return;
+      }
       if (task.blockReason === "exhausted_recovery") {
         rt.notifyCto(`notice:${a.run.id}:exhausted`, `${task.shortId} "${task.title}" failed ${task.retries} times and is blocked. Last error: ${outcome.error ?? "none reported"}`);
       }
   }
+}
+
+/**
+ * The conversation no longer fits the model. The overflowed session is forgotten either way. A resumed session
+ * overflowing is expected: the task is already back to ready and the next attempt starts fresh with a handoff.
+ * A session that was already fresh overflowing means a new session would only do it again: block with an Inbox item.
+ */
+function handleWorkOverflow(rt: ProjectRuntime, a: ActiveRun, task: Task): void {
+  const { store } = rt;
+  store.clearAgentSession(a.agent.id, a.agent.engine, task.id);
+  if (a.resumeSessionId) return;
+  const detail = `${a.agent.name}'s conversation overflowed the model's context window even in a fresh session.`;
+  store.requestDecision({
+    kind: "question",
+    title: `${task.shortId}: the work does not fit the model's context`,
+    question: `${detail} ${task.shortId} "${task.title}" is blocked instead of trying again. Splitting the task into smaller ones usually helps; answering unblocks it for another try.`,
+    options: [{ key: "retry", label: "Try again", consequence: `${task.shortId} starts again in a fresh session.`, approves: true }],
+    recommendation: "retry",
+    affectedTaskIds: [task.id],
+  });
+  store.setBlocked(task.id, "human_input", detail);
+  rt.notifyCto(`context-overflow:${a.run.id}`, `${task.shortId} "${task.title}" is blocked: its conversation overflowed the model's context window even in a fresh session. Consider splitting it into smaller tasks.`);
 }
 
 async function finishWork(rt: ProjectRuntime, a: ActiveRun): Promise<void> {

@@ -149,6 +149,7 @@ class FakeParser implements EngineParser {
   private failureText: string | null = null;
   private quota = false;
   private retryAfter: string | null = null;
+  private usage: RunOutcome["usage"] = null;
   private readonly stderr = new StderrTail();
 
   constructor(private readonly req: RunRequest, private readonly emit: ReturnType<typeof makeEmitter>) {}
@@ -159,7 +160,7 @@ class FakeParser implements EngineParser {
 
   feedLine(line: string): void {
     if (line.trim() === "") return;
-    let msg: { kind?: string; text?: string; sessionId?: string; retryAfter?: string };
+    let msg: { kind?: string; text?: string; sessionId?: string; retryAfter?: string; usage?: RunOutcome["usage"] };
     try {
       msg = JSON.parse(line);
     } catch {
@@ -177,6 +178,9 @@ class FakeParser implements EngineParser {
       case "error":
         this.failureText = msg.text ?? "error";
         break;
+      case "usage":
+        this.usage = msg.usage ?? null;
+        break;
       case "quota_exhausted":
         this.quota = true;
         this.retryAfter = msg.retryAfter ?? null;
@@ -191,7 +195,7 @@ class FakeParser implements EngineParser {
     return decideOutcome({
       req: this.req, exit, completed: this.completed, failureText: this.failureText, quotaSignal: this.quota,
       retryAfterHint: this.retryAfter, stderrTail: this.stderr.value, sessionId: this.sessionId, finalText: this.finalText,
-      usage: null, secrets: [],
+      usage: this.usage, secrets: [],
     });
   }
 }

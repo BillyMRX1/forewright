@@ -6,7 +6,7 @@ import type { ProviderStatus, RuntimeStatus } from "../runtime/protocol.js";
 import type { AgentAttention, NeedItem } from "./attention.js";
 import { clockTime, elapsed, oneLine, plainBlockReason, shortAge } from "./format.js";
 import type { DisplayStatus } from "./theme.js";
-import { engineLabel, resetTimePhrase } from "./toasts.js";
+import { engineLabel, resetTimePhrase, sessionResetNoticeText } from "./toasts.js";
 
 export interface NeedRow {
   item: NeedItem;
@@ -213,6 +213,8 @@ export function describeEvent(ev: ForewrightEvent, ctx: NameLookup): string | nu
       return `${p["role"] === "cto" ? "CTO" : agentName(p["agentId"])} is back on ${engineLabel(str(p["engine"], "its own engine"))}`;
     case "engine.waiting":
       return `${p["role"] === "cto" ? "CTO" : agentName(p["agentId"])} waits for the ${engineLabel(str(p["engine"], "engine"))} limit until ${untilText(typeof p["until"] === "string" ? p["until"] : null)}`;
+    case "session.reset":
+      return sessionResetNoticeText(p, typeof p["taskId"] === "string" ? short(p["taskId"]) : "CTO");
     case "cto.rate_limited":
       return `The CTO hit its wakeup limit and is paused until ${untilText(typeof p["until"] === "string" ? p["until"] : null)}`;
     case "message.posted":

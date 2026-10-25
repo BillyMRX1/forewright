@@ -237,6 +237,18 @@ export function buildEngineSwitchNotice(input: { engine: EngineId; previousEngin
   return `${head}\n${input.since.length > 0 ? input.since.join("\n") : "(nothing new in the CTO channel)"}`;
 }
 
+/** A work run that starts a fresh session because the old one got too long (or was nearly full) on the same engine. */
+export function buildSessionHandoff(input: { reason: "overflow" | "rotation"; previousReport: string | null; diffStat: string }): string {
+  return [
+    `## Continuing earlier work (fresh session)`,
+    input.reason === "overflow"
+      ? `The earlier conversation on this task got too long for the model, so you are starting a fresh session. Continue from the current state of the files in this workspace; do not start over.`
+      : `The earlier conversation on this task was nearly full, so you are starting a fresh session. Continue from the current state of the files in this workspace; do not start over.`,
+    input.previousReport ? `What the previous attempt last reported:\n${truncate(input.previousReport, 4000)}` : "The previous attempt did not report anything before it stopped.",
+    `Changes in the workspace so far (git diff --stat):\n${input.diffStat.trim() === "" ? "(no changes yet)" : truncate(input.diffStat, 3000)}`,
+  ].join("\n");
+}
+
 /** A work run that continues what another engine started on the same task (usage limit switch or switch back). */
 export function buildEngineHandoff(input: { engine: EngineId; previousEngine: EngineId; previousReport: string | null; diffStat: string }): string {
   return [

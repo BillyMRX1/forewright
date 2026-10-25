@@ -17,7 +17,7 @@ import { Palette, type PaletteEntry } from "./palette.js";
 import { ConfirmCard, HelpModal, OutcomeCard, PrdViewer } from "./modals.js";
 import { footerHints } from "./keys.js";
 import { viewOfAction, type ActionId } from "./commands.js";
-import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, resetTimePhrase, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
+import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, resetTimePhrase, sessionResetNoticeText, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
 import { palette as colors, sym } from "./theme.js";
 import { HomeView } from "./views/home.js";
 import { ChatView, CtoView } from "./views/cto.js";
@@ -270,6 +270,12 @@ export function App(props: AppProps) {
         } else {
           raise("info", engineNoticeText(type, p, who), p["role"] === "cto" ? { kind: "cto" } : null);
         }
+        break;
+      }
+      case "session.reset": {
+        const taskId = typeof p["taskId"] === "string" ? p["taskId"] : null;
+        if (taskId) withTask(taskId, (t) => raise("info", sessionResetNoticeText(p, t.shortId), { kind: "task", taskId: t.id }));
+        else raise("info", sessionResetNoticeText(p, "CTO"), { kind: "cto" });
         break;
       }
       case "cto.rate_limited": {
