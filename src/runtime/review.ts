@@ -1,16 +1,16 @@
 // Independent review: a different agent reads the candidate commit in the task
 // worktree (read-only) and reports through submit_review. The verdict is bound
 // to the commit and scope revisions the review started with.
-import { StaleGenerationError } from "../core/errors.js";
+import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { truncate } from "../core/safety.js";
-import type { Agent, Task } from "../core/store.js";
+import type { Agent, Run, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { BillingBlockedError } from "./errors.js";
 import { gitTry } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { buildReviewPrompt, readInstructionFiles, reviewSystemPrompt } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
-import { type ActiveRun, adapterFor, launchRun } from "./runs.js";
+import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
 import type { TokenScope } from "./tokens.js";
 import { sendBackForRepair } from "./workers.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
@@ -52,7 +52,7 @@ function pickReviewer(rt: ProjectRuntime, t: Task): { agent: Agent; res: Runnabl
         (a.role === "review" || a.role === "testing") &&
         a.id !== t.assigneeAgentId &&
         a.lifecycle !== "paused" &&
-        !rt.activeForAgent(a.id) &&
+        !rt.agentBusy(a.id) &&
         reviewFailures(rt, t, a.id) < MAX_REVIEW_FAILURES,
     );
   // Reviewers whose own engine is waiting for a usage limit may run on a fallback engine Billy listed.
@@ -81,6 +81,7 @@ export function dispatchReviews(rt: ProjectRuntime): void {
     try {
       startReview(rt, t, picked.agent, picked.res);
     } catch (err) {
+      if (err instanceof LeaseConflictError) continue; // the reviewer took another run first
       if (err instanceof BillingBlockedError) {
         if (err.details?.["pending"] === true) continue;
         rt.notifyCto(`billing:review:${picked.agent.engine}`, `The review of ${t.shortId} cannot start: ${err.message}`);
@@ -102,7 +103,14 @@ function startReview(rt: ProjectRuntime, t: Task, primary: Agent, res: RunnableR
     return;
   }
   noteEngineChoice(rt, primary, "review", res);
-  const run = store.createRun({ taskId: t.id, agentId: reviewer.id, generation: t.generation, kind: "review", engine: reviewer.engine, ...(reviewer.model ? { model: reviewer.model } : {}), cwd: wt });
+  const leaseGeneration = acquireLease(rt, reviewer); // one live run per agent: throws LeaseConflictError when it already has one
+  let run: Run;
+  try {
+    run = store.createRun({ taskId: t.id, agentId: reviewer.id, generation: t.generation, leaseGeneration, kind: "review", engine: reviewer.engine, ...(reviewer.model ? { model: reviewer.model } : {}), cwd: wt });
+  } catch (err) {
+    releaseLease(rt, reviewer.id, leaseGeneration);
+    throw err;
+  }
   const raw = gitTry(wt, ["diff", `${INTEGRATION_BRANCH}...${candidate}`]).stdout;
   const truncated = raw.length > DIFF_CAP;
   const doc = store.currentApprovedDoc();

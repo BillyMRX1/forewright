@@ -336,7 +336,7 @@ const TOOLS: ToolDef[] = [
     mutating: true,
     run: (ctx, a) => {
       const agent = agentByName(ctx, str(a, "agent", { max: 60 }));
-      if (ctx.rt.activeForAgent(agent.id)) throw new ToolError(`${agent.name} is running right now; wait for the run to finish or reassign its task.`);
+      if (ctx.rt.agentBusy(agent.id)) throw new ToolError(`${agent.name} is running right now; wait for the run to finish or reassign its task.`);
       ctx.rt.store.retireAgent(agent.id, ctx.actor);
       return { retired: agent.name };
     },
@@ -597,6 +597,7 @@ export async function callTool(rt: ProjectRuntime, record: TokenRecord, name: st
     const task = taskId ? store.getTask(taskId) : null;
     if (record.scope.kind !== "cto" && taskId) store.assertCurrentGeneration(taskId, record.generation, { tool: name, runId: record.runId });
     if (!rt.active.has(record.runId)) throw new PolicyDeniedError("This run has ended, so its tools are no longer available.", { runId: record.runId });
+    store.assertRunLease(record.runId, { tool: name }); // a run that lost the agent's lease cannot post or change anything
 
     const context: ActionContext = {
       ...(taskId ? { taskId } : {}),

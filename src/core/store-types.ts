@@ -73,6 +73,8 @@ export interface Run {
   finalText: string | null;
   usage: unknown;
   retryAfter: string | null;
+  /** The agent lease generation this run started under; null for rows from before agent leases. */
+  leaseGeneration: number | null;
   createdAt: string;
 }
 

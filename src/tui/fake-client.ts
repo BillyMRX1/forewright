@@ -159,6 +159,7 @@ export function baseData() {
     finalText: null,
     usage: null,
     retryAfter: null,
+    leaseGeneration: null,
     createdAt: NOW,
   };
   const providers: ProviderStatus[] = [

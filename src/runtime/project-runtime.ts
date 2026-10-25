@@ -172,6 +172,11 @@ export class ProjectRuntime {
     return undefined;
   }
 
+  /** Whether the agent has a live run. The lease in the database decides; `active` only covers runs of this process. */
+  agentBusy(agentId: string): boolean {
+    return this.store.agentLeaseHeld(agentId) || this.activeForAgent(agentId) !== undefined;
+  }
+
   activeForTask(taskId: string): ActiveRun[] {
     return [...this.active.values()].filter((a) => a.taskId === taskId);
   }

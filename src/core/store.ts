@@ -643,6 +643,95 @@ export class Store {
     });
   }
 
+  // ------------------------------------------------------------ agent leases
+
+  /**
+   * The per-agent execution lease: at most one live run per agent, whatever its kind. Every grant bumps the
+   * generation, so a run that lost the lease (expiry takeover, crash recovery) is fenced for good.
+   * Returns the new generation. Throws LeaseConflictError while another unexpired lease is held.
+   */
+  acquireAgentLease(agentId: string, ownerId: string, leaseMs: number): number {
+    return tx(this.db, () => {
+      const a = this.getAgent(agentId);
+      const now = this.nowIso();
+      const expires = new Date(this.clock.now().getTime() + leaseMs).toISOString();
+      this.run("INSERT OR IGNORE INTO agent_lease (agent_id, generation) VALUES (?, 0)", a.id);
+      const changed = this.run(
+        `UPDATE agent_lease SET generation = generation + 1, owner = ?, expires_at = ?
+         WHERE agent_id = ? AND (owner IS NULL OR expires_at IS NULL OR expires_at < ?)`,
+        ownerId,
+        expires,
+        a.id,
+        now,
+      );
+      if (changed === 0) {
+        const held = this.one("SELECT owner, expires_at FROM agent_lease WHERE agent_id = ?", a.id);
+        throw new LeaseConflictError(`${a.name} already has a run in progress.`, { agentId: a.id, leaseOwner: held?.["owner"] ?? null, expiresAt: held?.["expires_at"] ?? null });
+      }
+      const generation = this.one("SELECT generation FROM agent_lease WHERE agent_id = ?", a.id)!["generation"] as number;
+      this.appendEvent("agent.lease_acquired", "agent", a.id, `owner:${ownerId}`, { generation, leaseExpiresAt: expires });
+      return generation;
+    });
+  }
+
+  /** True while an unexpired lease is held. The database is the authority; in-memory state is only a cache. */
+  agentLeaseHeld(agentId: string): boolean {
+    const r = this.one("SELECT owner, expires_at FROM agent_lease WHERE agent_id = ?", agentId);
+    return !!r && r["owner"] !== null && r["expires_at"] !== null && (r["expires_at"] as string) >= this.nowIso();
+  }
+
+  getAgentLeaseExpiry(agentId: string): string | null {
+    return (this.one("SELECT expires_at FROM agent_lease WHERE agent_id = ? AND owner IS NOT NULL", agentId)?.["expires_at"] as string | undefined) ?? null;
+  }
+
+  renewAgentLease(agentId: string, ownerId: string, generation: number, leaseMs: number): void {
+    this.assertAgentLease(agentId, generation, { action: "renewAgentLease" });
+    const expires = new Date(this.clock.now().getTime() + leaseMs).toISOString();
+    const changed = this.run("UPDATE agent_lease SET expires_at = ? WHERE agent_id = ? AND owner = ? AND generation = ?", expires, agentId, ownerId, generation);
+    if (changed === 0) throw new LeaseConflictError(`The lease of ${agentId} is not held by ${ownerId}.`, { agentId, ownerId });
+  }
+
+  /** Releases the lease only when `generation` is still the current one: a stale run never frees someone else's lease. */
+  releaseAgentLease(agentId: string, generation: number): boolean {
+    return this.run("UPDATE agent_lease SET owner = NULL, expires_at = NULL WHERE agent_id = ? AND generation = ? AND owner IS NOT NULL", agentId, generation) > 0;
+  }
+
+  /** Recovery: whatever run held the lease is gone. Bumps the generation so it can never write again, then frees it. */
+  fenceAgentLease(agentId: string, reason: string): boolean {
+    return tx(this.db, () => {
+      const changed = this.run("UPDATE agent_lease SET generation = generation + 1, owner = NULL, expires_at = NULL WHERE agent_id = ? AND owner IS NOT NULL", agentId);
+      if (changed > 0) this.appendEvent("agent.lease_fenced", "agent", agentId, "system", { reason });
+      return changed > 0;
+    });
+  }
+
+  /** Agents whose lease is held (expired or not). */
+  listHeldAgentLeases(): Array<{ agentId: string; generation: number; owner: string; expiresAt: string }> {
+    return this.all("SELECT agent_id, generation, owner, expires_at FROM agent_lease WHERE owner IS NOT NULL").map((r) => ({
+      agentId: r["agent_id"] as string,
+      generation: r["generation"] as number,
+      owner: r["owner"] as string,
+      expiresAt: (r["expires_at"] as string | null) ?? "",
+    }));
+  }
+
+  /** Throws StaleGenerationError (and records run.fenced) unless `generation` is the agent's live lease generation. */
+  assertAgentLease(agentId: string, generation: number, context: Record<string, unknown> = {}): void {
+    const r = this.one("SELECT generation, owner FROM agent_lease WHERE agent_id = ?", agentId);
+    const current = (r?.["generation"] as number | undefined) ?? 0;
+    if (r && r["owner"] !== null && current === generation) return;
+    tx(this.db, () => {
+      this.appendEvent("run.fenced", "agent", agentId, "system", { givenLeaseGeneration: generation, currentLeaseGeneration: current, released: !r || r["owner"] === null, ...context });
+    });
+    throw new StaleGenerationError(agentId, generation, current);
+  }
+
+  /** The same fence for a run by id (tool calls). Runs from before agent leases are not fenced. */
+  assertRunLease(runId: string, context: Record<string, unknown> = {}): void {
+    const run = this.getRun(runId);
+    if (run.leaseGeneration !== null) this.assertAgentLease(run.agentId, run.leaseGeneration, { runId, ...context });
+  }
+
   // ------------------------------------------------------------ runs
 
   private runFromRow(r: Row): Run {
@@ -669,6 +758,7 @@ export class Store {
       finalText: (r["final_text"] as string | null) ?? null,
       usage: r["usage"] ? JSON.parse(r["usage"] as string) : null,
       retryAfter: (r["retry_after"] as string | null) ?? null,
+      leaseGeneration: (r["lease_generation"] as number | null) ?? null,
       createdAt: r["created_at"] as string,
     };
   }
@@ -688,6 +778,8 @@ export class Store {
     taskId?: string;
     agentId: string;
     generation: number;
+    /** The agent lease generation this run holds (from acquireAgentLease). Every later write of the run is fenced by it. */
+    leaseGeneration?: number;
     kind: RunKind;
     engine: EngineId;
     model?: string;
@@ -700,13 +792,14 @@ export class Store {
       const id = newId("run");
       const taskId = input.taskId ? this.getTask(input.taskId).id : null;
       this.run(
-        `INSERT INTO run (id, project_id, task_id, agent_id, generation, kind, state, engine, model, cwd, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO run (id, project_id, task_id, agent_id, generation, lease_generation, kind, state, engine, model, cwd, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         id,
         this.projectId,
         taskId,
         input.agentId,
         input.generation,
+        input.leaseGeneration ?? null,
         input.kind,
         input.state ?? "starting",
         input.engine,
@@ -726,6 +819,7 @@ export class Store {
       });
       throw new StaleGenerationError(run.taskId ?? run.id, generation, run.generation);
     }
+    if (run.leaseGeneration !== null) this.assertAgentLease(run.agentId, run.leaseGeneration, { runId: run.id });
     if (run.taskId) this.assertCurrentGeneration(run.taskId, generation, { runId: run.id });
   }
 

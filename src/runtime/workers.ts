@@ -15,7 +15,7 @@ import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution 
 import { buildEngineHandoff, buildWorkerPrompt, formatMessage, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
 import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
-import { type ActiveRun, adapterFor, launchRun } from "./runs.js";
+import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
 
 export const taskPort = (shortId: string): number => 41000 + Number(shortId.slice(2)) * 10;
 
@@ -76,7 +76,7 @@ export function dispatchWork(rt: ProjectRuntime): void {
     if (rt.countWorkAndReview() >= limit) return;
     if (t.blockReason !== null || t.assigneeAgentId === null) continue;
     const agent = store.getAgent(t.assigneeAgentId);
-    if (agent.retiredAt || agent.lifecycle === "paused" || rt.activeForAgent(agent.id)) continue;
+    if (agent.retiredAt || agent.lifecycle === "paused" || rt.agentBusy(agent.id)) continue;
     const res = resolveFor(rt, agent, "work");
     if (res.wait) continue;
     if (!localEditsApproved(rt, t, agent)) continue;
@@ -128,12 +128,21 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
   const agent = asRunning(primary, res); // the agent as it runs now: the engine and model actually chosen
   adapterFor(rt, agent); // fail before claiming when the engine is unusable
   const ws = rt.workspace.ensureTaskWorkspace(task);
-  const generation = store.claimTask(task.id, rt.ownerId, LEASE_MS);
+  const leaseGeneration = acquireLease(rt, agent); // one live run per agent: throws LeaseConflictError when it already has one
+  let generation: number;
+  try {
+    generation = store.claimTask(task.id, rt.ownerId, LEASE_MS);
+  } catch (err) {
+    releaseLease(rt, agent.id, leaseGeneration);
+    throw err;
+  }
+  let runId: string | null = null;
   try {
     store.setTaskWorkspace(task.id, generation, ws);
     const current = store.getTask(task.id);
     noteEngineChoice(rt, primary, "work", res);
-    const run = store.createRun({ taskId: task.id, agentId: agent.id, generation, kind: "work", engine: agent.engine, ...(agent.model ? { model: agent.model } : {}), cwd: ws.worktreePath });
+    const run = store.createRun({ taskId: task.id, agentId: agent.id, generation, leaseGeneration, kind: "work", engine: agent.engine, ...(agent.model ? { model: agent.model } : {}), cwd: ws.worktreePath });
+    runId = run.id;
 
     const doc = store.currentApprovedDoc();
     const requirements = (doc?.requirements ?? []).filter((r) => current.requirementKeys.includes(r.key));
@@ -215,6 +224,7 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
   } catch (err) {
     // The claim succeeded but the run could not be prepared: give the task back instead of waiting for the lease to expire.
     if (store.getTask(task.id).state === "working") store.transitionTask(task.id, "ready", { actor: { kind: "system" } });
+    if (runId === null || !rt.active.has(runId)) releaseLease(rt, agent.id, leaseGeneration); // a launched run releases its own
     throw err;
   }
 }

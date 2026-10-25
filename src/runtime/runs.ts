@@ -10,7 +10,7 @@ import type { Agent, Run, RunKind, Task } from "../core/store.js";
 import type { McpServerSpec, NormalizedEvent, OwnedProcess, PermissionProfile, ProviderAdapter, RunHandle, RunOutcome } from "../core/types.js";
 import { billingProblem, billingUnconfirmed } from "./billing.js";
 import { BillingBlockedError, ProviderUnavailableError } from "./errors.js";
-import type { ProjectRuntime } from "./project-runtime.js";
+import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import type { TokenScope } from "./tokens.js";
 
 export type StopKind = "stop_run" | "cancel" | "reassign" | "terminate" | "shutdown";
@@ -67,6 +67,20 @@ export function adapterFor(rt: ProjectRuntime, agent: Agent): ProviderAdapter {
     throw new BillingBlockedError(billing, { engine: agent.engine, pending });
   }
   return a;
+}
+
+/**
+ * Takes the agent's execution lease: the one thing that keeps two runs (work, review, CTO turn) of the same
+ * agent from overlapping. Call it before creating the run and pass the result as `leaseGeneration`.
+ * Throws LeaseConflictError while the agent already holds a live lease. Release it with releaseLease when
+ * the run could not be launched; a launched run releases its own lease when it finishes.
+ */
+export function acquireLease(rt: ProjectRuntime, agent: Agent): number {
+  return rt.store.acquireAgentLease(agent.id, rt.ownerId, LEASE_MS);
+}
+
+export function releaseLease(rt: ProjectRuntime, agentId: string, leaseGeneration: number): void {
+  if (!rt.closed) rt.store.releaseAgentLease(agentId, leaseGeneration);
 }
 
 function syntheticFailure(spec: RunSpec, error: string, detail: string): RunOutcome {
@@ -127,6 +141,9 @@ export function launchRun(rt: ProjectRuntime, spec: RunSpec): ActiveRun {
       if (!rt.closed) rt.reportInternalError(`${run.kind} run ${run.id} outcome`, err);
     } finally {
       rt.active.delete(run.id);
+      // Last: the agent may start its next run only after the outcome (including verification) is handled.
+      // A fenced run's generation is no longer current, so this never frees someone else's lease.
+      if (run.leaseGeneration !== null) releaseLease(rt, agent.id, run.leaseGeneration);
       resolveFinished();
       if (!rt.closed) {
         rt.publish();

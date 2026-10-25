@@ -50,7 +50,13 @@ export async function reconcileOnOpen(rt: ProjectRuntime): Promise<void> {
       }
     }
     if (run.kind === "cto") store.requeueDeliveries(run.agentId, run.id);
+    store.fenceAgentLease(run.agentId, `recovery: run ${run.id} (${run.kind}) was interrupted by a restart`);
     store.releaseAgent(run.agentId);
+  }
+  // A lease can outlive its run (a crash between taking the lease and creating the run). Nothing that ran before
+  // this process opened the project is still ours, so every lease left over is fenced and the agents may run again.
+  for (const held of store.listHeldAgentLeases()) {
+    if (store.fenceAgentLease(held.agentId, "recovery: the service that held this lease is gone")) store.releaseAgent(held.agentId);
   }
   if (store.getProject().isGit) {
     for (const t of store.listTasks()) {
@@ -65,6 +71,32 @@ export async function reconcileOnOpen(rt: ProjectRuntime): Promise<void> {
 export function reconcileLeases(rt: ProjectRuntime): void {
   const { store } = rt;
   const now = rt.clock.now().getTime();
+  // The agent lease of every live run (work, review, CTO) is kept alive; one that cannot be renewed was taken
+  // over or fenced, and its run stops without recording anything.
+  for (const a of rt.active.values()) {
+    if (a.run.leaseGeneration === null) continue;
+    const lease = store.getAgentLeaseExpiry(a.agent.id);
+    const left = lease === null ? 0 : Date.parse(lease) - now;
+    if (left >= RENEW_WHEN_LEFT_MS) continue;
+    try {
+      store.renewAgentLease(a.agent.id, rt.ownerId, a.run.leaseGeneration, LEASE_MS);
+    } catch (err) {
+      if (err instanceof LeaseConflictError || err instanceof StaleGenerationError) {
+        void rt.stopActive(a, "reassign", "The agent lease was lost");
+      } else {
+        throw err;
+      }
+    }
+  }
+  // An expired lease with no live run behind it: the run is gone, so the lease is fenced and the agent may run again.
+  for (const held of store.listHeldAgentLeases()) {
+    if (Date.parse(held.expiresAt) >= now) continue;
+    if (rt.activeForAgent(held.agentId)) continue;
+    for (const run of store.listRuns({ states: ["starting", "running"] })) {
+      if (run.agentId === held.agentId && !rt.active.has(run.id)) store.abandonRun(run.id, "The service lost track of this run");
+    }
+    if (store.fenceAgentLease(held.agentId, "the lease expired with no live run")) store.releaseAgent(held.agentId);
+  }
   for (const a of rt.active.values()) {
     if (a.kind !== "work" || a.taskId === null) continue;
     const t = store.getTask(a.taskId);

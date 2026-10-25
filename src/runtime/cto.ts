@@ -2,15 +2,16 @@
 // turn is a run of kind "cto" with the coordinator permission profile in the
 // project root. The CTO acts only through its MCP tools; its final text is
 // posted where the humans it answers wrote (see replyTargets), else to the cto channel.
-import type { Message, MessageChannel } from "../core/store.js";
+import type { Message, MessageChannel, Run } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { unusableReason } from "./health.js";
 import { buildCtoPrompt, buildEngineSwitchNotice, buildResetSummary, buildStateDigest, ctoSystemPrompt, formatMessage, readInstructionFiles } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { billingProblem } from "./billing.js";
+import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { ProviderUnavailableError } from "./errors.js";
-import { type ActiveRun, adapterFor, launchRun } from "./runs.js";
+import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
 import { looksLikeSessionLoss, nameOfSender } from "./workers.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -46,7 +47,7 @@ export class CtoDriver {
   constructor(private readonly rt: ProjectRuntime) {}
 
   busy(): boolean {
-    return [...this.rt.active.values()].some((a) => a.kind === "cto");
+    return this.rt.agentBusy(this.rt.ctoAgent().id) || [...this.rt.active.values()].some((a) => a.kind === "cto");
   }
 
   lastError(): string | null {
@@ -106,7 +107,11 @@ export class CtoDriver {
       }
       return;
     }
-    this.startTurn(pending);
+    try {
+      this.startTurn(pending);
+    } catch (err) {
+      if (!(err instanceof LeaseConflictError)) throw err; // the CTO is running something else: look again when it finishes
+    }
   }
 
   private fail(message: string, key: string): void {
@@ -125,8 +130,16 @@ export class CtoDriver {
     noteEngineChoice(rt, primary, "cto", res);
     const cto = asRunning(primary, res); // the CTO as it runs now: the engine and model actually chosen
     const adapter = adapterFor(rt, cto);
+    const leaseGeneration = acquireLease(rt, cto); // one live run per agent; a second turn is refused while this one holds it
     store.recordEvent("cto.turn_started", "agent", cto.id, { kind: "system" }, { messages: batch.length });
-    const run = store.createRun({ agentId: cto.id, generation: 0, kind: "cto", engine: cto.engine, ...(cto.model ? { model: cto.model } : {}), cwd: rt.root });
+    let run: Run;
+    try {
+      // A CTO turn belongs to no task, so the agent lease generation is its only fence.
+      run = store.createRun({ agentId: cto.id, generation: leaseGeneration, leaseGeneration, kind: "cto", engine: cto.engine, ...(cto.model ? { model: cto.model } : {}), cwd: rt.root });
+    } catch (err) {
+      releaseLease(rt, cto.id, leaseGeneration);
+      throw err;
+    }
     this.targets.set(run.id, replyTargets(batch));
     if (batch.length > 0) store.markDelivered(batch.map((m) => m.id), cto.id, run.id);
 
@@ -188,7 +201,16 @@ export class CtoDriver {
   private async handleOutcome(a: ActiveRun, outcome: RunOutcome): Promise<void> {
     const rt = this.rt;
     const { store } = rt;
-    store.finishRun(a.run.id, a.generation, outcome);
+    try {
+      store.finishRun(a.run.id, a.generation, outcome);
+    } catch (err) {
+      if (!(err instanceof StaleGenerationError)) throw err;
+      // The agent's lease moved on (lost or fenced): this turn's result is discarded and its messages are offered again.
+      this.targets.delete(a.run.id);
+      store.abandonRun(a.run.id, "This turn lost the agent's lease; its result was discarded");
+      store.requeueDeliveries(a.agent.id, a.run.id);
+      return;
+    }
     const targets = this.targets.get(a.run.id) ?? [{ channel: "cto" as const }];
     this.targets.delete(a.run.id);
     switch (outcome.state) {
