@@ -22,8 +22,8 @@ export interface Binding {
   /** Sentence for the help modal. */
   description: string;
   scope: KeyScope;
-  /** Shown in the hint line when there is room. "needs", "toast" and "prd" only show when there is something to act on. */
-  footer?: true | "needs" | "toast" | "prd" | "outcome";
+  /** Shown in the hint line when there is room. "low" shows only after the scope's other hints. "needs", "toast" and "prd" only show when there is something to act on. */
+  footer?: true | "low" | "needs" | "toast" | "prd" | "outcome";
 }
 
 /** Titles for the help modal, in display order. */
@@ -139,7 +139,7 @@ export const BINDINGS: Binding[] = [
 
   { id: "agent.type", keys: ["enter", "i"], label: "enter", action: "message", description: "go to the message box: it sends a direct message to this agent", scope: "agent", footer: true },
   { id: "agent.edit", keys: ["e"], label: "e", action: "edit", description: "edit the agent's engine, model and permission", scope: "agent", footer: true },
-  { id: "agent.memory", keys: ["m"], label: "m", action: "memory", description: "show the agent's memory notes", scope: "agent", footer: true },
+  { id: "agent.memory", keys: ["m"], label: "m", action: "memory", description: "show the agent's memory notes", scope: "agent", footer: "low" },
   { id: "agent.memory.scroll", keys: ["up", "down", "pgup", "pgdn"], label: "↑↓", action: "scroll", description: "scroll the memory notes", scope: "agent.memory", footer: true },
   { id: "agent.memory.clear", keys: ["c"], label: "c", action: "clear", description: "clear the agent's memory (asks first)", scope: "agent.memory", footer: true },
   { id: "agent.memory.back", keys: ["esc"], label: "esc", action: "back", description: "back to the agent", scope: "agent.memory", footer: true },
@@ -291,7 +291,7 @@ function hint(b: Binding): string {
 /** The hint bar for a scope, as separate hints: the scope's own keys first, then what is waiting, then commands. At most MAX_HINTS, help always last. */
 export function footerEntries(scope: KeyScope, width: number, flags: FooterFlags): string[] {
   const sep = ` ${sym().dot} `;
-  const shows = (b: Binding) => b.footer === true || (b.footer === "needs" && flags.needs > 0) || (b.footer === "toast" && flags.toast) || (b.footer === "prd" && flags.prd !== false);
+  const shows = (b: Binding) => b.footer === true || b.footer === "low" || (b.footer === "needs" && flags.needs > 0) || (b.footer === "toast" && flags.toast) || (b.footer === "prd" && flags.prd !== false);
   const own = scope === "global" ? [] : bindingsFor(scope).filter(shows);
   const total = (parts: string[]) => [...parts.join(sep)].length;
   if (MODAL_SCOPES.has(scope)) {
@@ -305,7 +305,7 @@ export function footerEntries(scope: KeyScope, width: number, flags: FooterFlags
   // Display order, and priority when space runs out: the scope's keys, then what is waiting, then the notice, then commands.
   const items: Array<{ text: string; prio: number; order: number }> = [];
   let order = 0;
-  for (const b of own) items.push({ text: hint(b), prio: 0, order: order++ });
+  for (const b of own) items.push({ text: hint(b), prio: b.footer === "low" ? 3 : 0, order: order++ });
   if (flags.needs > 0) items.push({ text: `${hint(needs)} (${flags.needs})`, prio: 1, order: order++ });
   if (flags.toast) items.push({ text: hint(toast), prio: 1, order: order++ });
   if (flags.outcome && !flags.typing) items.push({ text: hint(BINDINGS.find((b) => b.id === "outcome.open")!), prio: 1, order: order++ });
