@@ -1,8 +1,9 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hasProxyVar, isProxyUrlName, NETWORK_ENV_NAMES, NODE_USE_ENV_PROXY, proxySecrets, readNetworkConfig, resolveNetwork, type NetworkConfig } from "../core/network.js";
-import { envGet, isWindows, pathFor, WINDOWS_ENV_NAMES, type Platform } from "../core/platform.js";
+import { envGet, isLinux, isWindows, linuxStartTime, pathFor, WINDOWS_ENV_NAMES, type Platform } from "../core/platform.js";
 import type { OwnedProcess } from "../core/types.js";
 import { EnvPolicyError, SpawnError, TerminationError } from "./errors.js";
 import { assertWindowsCommandLineFits, resolveLaunch } from "./launch.js";
@@ -215,8 +216,20 @@ export interface StartTimeRead {
   error: string;
 }
 
-export async function readStartTime(pid: number, deps: { platform?: Platform; run?: RunCommand } = {}): Promise<StartTimeRead> {
-  const cmd = startTimeCommand(pid, deps.platform ?? process.platform);
+export async function readStartTime(pid: number, deps: { platform?: Platform; run?: RunCommand; /** test seam: reads a file of /proc */ readProc?: (file: string) => Promise<string> } = {}): Promise<StartTimeRead> {
+  const platform = deps.platform ?? process.platform;
+  if (isLinux(platform)) {
+    // /proc needs no helper process and does not depend on the procps flavor; `ps` below is only the fallback.
+    if (!Number.isInteger(pid) || pid <= 0) throw new SpawnError(`Not a process id: ${String(pid)}`, { pid });
+    const read = deps.readProc ?? ((file: string) => readFile(file, "utf8"));
+    try {
+      const time = linuxStartTime(await read(`/proc/${pid}/stat`), await read("/proc/stat"));
+      if (time !== "") return { time, error: "" };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { time: "", error: "" }; // the pid is gone
+    }
+  }
+  const cmd = startTimeCommand(pid, platform);
   try {
     const out = await (deps.run ?? runCommand)(cmd);
     return { time: out.stdout.trim(), error: out.stdout.trim() === "" ? out.stderr.trim() : "" };

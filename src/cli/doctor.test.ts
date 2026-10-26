@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { EngineId, ProviderCapabilities, ProviderHealth } from "../core/types.js";
-import { checkNetwork, doctorExitCode, renderDoctor, renderDoctorJson, shouldColor, type DoctorInput, type EngineInput, type NetworkInfo, type RenderOptions } from "./doctor.js";
+import { checkNetwork, doctorExitCode, renderDoctor, renderDoctorJson, isHeadlessLinux, shouldColor, type DoctorInput, type EngineInput, type NetworkInfo, type RenderOptions } from "./doctor.js";
 
 const SGR = /\x1b\[[0-9;]*m/;
 const plain: RenderOptions = { color: false, ascii: false, verbose: false, width: 100 };
@@ -294,4 +294,25 @@ test("checkNetwork reads the environment and checks each engine host through the
   assert.ok(calls.every((c) => c.proxy === "http://u:" + "pw123456@proxy.example.invalid:8080"), "the check itself uses the real login");
   assert.equal(info.settings.https?.value, "http://***:***@proxy.example.invalid:8080");
   assert.ok(!JSON.stringify(info).includes("pw123456"));
+});
+
+test("headless Linux adds a login line for each installed engine that is not signed in", () => {
+  const engines: EngineInput[] = [
+    { health: health("claude", { authenticated: false, authMethod: null }), capabilities: caps() },
+    { health: health("opencode", { authenticated: false, authMethod: null }), capabilities: caps() },
+    { health: health("codex", { binaryPath: null, version: null }), capabilities: caps() },
+    { health: health("copilot"), capabilities: caps() },
+  ];
+  const out = renderDoctor(input(engines, { headless: true }), plain);
+  assert.match(out, /No display here: run claude; it prints a sign-in link/);
+  assert.match(out, /No display here: see the engine's docs for headless login/);
+  assert.equal(out.match(/No display here/g)?.length, 2);
+  assert.doesNotMatch(renderDoctor(input(engines), plain), /No display here/);
+});
+
+test("headless means Linux with neither DISPLAY nor WAYLAND_DISPLAY", () => {
+  assert.equal(isHeadlessLinux("linux", {}), true);
+  assert.equal(isHeadlessLinux("linux", { DISPLAY: ":0" }), false);
+  assert.equal(isHeadlessLinux("linux", { WAYLAND_DISPLAY: "wayland-0" }), false);
+  assert.equal(isHeadlessLinux("darwin", {}), false);
 });

@@ -63,3 +63,38 @@ export function splitHomeDrive(home: string): { drive: string; rest: string } {
 /** Windows file names ignore case; everything else compares exactly. Both paths should already be canonical (see realpathSync.native). */
 export const samePathString = (a: string, b: string, platform: Platform = process.platform): boolean =>
   isWindows(platform) ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+export const isLinux = (platform: Platform = process.platform): boolean => platform === "linux";
+
+/**
+ * Default data folder of a POSIX platform: `~/Library/Application Support/<name>` on macOS, and on Linux
+ * `$XDG_DATA_HOME/<name>` or `~/.local/share/<name>` (an empty XDG_DATA_HOME counts as unset, per the XDG spec).
+ */
+export function posixDataDir(platform: Platform, env: NodeJS.ProcessEnv | Record<string, string | undefined>, homedir: string, name: string): string {
+  if (platform === "darwin") return path.posix.join(homedir, "Library", "Application Support", name);
+  const xdg = env["XDG_DATA_HOME"];
+  return path.posix.join(xdg && xdg.length > 0 ? xdg : path.posix.join(homedir, ".local", "share"), name);
+}
+
+/**
+ * Kernel clock ticks per second used by /proc/<pid>/stat. It is 100 on every mainstream Linux build
+ * (`getconf CLK_TCK`); spawning getconf just to confirm that is not worth it. The value only has to be
+ * the same each time, because the start time is compared with itself, never with another clock.
+ */
+export const LINUX_CLK_TCK = 100;
+
+/**
+ * Process start time on Linux, as an ISO 8601 UTC string, from the text of `/proc/<pid>/stat` and `/proc/stat`.
+ * Field 22 of the stat line is the start in clock ticks since boot; boot time is `btime` (seconds since the epoch)
+ * in /proc/stat. Returns "" when either text cannot be parsed. The process name (field 2) may contain spaces and
+ * parentheses, so the fields are counted from the last `)`.
+ */
+export function linuxStartTime(procPidStat: string, procStat: string, hz: number = LINUX_CLK_TCK): string {
+  const close = procPidStat.lastIndexOf(")");
+  if (close < 0) return "";
+  const rest = procPidStat.slice(close + 1).trim().split(/\s+/); // rest[0] is field 3 (the state)
+  const field22 = rest[19];
+  const btime = /^btime\s+(\d+)/m.exec(procStat)?.[1];
+  if (field22 === undefined || btime === undefined || !/^\d+$/.test(field22)) return "";
+  return new Date(Math.round((Number(btime) + Number(field22) / hz) * 1000)).toISOString();
+}

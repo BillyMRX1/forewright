@@ -6,7 +6,7 @@ Agents are the coding command line tools you already use (Claude Code, Codex, An
 
 ## Requirements
 
-- macOS and native Windows are supported. Linux is untested.
+- macOS, Linux (including a headless server, see "Running on a Linux server") and native Windows are supported. Linux support is new: the logic is covered by tests with the platform injected, and has not yet been run end to end on a real server.
 - Node.js 24 or newer.
 - At least one of Claude Code, the Codex CLI, Antigravity (`agy`), OpenCode or the GitHub Copilot CLI installed and logged in with your own account. `forewright doctor` shows which ones are ready.
 - `git` (code tasks need a git repository; plain folders support planning only).
@@ -83,11 +83,23 @@ The service (`forewright serve`) owns execution and persistence for all your pro
 
 - Foreground: `forewright serve` in a terminal, stop with `Ctrl+C`.
 - On demand: running `forewright` starts it in the background when nothing is listening. Log: `daemon.log` in the data directory.
-- At login (optional, macOS only, launchd): `forewright service install`, `forewright service status`, `forewright service uninstall`. The service file is `~/Library/LaunchAgents/local.forewright.daemon.plist`. It restarts the service if it crashes. On Windows these commands report that they only work on macOS; there `forewright` starts the service on demand, and `forewright serve` can run in a terminal.
+- At login (optional, macOS launchd or Linux systemd): `forewright service install`, `forewright service status`, `forewright service uninstall`. The service file is `~/Library/LaunchAgents/local.forewright.daemon.plist` on macOS and `~/.config/systemd/user/forewright.service` on Linux. It restarts the service if it crashes. On Windows these commands report that they only work on macOS and Linux; there `forewright` starts the service on demand, and `forewright serve` can run in a terminal.
+
+## Running on a Linux server
+
+Forewright runs on a Linux machine you reach over SSH, for one user. The terminal UI works over SSH; there is no web or remote GUI yet (that comes later, see issue #44).
+
+1. Install Node.js 24 or newer and `git`, then build and link Forewright as in "Install".
+2. Install at least one engine CLI and sign in with your own account. Without a display, `forewright doctor` prints a hint under each installed engine that is not signed in (for Claude Code and Codex it names the browser-less login; for the others it points to the engine's docs). Run `forewright doctor` again until an engine shows as ready.
+3. Start the service at login: `forewright service install`. This writes a systemd user unit (`~/.config/systemd/user/forewright.service`, restart on failure) and runs `systemctl --user enable --now` on it. `forewright service status` and `forewright service uninstall` do what they say. This needs a systemd user session (a normal SSH login has one).
+4. A user service stops when you log out. To keep it running after you disconnect, and start it at boot, run this once yourself (Forewright never runs it for you): `loginctl enable-linger $USER`.
+5. Use it: `ssh` in, `cd` into a project, run `forewright`. Closing the SSH session never stops the agents, because the service owns them (with linger on).
+
+State lives in `$XDG_DATA_HOME/forewright`, or `~/.local/share/forewright` when that is unset (override with `FOREWRIGHT_HOME`). The service log is `daemon.log` there.
 
 ## Where data lives
 
-The data directory is `~/Library/Application Support/forewright` on macOS and `%LOCALAPPDATA%\Forewright` on Windows (override with `FOREWRIGHT_HOME`).
+The data directory is `~/Library/Application Support/forewright` on macOS, `$XDG_DATA_HOME/forewright` (default `~/.local/share/forewright`) on Linux and `%LOCALAPPDATA%\Forewright` on Windows (override with `FOREWRIGHT_HOME`).
 
 ```
 registry.json               known projects and last seen paths

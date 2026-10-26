@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { childEnv } from "../providers/process.js";
-import { envGet, isPipePath, samePathString, splitHomeDrive, windowsPipeName, WINDOWS_ENV_NAMES } from "./platform.js";
+import { socketPathFor } from "./paths.js";
+import { envGet, isPipePath, linuxStartTime, posixDataDir, samePathString, splitHomeDrive, windowsPipeName, WINDOWS_ENV_NAMES } from "./platform.js";
 
 test("environment names are case-insensitive on Windows only", () => {
   assert.equal(envGet({ Path: "C:\\bin" }, "PATH", "win32"), "C:\\bin");
@@ -66,4 +67,36 @@ test("path strings compare case-insensitively on Windows only", () => {
   assert.equal(samePathString("C:\\Users\\Me\\Repo", "c:\\users\\me\\repo", "win32"), true);
   assert.equal(samePathString("/a/Repo", "/a/repo", "linux"), false);
   assert.equal(samePathString("/a/repo", "/a/repo", "darwin"), true);
+});
+
+// A real /proc/<pid>/stat line: the name (field 2) holds spaces and parentheses, and field 22 is 1234567.
+const SAMPLE_STAT = "4242 (my (odd) proc) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 1234567 123456789 2000 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 2 0 0 0 0 0";
+const SAMPLE_PROC_STAT = "cpu  1 2 3\ncpu0 1 2 3\nintr 5\nbtime 1700000000\nprocesses 99\n";
+
+test("Linux data folder follows XDG_DATA_HOME, then ~/.local/share", () => {
+  assert.equal(posixDataDir("linux", {}, "/home/b", "forewright"), "/home/b/.local/share/forewright");
+  assert.equal(posixDataDir("linux", { XDG_DATA_HOME: "" }, "/home/b", "forewright"), "/home/b/.local/share/forewright");
+  assert.equal(posixDataDir("linux", { XDG_DATA_HOME: "/data/xdg" }, "/home/b", "forewright"), "/data/xdg/forewright");
+  assert.equal(posixDataDir("darwin", { XDG_DATA_HOME: "/data/xdg" }, "/Users/b", "forewright"), "/Users/b/Library/Application Support/forewright");
+});
+
+test("Linux unix socket sits in the data folder, and a too-deep home gets the short fallback", { skip: process.platform === "win32" ? "needs a POSIX /tmp" : false }, () => {
+  assert.equal(socketPathFor("/home/b/.local/share/forewright", "linux"), "/home/b/.local/share/forewright/forewright.sock");
+  const deep = `/home/b/${"x".repeat(120)}`;
+  const sock = socketPathFor(deep, "linux");
+  assert.match(sock, /^\/tmp\/forewright-\d+\/[0-9a-f]{16}\.sock$/);
+  assert.equal(sock, socketPathFor(deep, "linux"));
+  assert.equal(isPipePath(sock), false);
+});
+
+test("Linux start time is read from field 22 of /proc/<pid>/stat plus the boot time", () => {
+  // 1234567 ticks at 100 per second = 12345.67 s after btime 1700000000.
+  assert.equal(linuxStartTime(SAMPLE_STAT, SAMPLE_PROC_STAT), new Date(1700012345670).toISOString());
+  assert.equal(linuxStartTime(SAMPLE_STAT, SAMPLE_PROC_STAT, 1000), new Date(1700001234567).toISOString());
+});
+
+test("unparseable /proc text gives an empty start time", () => {
+  assert.equal(linuxStartTime("garbage", SAMPLE_PROC_STAT), "");
+  assert.equal(linuxStartTime(SAMPLE_STAT, "cpu 1 2 3\n"), "");
+  assert.equal(linuxStartTime("1 (x) S 1 2", SAMPLE_PROC_STAT), "");
 });

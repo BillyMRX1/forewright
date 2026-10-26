@@ -21,7 +21,7 @@ Usage:
   forewright doctor                check the service, data folder and every engine (--verbose, --json)
   forewright report                what your agents used: tokens and estimated cost (--days N, --json)
   forewright config              show or set the company proxy and certificate file (forewright config --help)
-  forewright service install       start the service at login (macOS launchd)
+  forewright service install       start the service at login (macOS launchd, Linux systemd user unit)
   forewright service uninstall     remove the login service
   forewright service status        show the login service state
   forewright mcp-bridge            internal: tool bridge used by agent runs

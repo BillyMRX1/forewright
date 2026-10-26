@@ -95,6 +95,8 @@ export interface DoctorInput {
   network?: NetworkInfo;
   /** Windows only: whether symbolic links are allowed without admin rights. Left out on other platforms. */
   developerMode?: DeveloperMode;
+  /** Linux with no display: engines that are not signed in get a line on how to log in without a browser here. */
+  headless?: boolean;
   /** The last week of usage; only the --json output shows it. */
   usage?: UsageSummary;
   /** How the last week's finished tasks turned out; only the --json output shows it. */
@@ -163,6 +165,25 @@ const DISPLAY_NAME: Record<EngineId, string> = {
   fake: "Test double",
 };
 const BINARY: Record<EngineId, string> = { claude: "claude", codex: "codex", antigravity: "agy", opencode: "opencode", copilot: "copilot", fake: "fake" };
+
+/**
+ * What to do on a Linux machine with no display (a server over SSH) when an engine is not signed in. Only what
+ * each CLI is known to support is spelled out; for the rest the engine's own docs are the source of truth.
+ */
+export function headlessLoginHint(id: EngineId): string {
+  switch (id) {
+    case "claude":
+      return "run claude; it prints a sign-in link to open in a browser on another machine, then paste the code back";
+    case "codex":
+      return "run codex login --device-auth, then open the link it prints on another machine";
+    default:
+      return "see the engine's docs for headless login";
+  }
+}
+
+/** True on Linux when neither an X11 nor a Wayland display is set, so a login that opens a browser cannot work here. */
+export const isHeadlessLinux = (platform: NodeJS.Platform, env: NodeJS.ProcessEnv): boolean =>
+  platform === "linux" && !(env["DISPLAY"] ?? "") && !(env["WAYLAND_DISPLAY"] ?? "");
 
 export const engineName = (id: EngineId): string => DISPLAY_NAME[id] ?? id;
 
@@ -357,6 +378,7 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
       else if (h.authenticated === false) fix = `run ${st.bold(BINARY[h.engine])} and sign in`;
       else fix = h.problems.join("; ");
       out.push(`${fixIndent}${st.red(arrow)} ${fix}`);
+      if (input.headless && h.binaryPath !== null && h.authenticated === false) out.push(`${fixIndent}  ${st.dim(`No display here: ${headlessLoginHint(h.engine)}`)}`);
     }
     if (opts.verbose) {
       const sub = " ".repeat(indent + gw + 1 + 2);
@@ -638,6 +660,7 @@ export async function runDoctor(args: string[], opts: { includeFake: boolean }):
     homeDir: homedir(),
     network,
     ...(isWindows() ? { developerMode: detectDeveloperMode() } : {}),
+    ...(isHeadlessLinux(process.platform, process.env) ? { headless: true } : {}),
     ...(json ? readUsage(home) : {}),
     ...(json ? readOutcomes(home) : {}),
   };

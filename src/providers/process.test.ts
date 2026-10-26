@@ -329,3 +329,31 @@ test("childEnv reports proxy URLs with a login as secrets (URL, login part and p
   const plainProxy = childEnv({ PATH: "/x", HTTPS_PROXY: "http://proxy.example.invalid:8080" }, {}, { allowApiBilling: false, platform: "linux", network: NONET });
   assert.deepEqual(plainProxy.secrets, []);
 });
+
+test("Linux reads the start time from /proc, not from ps", async () => {
+  const files: Record<string, string> = {
+    "/proc/77/stat": "77 (node) S 1 77 77 0 -1 4194560 1 0 0 0 1 1 0 0 20 0 1 0 500 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0",
+    "/proc/stat": "cpu 1\nbtime 1700000000\n",
+  };
+  let psCalls = 0;
+  const deps = {
+    platform: "linux" as const,
+    readProc: async (f: string) => {
+      const v = files[f];
+      if (v === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      return v;
+    },
+    run: async () => {
+      psCalls++;
+      return { stdout: "", stderr: "" };
+    },
+  };
+  assert.deepEqual(await readStartTime(77, deps), { time: new Date(1700000005000).toISOString(), error: "" });
+  assert.deepEqual(await readStartTime(78, deps), { time: "", error: "" }); // pid gone
+  assert.equal(psCalls, 0);
+});
+
+test("Linux falls back to ps when /proc cannot be parsed", async () => {
+  const r = await readStartTime(5, { platform: "linux", readProc: async () => "nonsense", run: async (cmd) => ({ stdout: `${cmd.bin} ${cmd.args.join(" ")}\n`, stderr: "" }) });
+  assert.equal(r.time, "ps -o lstart= -p 5");
+});

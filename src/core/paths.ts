@@ -3,24 +3,20 @@ import { existsSync, lstatSync, mkdirSync, renameSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import path from "node:path";
 import { ValidationError } from "./errors.js";
-import { isWindows, windowsDataDir, windowsPipeName } from "./platform.js";
+import { isWindows, posixDataDir, windowsDataDir, windowsPipeName } from "./platform.js";
 
 export function forewrightHome(): string {
   const env = process.env["FOREWRIGHT_HOME"];
   if (env) return path.resolve(env);
   if (isWindows(platform())) return windowsDataDir(process.env, homedir());
-  if (platform() === "darwin") return path.join(homedir(), "Library", "Application Support", "forewright");
-  const xdg = process.env["XDG_DATA_HOME"];
-  return path.join(xdg && xdg.length > 0 ? xdg : path.join(homedir(), ".local", "share"), "forewright");
+  return posixDataDir(platform(), process.env, homedir(), "forewright");
 }
 
 /** The pre-rename default data dir, or null when FOREWRIGHT_HOME overrides the location. */
 export function legacyHome(): string | null {
   if (process.env["FOREWRIGHT_HOME"]) return null;
   if (isWindows(platform())) return null; // the old default never existed on Windows
-  if (platform() === "darwin") return path.join(homedir(), "Library", "Application Support", "dept");
-  const xdg = process.env["XDG_DATA_HOME"];
-  return path.join(xdg && xdg.length > 0 ? xdg : path.join(homedir(), ".local", "share"), "dept");
+  return posixDataDir(platform(), process.env, homedir(), "dept");
 }
 
 /**
