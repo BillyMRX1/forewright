@@ -142,7 +142,30 @@ test("a stale lease generation cannot record results, post messages or release t
     assert.equal(store.agentLeaseHeld(cto.id), true);
     assert.equal(store.releaseAgentLease(cto.id, fresh), true);
     await h.rt.stopActive(turn, "stop_run", "test over");
-    assert.equal(store.agentLeaseHeld(cto.id), false);
+    // The fenced turn's messages are offered again, so the scheduler may start a new turn that legitimately holds the
+    // lease. The lease must be free exactly when no CTO turn is live.
+    await waitFor(() => store.agentLeaseHeld(cto.id) === [...h.rt.active.values()].some((a) => a.kind === "cto"), "the lease to match the live CTO turns");
+    for (const a of [...h.rt.active.values()].filter((x) => x.kind === "cto")) await h.rt.stopActive(a, "stop_run", "test over");
+    await waitFor(() => ![...h.rt.active.values()].some((a) => a.kind === "cto") && !store.agentLeaseHeld(cto.id), "the lease to be free once no turn is live");
+  } finally {
+    await h.close();
+  }
+});
+
+test("store: fence, then another owner acquires; releasing with the old generation returns false and the lease stays held", async () => {
+  const h = await startHarness();
+  try {
+    const store = h.rt.store;
+    const wren = hire(h, "Wren");
+    const old = store.acquireAgentLease(wren.id, "owner-a", LEASE_MS);
+    assert.equal(store.fenceAgentLease(wren.id, "test"), true);
+    const fresh = store.acquireAgentLease(wren.id, "owner-b", LEASE_MS);
+    assert.ok(fresh > old);
+    assert.equal(store.releaseAgentLease(wren.id, old), false);
+    assert.equal(store.agentLeaseHeld(wren.id), true);
+    assert.throws(() => store.assertAgentLease(wren.id, old), StaleGenerationError);
+    assert.equal(store.releaseAgentLease(wren.id, fresh), true);
+    assert.equal(store.agentLeaseHeld(wren.id), false);
   } finally {
     await h.close();
   }
