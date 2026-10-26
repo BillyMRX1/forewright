@@ -1,7 +1,7 @@
 // In-memory ClientApi for view tests. Records every call so tests can assert on them.
 
 import type { ClientApi, ConnectionState, Subscription } from "./client.js";
-import type { EngineUse, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
+import type { EngineUse, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
 import type { Agent, Authority, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
@@ -182,6 +182,25 @@ export function baseData() {
   return { tasks, agents, messages, doc, decision, staleDecision, verification, run, providers };
 }
 
+/** A freshly started pack of this size: every document pending. */
+export function fakeKickoff(scale: "small" | "full"): KickoffState {
+  const all: Array<[string, string]> = [
+    ["brief", "Brief"],
+    ["requirements", "Requirements"],
+    ["risks", "Assumptions and risks"],
+    ["architecture", "Architecture"],
+    ["test-strategy", "Test strategy"],
+    ["milestones", "Milestones and dependencies"],
+    ["review-checklist", "Review checklist"],
+  ];
+  const keys = scale === "small" ? all.filter(([k]) => ["brief", "requirements", "test-strategy"].includes(k)) : all;
+  return {
+    pack: { scale, status: "generating", startedBy: "human", createdAt: NOW, updatedAt: NOW },
+    docs: keys.map(([key, title], position) => ({ key, title, position, status: "pending", version: 0, path: `${key}.md`, sha256: null, author: null, updatedAt: NOW, edited: false, missing: false })),
+    dir: "/Users/billy/.local/share/forewright/projects/p1/kickoff",
+  };
+}
+
 export interface FakeCall {
   method: string;
   params: unknown;
@@ -192,6 +211,12 @@ export class FakeClient implements ClientApi {
   readonly drafts = new Map<string, string>();
   readonly data = baseData();
   paused = false;
+  /** Plan-only mode, as state.settings and the runtime report it. Changed by settings.set. */
+  planOnly = false;
+  /** The kickoff pack as state.kickoff returns it (none by default). kickoff.start creates one. */
+  kickoff: KickoffState = { pack: null, docs: [], dir: null };
+  /** Document texts returned by kickoff.doc, keyed by document key. */
+  kickoffTexts: Record<string, string> = {};
   /** Fallback lists returned by state.settings and changed by settings.set. */
   fallback: { cto: FallbackEntry[]; workers: FallbackEntry[] } = { cto: [], workers: [] };
   /** Engines the CTO may hire on (empty = any). Changed by settings.set. */
@@ -235,11 +260,11 @@ export class FakeClient implements ClientApi {
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
 
   settings(): Settings {
-    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup } };
+    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly };
   }
 
   runtime(): RuntimeStatus {
-    return { paused: this.paused, activeRuns: this.noRuns ? [] : [{ runId: this.data.run.id, kind: "work", agentId: "a2", taskId: "t2", startedAt: NOW }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
+    return { paused: this.paused, planOnly: this.planOnly, activeRuns: this.noRuns ? [] : [{ runId: this.data.run.id, kind: "work", agentId: "a2", taskId: "t2", startedAt: NOW }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
   }
 
   callsTo(method: string): FakeCall[] {
@@ -337,6 +362,16 @@ export class FakeClient implements ClientApi {
               workers: this.fallback.workers.map((e) => ({ engine: e.engine, model: e.model ?? null, problem: this.fallbackProblems[e.engine] ?? null })),
             },
           };
+        case "state.kickoff":
+          return this.kickoff;
+        case "kickoff.doc": {
+          const text = this.kickoffTexts[String(p["key"])];
+          if (text === undefined) throw new Error(`A file for the kickoff document ${String(p["key"])} was not found.`);
+          return { key: p["key"], text };
+        }
+        case "kickoff.start":
+          if (!this.kickoff.pack) this.kickoff = fakeKickoff(p["scale"] === "small" ? "small" : "full");
+          return this.kickoff;
         case "runs.log":
           return { lines: this.logLines, path: "/tmp/run.log" };
         case "drafts.get":
@@ -372,6 +407,7 @@ export class FakeClient implements ClientApi {
           if (p["key"] === "workers.engines") this.workersEngines = p["value"] as EngineId[];
           if (p["key"] === "setup.completedAt") this.setup = { ...this.setup, completedAt: p["value"] as string };
           if (p["key"] === "setup.skippedAt") this.setup = { ...this.setup, skippedAt: p["value"] as string };
+          if (p["key"] === "planOnly") this.planOnly = p["value"] === true;
           if (p["key"] === "ctoEngine") this.ctoEngine = p["value"] as string;
           if (p["key"] === "ctoModel") this.ctoModel = p["value"] as string | null;
           if (typeof p["key"] === "string" && p["key"].startsWith("authority.")) this.authority = { ...this.authority, [p["key"].slice("authority.".length)]: p["value"] };

@@ -2,6 +2,20 @@
 
 Resumable log of the build. Newest state first.
 
+## Status (2026-10-26)
+
+Kickoff pack core (issue #39): planning documents the CTO writes once for a new project, kept resumable and readable in the TUI, plus plan-only mode.
+
+- [x] Manifest keyed by the project identity (migration 6): one pack per project with each document's status, version, path and the hash of the file as Forewright wrote it. Reopening the project, a linked worktree or a service restart continue the same pack.
+- [x] Generation through the CTO tool `write_kickoff_doc` (one pending document per call, in order; `read_kickoff_doc` reads one). Written documents are never rewritten, Billy's edits to the files are detected by hash and kept, and every written version stays on disk for later diffs. An interrupted pack resumes after a restart with only its pending documents.
+- [x] Scaled packs: small (brief, requirements, test strategy) or full (adds assumptions and risks, architecture, milestones, review checklist). The requirements document must use PRD-style keys like `R-001`; the PRD stays the authority.
+- [x] Bounded nudging: the CTO is asked again only after progress, once per service start, or when Billy asks again; a turn that writes nothing ends it.
+- [x] TUI: `/kickoff` (and the palette) opens the pack: start a full or small pack, the documents with their state (pending, written, edited by you, missing) and version, the data folder, and each document rendered as Markdown.
+- [x] Plan-only mode: a Settings switch that holds back every work run while the CTO keeps planning; the top bar shows PLAN ONLY.
+- [ ] Review, revision and export of the pack (issue #40).
+
+Verification: `pnpm test`, see latest run.
+
 ## Status (2026-10-24)
 
 Native Windows is supported alongside macOS. Work since 2026-10-01 covers platform support, provider access, the terminal UI and first-run experience.

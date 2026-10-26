@@ -59,6 +59,9 @@ export const SCOPE_TITLES: Array<[KeyScope, string]> = [
   ["settings.fallback", "Settings, editing a backup list"],
   ["palette", "Command palette"],
   ["prd", "PRD viewer"],
+  ["kickoff.empty", "Kickoff pack, none started yet"],
+  ["kickoff", "Kickoff pack, documents"],
+  ["kickoff.doc", "Kickoff pack, reading a document"],
   ["log", "Log viewer"],
   ["help", "This help"],
   ["confirm", "Confirmations"],
@@ -230,6 +233,16 @@ export const BINDINGS: Binding[] = [
   { id: "prd.approve", keys: ["a"], label: "a", action: "approve", description: "approve this revision when it is proposed (asks first)", scope: "prd", footer: true },
   { id: "prd.close", keys: ["esc", "d", "q"], label: "esc", action: "close", description: "close the PRD", scope: "prd", footer: true },
 
+  { id: "kickoff.empty.full", keys: ["f"], label: "f", action: "full pack", description: "start a full pack: brief, requirements, risks, architecture, test strategy, milestones, review checklist", scope: "kickoff.empty", footer: true },
+  { id: "kickoff.empty.small", keys: ["s"], label: "s", action: "small pack", description: "start a small pack for a small tool: brief, requirements, test strategy", scope: "kickoff.empty", footer: true },
+  { id: "kickoff.empty.close", keys: ["esc", "q"], label: "esc", action: "close", description: "close without starting a pack", scope: "kickoff.empty", footer: true },
+  { id: "kickoff.move", keys: ["up", "down"], label: "↑↓", action: "select", description: "choose a document of the kickoff pack", scope: "kickoff", footer: true },
+  { id: "kickoff.open", keys: ["enter"], label: "enter", action: "read", description: "read the chosen document", scope: "kickoff", footer: true },
+  { id: "kickoff.resend", keys: ["r"], label: "r", action: "ask again", description: "while the pack is being written: ask the CTO again to write the pending documents", scope: "kickoff", footer: true },
+  { id: "kickoff.close", keys: ["esc", "q"], label: "esc", action: "close", description: "close the kickoff pack", scope: "kickoff", footer: true },
+  { id: "kickoff.doc.scroll", keys: ["up", "down", "pgup", "pgdn"], label: "↑↓", action: "scroll", description: "scroll the document", scope: "kickoff.doc", footer: true },
+  { id: "kickoff.doc.back", keys: ["esc", "q"], label: "esc", action: "back", description: "back to the list of documents", scope: "kickoff.doc", footer: true },
+
   { id: "log.scroll", keys: ["up", "down", "pgup", "pgdn", "home", "end"], label: "↑↓", action: "scroll", description: "scroll the raw log; home and end jump to the ends", scope: "log", footer: true },
   { id: "log.close", keys: ["esc", "q", "l"], label: "esc", action: "close", description: "close the log", scope: "log", footer: true },
 
@@ -271,7 +284,7 @@ export function keyLabel(label: string): string {
 }
 
 /** Scopes of overlays: they show only their own keys. */
-const MODAL_SCOPES = new Set<KeyScope>(["help", "confirm", "palette", "prd", "log", "outcome"]);
+const MODAL_SCOPES = new Set<KeyScope>(["help", "confirm", "palette", "prd", "kickoff.empty", "kickoff", "kickoff.doc", "log", "outcome"]);
 
 export interface FooterFlags {
   needs: number;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { FakeClient } from "./fake-client.js";
+import { FakeClient, fakeKickoff } from "./fake-client.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { checkLines, diffTabLines, overviewLines } from "./views/tasks.js";
 import { VIEW, closeAll, ctrl, down, enter, esc, hints, left, lines, mount, pane, release, right, shiftTab, tab, up } from "./test-support.js";
@@ -693,6 +693,83 @@ describe("Agent memory", () => {
     assert.match(h.frame(), /no notes yet/);
     await esc(h);
     assert.doesNotMatch(h.frame(), /Memory notes/);
+  });
+});
+
+describe("Kickoff pack", () => {
+  /** Opens the kickoff pack through the command palette. */
+  async function openKickoff(h: Parameters<typeof ctrl>[0]) {
+    await ctrl(h, "p");
+    await h.send("kickoff pack");
+    await enter(h);
+    await h.settle(250);
+  }
+
+  it("with no pack it explains the choice; s starts a small pack and the list shows its documents", async () => {
+    const { h, api } = await mount({ view: VIEW.home });
+    await openKickoff(h);
+    assert.match(h.frame(), /There is no kickoff pack yet\./);
+    assert.match(h.frame(), /small pack, for a small tool: brief, requirements, test strategy/);
+    assert.match(hints(h), /f full pack/);
+    assert.match(hints(h), /s small pack/);
+    await h.send("s");
+    await h.settle(250);
+    assert.deepEqual(api.callsTo("kickoff.start").map((c) => c.params), [{ projectId: "p1", scale: "small" }]);
+    const f = h.frame();
+    assert.match(f, /Kickoff pack/);
+    assert.match(f, /writing 0\/3/);
+    for (const title of ["Brief", "Requirements", "Test strategy"]) assert.match(f, new RegExp(`${title}\\s+pending`));
+    assert.doesNotMatch(f, /Architecture/);
+    assert.match(hints(h), /enter read/);
+    await esc(h);
+    assert.doesNotMatch(h.frame(), /writing 0\/3/);
+  });
+
+  it("lists each document's state and version with the files folder, and enter reads one", async () => {
+    const api = new FakeClient();
+    const pack = fakeKickoff("full");
+    const set = (key: string, over: Partial<(typeof pack.docs)[number]>) => (pack.docs = pack.docs.map((d) => (d.key === key ? { ...d, ...over } : d)));
+    set("brief", { status: "written", version: 1, sha256: "a" });
+    set("requirements", { status: "written", version: 2, sha256: "b", edited: true });
+    set("risks", { status: "written", version: 1, sha256: "c", missing: true });
+    api.kickoff = pack;
+    api.kickoffTexts["brief"] = "# Brief\nAudience: diners who split bills.";
+    const { h } = await mount({ view: VIEW.home, api });
+    await openKickoff(h);
+    const f = h.frame();
+    assert.match(f, /Brief\s+written\s+v1/);
+    assert.match(f, /Requirements\s+edited by you\s+v2/);
+    assert.match(f, /Assumptions and risks\s+missing/);
+    assert.match(f, /Architecture\s+pending/);
+    assert.match(f, /Files: .*kickoff/);
+    assert.match(f, /writing 3\/7/);
+    await enter(h);
+    await h.settle(250);
+    assert.match(h.frame(), /Audience: diners who split bills\./);
+    assert.match(hints(h), /esc back/);
+    await esc(h);
+    assert.match(h.frame(), /Requirements\s+edited by you/);
+    await h.send("r");
+    await h.settle(200);
+    assert.deepEqual(api.callsTo("kickoff.start").map((c) => c.params), [{ projectId: "p1", scale: "full" }], "r asks the CTO again");
+    await esc(h);
+    assert.doesNotMatch(h.frame(), /Requirements\s+edited by you/);
+  });
+
+  it("Settings switches plan-only mode, and the top bar shows PLAN ONLY while it is on", async () => {
+    const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
+    await tab(h);
+    await tab(h); // Control
+    for (let i = 0; i < 8; i++) await down(h);
+    assert.match(h.frame(), /▸ Plan only: tasks wait until you turn this off\s+off/);
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "planOnly", value: true });
+
+    const planning = new FakeClient();
+    planning.planOnly = true;
+    const other = await mount({ cols: 140, rows: 40, view: VIEW.home, api: planning });
+    assert.match(other.h.frame().split("\n")[0]!, /PLAN ONLY/);
   });
 });
 

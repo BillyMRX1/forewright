@@ -32,6 +32,12 @@ forewright
 4. The wizard ends on the CTO screen with the message box focused. Just type what you want and press `Enter`, or press `Up`/`Down` and `Enter` to start from one of the example briefs. The CTO proposes a PRD, shown as a card in the conversation with the keys that act on it: `Ctrl+Y` approves it (you are asked first, `/approve` works too) and `Ctrl+O` (or `/prd`) reads it in full. `Ctrl+A` and `Ctrl+E` stay line start and end in the box.
 5. After approval the CTO plans tasks and hires agents. They appear in the sidebar on the left, each with a state marker, and you can open any of them: its live session, its task, and a box that messages that agent directly. The Overview entry still shows what needs you, overall progress and the latest events on one screen.
 
+### Kickoff pack and plan-only mode
+
+For a new project the CTO offers a kickoff pack once it understands your brief: a set of planning documents written once from your brief and the repository, so later planning starts from shared, written assumptions. Open it with `/kickoff` (or "Open the kickoff pack" in the palette). With no pack yet, `f` starts a full pack (brief; requirements with stable keys like `R-001`; assumptions and risks, with verified facts kept apart from proposals; architecture with Mermaid diagrams and short decision records; test strategy; milestones and dependencies; a review checklist of decisions that need you) and `s` a small one for a small tool (brief, requirements, test strategy). The CTO writes the documents one by one; the list shows each one as pending, written, edited by you or missing, with its version, and `Enter` reads one. There is one pack per project: reopening the project, starting from a linked worktree or restarting the service continues the same pack, a restart resumes only the documents still pending, and finished documents and your own edits to the files are never replaced. If it stalls, `r` in the pack asks the CTO again. The files live in the data directory under `projects/<id>/kickoff/` (every written version is kept in `versions/`), never in your repository, and nothing is exported or committed. The PRD stays the authority for requirement keys and scope.
+
+Plan-only mode (Settings, Control: "Plan only: tasks wait until you turn this off") lets you plan with the CTO while no implementation starts: tasks can still be created, but none begins until you turn the mode off. Reviews and integration of work that already finished go on. The top bar shows PLAN ONLY while it is on.
+
 Starting `forewright` from a subfolder or a linked git worktree opens the same project. Moving the project folder keeps its identity, because the identity lives in the marker file.
 
 ## Keys
@@ -108,6 +114,7 @@ daemon.log                  service output
 projects/<id>/state.db      authoritative project state (SQLite)
 projects/<id>/logs/         raw run logs
 projects/<id>/worktrees/    one git worktree per task
+projects/<id>/kickoff/      kickoff pack documents, with every version in versions/
 ```
 
 Inside your project only the `.forewright/project.json` marker is written. Task work happens on `forewright/...` branches in separate worktrees, and finished work is integrated on a `forewright/integration` branch. Merging into your own branch is your decision.

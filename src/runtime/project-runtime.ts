@@ -19,6 +19,7 @@ import { isGateDecision } from "./gates.js";
 import { git, gitLine, gitTry, hasCommits, isGitRepo, revParse } from "./git.js";
 import type { ProviderHealthCache } from "./health.js";
 import type { EngineUse, RuntimeStatus } from "./protocol.js";
+import { nudgeKickoff } from "./kickoff.js";
 import { reconcileOnOpen } from "./recovery.js";
 import { type ActiveRun, type StopKind } from "./runs.js";
 import { Scheduler } from "./scheduler.js";
@@ -63,6 +64,8 @@ export class ProjectRuntime {
   readonly active = new Map<string, ActiveRun>();
   readonly subscribers = new Set<Notifier>();
   readonly ownerId = `daemon:${process.pid}:${randomUUID().slice(0, 8)}`;
+  /** Different on every start of this runtime: a kickoff pack interrupted by a restart gets one resume notice per start. */
+  readonly bootId = randomUUID().slice(0, 8);
   closed = false;
   stopping = false;
   integrating = false;
@@ -102,6 +105,7 @@ export class ProjectRuntime {
     await reconcileOnOpen(rt);
     rt.publish();
     rt.scheduler.start();
+    nudgeKickoff(rt, "boot"); // a pack interrupted by a restart resumes with its pending documents only
     rt.scheduler.wake("open");
     return rt;
   }
@@ -116,6 +120,7 @@ export class ProjectRuntime {
   status(): RuntimeStatus {
     return {
       paused: this.store.getProject().paused,
+      planOnly: this.store.getSettings().planOnly,
       activeRuns: [...this.active.values()].map((a) => ({
         runId: a.run.id,
         kind: a.kind,

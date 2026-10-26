@@ -14,7 +14,7 @@ import { deriveAttention, needsYouItems, nextNeedItem, type UnseenDone } from ".
 import { ToastCard, TopBar, type ConnView } from "./shell.js";
 import { Sidebar, buildSidebar } from "./sidebar.js";
 import { Palette, type PaletteEntry } from "./palette.js";
-import { ConfirmCard, HelpModal, OutcomeCard, PrdViewer } from "./modals.js";
+import { ConfirmCard, HelpModal, KickoffViewer, OutcomeCard, PrdViewer } from "./modals.js";
 import { footerHints } from "./keys.js";
 import { viewOfAction, type ActionId } from "./commands.js";
 import { DEFAULT_TOAST_MS, currentToast, engineNoticeText, enqueueToast, removeToast, resetTimePhrase, sessionResetNoticeText, type Toast, type ToastKind, type ToastTarget } from "./toasts.js";
@@ -156,6 +156,9 @@ export function App(props: AppProps) {
   const [help, setHelp] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [prdOpen, setPrdOpen] = useState(false);
+  const [kickoffOpen, setKickoffOpen] = useState(false);
+  /** Which of the kickoff pack's key tables the hint line shows: no pack yet, the list, or a document. */
+  const [kickoffScope, setKickoffScope] = useState<"kickoff.empty" | "kickoff" | "kickoff.doc">("kickoff");
   const [wizard, setWizard] = useState(false);
   /** False while the repository has no commits (from state.settings); undefined until known. */
   const [hasCommits, setHasCommits] = useState<boolean | undefined>(undefined);
@@ -434,7 +437,7 @@ export function App(props: AppProps) {
 
   // ---- focus
   const focus: Zone = rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
-  const overlay = help || outcomeOpen || confirm !== null || logRun !== null || paletteOpen || prdOpen || wizard;
+  const overlay = help || outcomeOpen || confirm !== null || logRun !== null || paletteOpen || prdOpen || kickoffOpen || wizard;
   const modal = overlay || offer;
 
   const ask = useCallback((text: string, onYes: () => Promise<void> | void) => setConfirm({ text, onYes }), []);
@@ -611,6 +614,9 @@ export function App(props: AppProps) {
       case "prd":
         setPrdOpen(true);
         return;
+      case "kickoff":
+        setKickoffOpen(true);
+        return;
       case "pause":
       case "resume": {
         const paused = runtimeRef.current?.paused === true;
@@ -738,7 +744,7 @@ export function App(props: AppProps) {
       }
       return;
     }
-    if (paletteOpen || logRun !== null || prdOpen || wizard) return; // they own their keys
+    if (paletteOpen || logRun !== null || prdOpen || kickoffOpen || wizard) return; // they own their keys
     // Keys that work everywhere, even while typing.
     if (key.ctrl && (input === "p" || input === "k")) return setPaletteOpen(true);
     if (key.ctrl && input === "n") return goNextNeed();
@@ -841,7 +847,7 @@ export function App(props: AppProps) {
   const paused = runtime?.paused === true;
   const cardMode = shown !== null && cols >= 70 && rows >= 20;
   const sidebarOnly = !showSide && focus === "sidebar" && !overlay;
-  const scope = outcomeOpen ? "outcome" : confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
+  const scope = outcomeOpen ? "outcome" : confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : kickoffOpen ? kickoffScope : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
   const hintText = footerHints(scope, cols - 2, { needs: needs.length, toast: shown?.target != null, typing, prd: snap.proposedPrd, outcome: outcomeAsk !== null });
   const showView = !overlay && !sidebarOnly;
   const titleName = view === VIEW.agent ? (snap.agents.find((a) => a.id === agentId)?.name ?? "Agent") : VIEW_NAMES[view]!;
@@ -874,7 +880,7 @@ export function App(props: AppProps) {
   return (
     <Ctx.Provider value={ctx}>
       <Box flexDirection="column" width={cols} height={rows}>
-        <TopBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} title={titleName} menuHint={!showSide} need={needs.length} />
+        <TopBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} planOnly={runtime?.planOnly === true} title={titleName} menuHint={!showSide} need={needs.length} />
         <Rule width={cols} />
         <Box height={bodyHeight} width={cols} flexShrink={0}>
           {showSide || sidebarOnly ? <Sidebar entries={entries} selectedKey={selectedKey} focused={focus === "sidebar" && !overlay} width={sideW} height={bodyHeight} attention={attention} /> : null}
@@ -900,6 +906,11 @@ export function App(props: AppProps) {
               {prdOpen ? (
                 <Ctx.Provider value={overlayCtx}>
                   <PrdViewer onClose={() => setPrdOpen(false)} onApprove={approve} />
+                </Ctx.Provider>
+              ) : null}
+              {kickoffOpen ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <KickoffViewer onClose={() => setKickoffOpen(false)} onScope={setKickoffScope} />
                 </Ctx.Provider>
               ) : null}
               {logRun !== null ? (

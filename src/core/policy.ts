@@ -18,6 +18,7 @@ export type ActionName =
   | "retire_agent"
   | "send_message"
   | "update_memory"
+  | "write_kickoff_doc"
   | "request_decision"
   | "submit_work"
   | "submit_review"
@@ -75,6 +76,7 @@ const CTO_ACTIONS: ReadonlySet<ActionName> = new Set([
   "retire_agent",
   "send_message",
   "update_memory",
+  "write_kickoff_doc",
   "request_decision",
   "request_integration",
   "read_state",

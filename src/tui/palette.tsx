@@ -47,6 +47,7 @@ export function buildEntries(tasks: Task[], agents: TeamMember[], decisions: Dec
   if (opts.noCommits) act("initialCommit", "Create initial commit", "agents need one to start work");
   act("approve", "Approve the proposed PRD");
   act("prd", "Read the PRD");
+  act("kickoff", "Open the kickoff pack");
   if (opts.paused) act("resume", "Resume all work");
   else act("pause", "Pause all work");
   act("stop", "Stop the current run");

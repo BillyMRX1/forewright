@@ -56,3 +56,11 @@ test("CTO prompt says reviews are built in and review-only tasks must not be cre
   assert.match(p, /Reviews are built into every task/);
   assert.match(p, /Never create tasks only to review or test existing work/);
 });
+
+test("CTO prompt offers a kickoff pack before the first PRD and explains plan-only mode", () => {
+  const p = ctoSystemPrompt("Ada");
+  assert.match(p, /offer him a kickoff pack/);
+  assert.match(p, /Billy starts it with \/kickoff/);
+  assert.match(p, /write_kickoff_doc/);
+  assert.match(p, /plan-only mode tasks may be created, but none starts/);
+});

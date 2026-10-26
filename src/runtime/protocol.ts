@@ -10,6 +10,9 @@ import type {
   Artifact,
   Decision,
   ForewrightEvent,
+  KickoffDoc,
+  KickoffPack,
+  KickoffScale,
   Message,
   MessageChannel,
   RequirementDoc,
@@ -43,12 +46,20 @@ export interface ProviderStatus {
 
 export interface RuntimeStatus {
   paused: boolean;
+  /** Plan-only mode: no work run starts until Billy turns it off. */
+  planOnly: boolean;
   activeRuns: Array<{ runId: string; kind: Run["kind"]; agentId: string; taskId: string | null; startedAt: string | null }>;
   maxConcurrentWorkers: number;
   ctoBusy: boolean;
   /** Plain reason the CTO cannot run right now (unavailable engine, not signed in), or null. */
   ctoError?: string | null;
   connectedClients: number;
+}
+
+export interface KickoffState {
+  pack: KickoffPack | null;
+  docs: Array<KickoffDoc & { edited: boolean; missing: boolean }>;
+  dir: string | null;
 }
 
 export type Overview = ReturnType<Store["overview"]>;
@@ -100,6 +111,10 @@ export interface Methods {
     result: { channels: Array<{ channel: MessageChannel; taskId: string | null; agentId: string | null; label: string; lastAt: string | null }> };
   };
   "state.prd": { params: { projectId: string; revision?: number }; result: { doc: RequirementDoc | null; approved: RequirementDoc | null; all: Array<Pick<RequirementDoc, "revision" | "status" | "title" | "createdAt">> } };
+  /** The kickoff pack manifest with what is on disk (edited or missing files), and the folder that holds the files. */
+  "state.kickoff": { params: { projectId: string }; result: KickoffState };
+  /** The current text of a written kickoff document, Billy's edits included. */
+  "kickoff.doc": { params: { projectId: string; key: string }; result: { key: string; text: string } };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
   "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
@@ -117,6 +132,8 @@ export interface Methods {
     result: { messageId: string };
   };
   "prd.approve": { params: { projectId: string; revision: number }; result: { doc: RequirementDoc; affectedTaskIds: string[] } };
+  /** Starts the project's kickoff pack, or asks the CTO again for one that is still being written. Returns state.kickoff. */
+  "kickoff.start": { params: { projectId: string; scale: KickoffScale }; result: KickoffState };
   "decisions.resolve": { params: { projectId: string; decisionId: string; option: string; note?: string }; result: { decision: Decision } };
   "settings.set": { params: { projectId: string; key: string; value: unknown }; result: { settings: Settings } };
   "agents.update": {

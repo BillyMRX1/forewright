@@ -18,6 +18,7 @@ import type { TokenRecord } from "./tokens.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { engineRoleProblem } from "./engine-roles.js";
 import { MEMORY_CAP_BYTES, writeMemory } from "./memory.js";
+import { KICKOFF_DOC_CAP, KICKOFF_KEYS, readKickoffDoc, writeKickoffDoc } from "./kickoff.js";
 
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -363,6 +364,35 @@ const TOOLS: ToolDef[] = [
     run: (ctx, a) => {
       const stored = writeMemory(ctx.rt.projectId, ctx.agent.id, str(a, "text", { max: MEMORY_CAP_BYTES * 4 }));
       return { ok: true, bytes: Buffer.byteLength(stored), limit: MEMORY_CAP_BYTES };
+    },
+  },
+  {
+    name: "write_kickoff_doc",
+    description: `Write one pending document of the kickoff pack (Markdown, at most ${KICKOFF_DOC_CAP} characters). Keys: ${KICKOFF_KEYS.join(", ")}. Write pending documents in order, one call each. A written document cannot be rewritten here.`,
+    properties: { key: { type: "string", enum: KICKOFF_KEYS }, body: { type: "string", description: "The whole document in Markdown" } },
+    required: ["key", "body"],
+    roles: ["cto"],
+    action: "write_kickoff_doc",
+    mutating: true,
+    run: (ctx, a) => {
+      const { store } = ctx.rt;
+      if (!store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
+      const key = oneOf(a, "key", KICKOFF_KEYS)!;
+      const r = writeKickoffDoc(store, key, str(a, "body", { max: KICKOFF_DOC_CAP * 2 }), `agent:${ctx.agent.id}`);
+      return { key, version: r.doc.version, written: r.docs.filter((d) => d.status === "written").map((d) => d.key), pending: r.docs.filter((d) => d.status === "pending").map((d) => d.key), status: r.pack.status };
+    },
+  },
+  {
+    name: "read_kickoff_doc",
+    description: "Read the current text of a written kickoff pack document, Billy's edits included.",
+    properties: { key: { type: "string", enum: KICKOFF_KEYS } },
+    required: ["key"],
+    roles: ["cto"],
+    action: "read_state",
+    mutating: false,
+    run: (ctx, a) => {
+      if (!ctx.rt.store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
+      return readKickoffDoc(ctx.rt.projectId, oneOf(a, "key", KICKOFF_KEYS)!);
     },
   },
   {

@@ -17,13 +17,14 @@ function len(text: string): number {
 
 const total = (segs: Seg[]) => segs.reduce((n, s) => n + len(s.text), 0);
 
-/** The top line: project and branch on the left, the open sidebar entry in the middle (with `esc menu` when the sidebar is hidden), PAUSED and the connection on the right. */
+/** The top line: project and branch on the left, the open sidebar entry in the middle (with `esc menu` when the sidebar is hidden), PLAN ONLY, PAUSED and the connection on the right. */
 export function TopBar({
   width,
   project,
   branch,
   conn,
   paused,
+  planOnly = false,
   title,
   menuHint,
   need,
@@ -33,6 +34,8 @@ export function TopBar({
   branch: string | null;
   conn: ConnView;
   paused: boolean;
+  /** Plan-only mode: no work starts until Billy turns it off. */
+  planOnly?: boolean;
   /** Name of the open sidebar entry. */
   title: string;
   /** True when the sidebar is not on screen, so the bar says how to reach it. */
@@ -45,9 +48,13 @@ export function TopBar({
   const connText = `${sym().bullet} ${conn}`;
   const connDot = sym().bullet;
   const connSeg = (short: boolean): Seg => ({ text: short ? connDot : connText, color: CONN_COLOR[conn] });
+  const marks: Seg[] = [
+    ...(planOnly ? [{ text: " PLAN ONLY ", color: palette.attention, bold: true }, { text: " " }] : []),
+    ...(paused ? [{ text: " PAUSED ", color: palette.attention, bold: true }, { text: " " }] : []),
+  ];
   const rightVariants: Seg[][] = [
-    [...(paused ? [{ text: " PAUSED ", color: palette.attention, bold: true }, { text: " " }] : []), connSeg(false)],
-    [...(paused ? [{ text: " PAUSED ", color: palette.attention, bold: true }, { text: " " }] : []), connSeg(true)],
+    [...marks, connSeg(false)],
+    [...marks, connSeg(true)],
   ];
   const leftVariants = (nameMax: number): Seg[][] => [
     [{ text: clip(name, nameMax), bold: true }, ...(b ? [{ text: `  ${clip(b, 18)}`, dim: true }] : [])],

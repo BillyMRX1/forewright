@@ -20,6 +20,8 @@ import { engineRoleProblem } from "./engine-roles.js";
 import { fallbackStatus } from "./fallback.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { MEMORY_CAP_BYTES, clearMemory, readMemory } from "./memory.js";
+import { KICKOFF_SCALES, kickoffView, nudgeKickoff, readKickoffDoc, startKickoffPack } from "./kickoff.js";
+import type { KickoffScale } from "../core/store.js";
 
 type P = Record<string, unknown>;
 type Handler = (p: P, conn: Connection) => unknown | Promise<unknown>;
@@ -141,6 +143,12 @@ export class ClientApi {
           all: docs.map((x) => ({ revision: x.revision, status: x.status, title: x.title, createdAt: x.createdAt })),
         };
       },
+      "state.kickoff": async (p) => kickoffView((await this.rt(p)).store),
+      "kickoff.doc": async (p) => {
+        const rt = await this.rt(p);
+        const key = reqStr(p, "key", 100);
+        return { key, text: readKickoffDoc(rt.projectId, key) };
+      },
       "state.adrs": async (p) => ({ adrs: (await this.rt(p)).store.listAdrs() }),
       "state.evidence": async (p) => {
         const rt = await this.rt(p);
@@ -228,6 +236,16 @@ export class ClientApi {
           `Billy approved PRD revision ${doc.revision} ("${doc.title}").${affected.length > 0 ? ` Scope changed for: ${affected.map((a) => `${a.shortId} (${a.changedKeys.join(", ")})`).join("; ")}.` : ""} You can create tasks for its requirements now.`,
         );
         return { doc, affectedTaskIds: affected.map((a) => a.taskId) };
+      },
+      "kickoff.start": async (p) => {
+        const rt = await this.rt(p);
+        const scale = reqStr(p, "scale", 20);
+        if (!(KICKOFF_SCALES as readonly string[]).includes(scale)) throw new ValidationError(`The pack size must be one of ${KICKOFF_SCALES.join(", ")}.`, { scale });
+        // Planning only: nothing here touches the repository, so a folder without git works as it is.
+        const r = startKickoffPack(rt.store, scale as KickoffScale);
+        if (r.created) nudgeKickoff(rt, "start");
+        else if (r.pack.status === "generating") nudgeKickoff(rt, "billy"); // Billy asks again for a pack that stalled
+        return kickoffView(rt.store);
       },
       "decisions.resolve": async (p) => {
         const rt = await this.rt(p);

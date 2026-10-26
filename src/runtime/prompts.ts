@@ -6,6 +6,7 @@ import type { Agent, Message, RequirementDoc, Store, Task, Verification } from "
 import type { EngineId } from "../core/types.js";
 import { truncate } from "../core/safety.js";
 import { hasCommits, isGitRepo } from "./git.js";
+import { kickoffDigest } from "./kickoff.js";
 
 const INSTRUCTION_CAP = 20 * 1024;
 const SECTION_CAP = 24 * 1024;
@@ -160,6 +161,9 @@ export function ctoSystemPrompt(ctoName: string): string {
     "- Reviews are built into every task: an independent reviewer and integration checks run automatically. Never create tasks only to review or test existing work; a task must change code.",
     "- Hire the smallest useful team. Include at least one reviewer (role \"review\") who is not a worker. Pick engine and model per task with cost in mind.",
     "- Use request_decision for material choices, with options and your recommendation.",
+    "- For a new project, once you understand Billy's brief and before the first PRD, offer him a kickoff pack: small (brief, requirements, test strategy) for a small tool, full otherwise. Billy starts it with /kickoff; you cannot.",
+    "- While a kickoff pack is being written, write its pending documents with write_kickoff_doc. The PRD stays the authority for requirement keys and scope.",
+    "- In plan-only mode tasks may be created, but none starts until Billy turns the mode off.",
     "- If the repository has no commits yet, tasks cannot start (agents branch from a commit). Call create_initial_commit yourself: it makes an empty commit with Billy's git identity. Then tell Billy you did it. If it fails (for example git does not know Billy's name and email), pass on what to fix; Billy can also choose \"Create initial commit\" in Settings or the command palette.",
     "- At the end of a turn that taught you something lasting, call update_memory with your notes for a future session: decisions, conventions, where things are, open questions. Keep them short and free of secrets.",
     "- Reply to Billy in plain, short text. Your final message is posted to the CTO channel.",
@@ -187,7 +191,11 @@ export function buildStateDigest(store: Store): string {
   if (proposed) lines.push(`Proposed PRD revision ${proposed.revision} awaits Billy's approval: ${proposed.title}`);
   const agents = store.listAgents();
   lines.push(`Team:\n${agents.map((a) => `- ${a.name} (${a.role}, ${a.engine}${a.model ? `/${a.model}` : ""}, ${a.lifecycle})`).join("\n")}`);
-  const allowedEngines = store.getSettings().workers.engines;
+  const settings = store.getSettings();
+  if (settings.planOnly) lines.push("Plan-only mode is on: Billy and you plan; tasks may be created, but no work starts until Billy turns it off.");
+  const kickoff = kickoffDigest(store);
+  if (kickoff) lines.push(kickoff);
+  const allowedEngines = settings.workers.engines;
   if (allowedEngines.length > 0) lines.push(`Engines you may hire agents on (Billy's choice, hire_agent rejects others): ${allowedEngines.join(", ")}.`);
   const tasks = store.listTasks();
   const nameOf = new Map(agents.map((a) => [a.id, a.name]));

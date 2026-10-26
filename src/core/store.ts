@@ -41,6 +41,9 @@ import {
   type SetupSettings,
   type DecisionOption,
   type ForewrightEvent,
+  type KickoffDoc,
+  type KickoffPack,
+  type KickoffScale,
   type Limits,
   type Message,
   type MessageChannel,
@@ -1345,6 +1348,19 @@ export class Store {
     });
   }
 
+  /** When a message whose dedupe key starts with `prefix` was last delivered to the agent, or null when never. */
+  lastDeliveredAt(agentId: string, dedupePrefix: string): string | null {
+    const r = this.one(
+      `SELECT MAX(d.delivered_at) AS at FROM message m JOIN message_delivery d ON d.message_id = m.id
+       WHERE d.recipient_agent_id = ? AND m.project_id = ? AND d.delivered_at IS NOT NULL AND substr(m.dedupe_key, 1, ?) = ?`,
+      agentId,
+      this.projectId,
+      dedupePrefix.length,
+      dedupePrefix,
+    );
+    return (r?.["at"] as string | null | undefined) ?? null;
+  }
+
   markDelivered(messageIds: string[], agentId: string, runId: string): void {
     tx(this.db, () => {
       for (const id of messageIds) {
@@ -1710,6 +1726,97 @@ export class Store {
     };
   }
 
+  // ------------------------------------------------------------ kickoff pack
+
+  private kickoffDocFromRow(r: Row): KickoffDoc {
+    return {
+      key: r["key"] as string,
+      title: r["title"] as string,
+      position: r["position"] as number,
+      status: r["status"] as KickoffDoc["status"],
+      version: r["version"] as number,
+      path: r["path"] as string,
+      sha256: (r["sha256"] as string | null) ?? null,
+      author: (r["author"] as string | null) ?? null,
+      updatedAt: r["updated_at"] as string,
+    };
+  }
+
+  /** The project's kickoff pack and its documents in order, or null when none was started. */
+  getKickoffPack(): { pack: KickoffPack; docs: KickoffDoc[] } | null {
+    const r = this.one("SELECT * FROM kickoff_pack WHERE project_id = ?", this.projectId);
+    if (!r) return null;
+    const pack: KickoffPack = {
+      scale: r["scale"] as KickoffScale,
+      status: r["status"] as KickoffPack["status"],
+      startedBy: r["started_by"] as string,
+      createdAt: r["created_at"] as string,
+      updatedAt: r["updated_at"] as string,
+    };
+    const docs = this.all("SELECT * FROM kickoff_doc WHERE project_id = ? ORDER BY position", this.projectId).map((d) => this.kickoffDocFromRow(d));
+    return { pack, docs };
+  }
+
+  /**
+   * Human-only. Starts the project's one kickoff pack with its documents pending. Idempotent: when a pack
+   * exists it is returned unchanged (the requested scale is ignored), so re-entry never duplicates it.
+   */
+  startKickoffPack(input: { scale: KickoffScale; docs: Array<{ key: string; title: string; path: string }>; by: Actor }): { pack: KickoffPack; docs: KickoffDoc[]; created: boolean } {
+    if (input.by.kind !== "human") throw new PolicyDeniedError("Only the human owner can start a kickoff pack.", { scale: input.scale });
+    if (input.docs.length === 0) throw new ValidationError("A kickoff pack needs at least one document.");
+    return tx(this.db, () => {
+      const existing = this.getKickoffPack();
+      if (existing) return { ...existing, created: false };
+      const now = this.nowIso();
+      this.run("INSERT INTO kickoff_pack (project_id, scale, status, started_by, created_at, updated_at) VALUES (?,?,?,?,?,?)", this.projectId, input.scale, "generating", actorLabel(input.by), now, now);
+      input.docs.forEach((d, i) => {
+        this.run("INSERT INTO kickoff_doc (project_id, key, title, position, status, version, path, updated_at) VALUES (?,?,?,?,?,?,?,?)", this.projectId, d.key, d.title, i, "pending", 0, d.path, now);
+      });
+      this.appendEvent("kickoff.started", "kickoff", this.projectId, actorLabel(input.by), { scale: input.scale, docs: input.docs.map((d) => d.key) });
+      return { ...this.getKickoffPack()!, created: true };
+    });
+  }
+
+  /**
+   * Records that Forewright wrote a pending document's file. A written document is never replaced here: it is
+   * changed through a revision Billy asks for. The pack becomes ready with its last pending document.
+   */
+  recordKickoffDocWritten(input: { key: string; sha256: string; author: string }): KickoffDoc {
+    return tx(this.db, () => {
+      const found = this.getKickoffPack();
+      if (!found) throw new NotFoundError("Kickoff pack");
+      const doc = found.docs.find((d) => d.key === input.key);
+      if (!doc) throw new NotFoundError(`Kickoff document ${input.key}`, { key: input.key });
+      if (doc.status !== "pending") {
+        throw new ValidationError(`The ${doc.title} document is already written. Written documents are changed through a revision, which Billy asks for.`, { key: input.key, status: doc.status });
+      }
+      const now = this.nowIso();
+      this.run(
+        "UPDATE kickoff_doc SET status = 'written', version = version + 1, sha256 = ?, author = ?, updated_at = ? WHERE project_id = ? AND key = ?",
+        input.sha256,
+        input.author,
+        now,
+        this.projectId,
+        input.key,
+      );
+      this.run("UPDATE kickoff_pack SET updated_at = ? WHERE project_id = ?", now, this.projectId);
+      this.appendEvent("kickoff.doc_written", "kickoff", this.projectId, input.author, { key: input.key, version: doc.version + 1 });
+      const left = this.one("SELECT COUNT(*) AS n FROM kickoff_doc WHERE project_id = ? AND status = 'pending'", this.projectId)?.["n"] as number;
+      if (left === 0) {
+        this.run("UPDATE kickoff_pack SET status = 'ready', updated_at = ? WHERE project_id = ?", now, this.projectId);
+        this.appendEvent("kickoff.ready", "kickoff", this.projectId, "system", { docs: found.docs.length });
+        this.postMessageTx({
+          channel: "cto",
+          sender: { kind: "system" },
+          body: `Kickoff pack ready: ${found.docs.length} documents. Read them with /kickoff.`,
+          recipients: [],
+          dedupeKey: `kickoff-ready:${found.pack.createdAt}`,
+        });
+      }
+      return this.getKickoffPack()!.docs.find((d) => d.key === input.key)!;
+    });
+  }
+
   // ------------------------------------------------------------ settings and drafts
 
   getSettings(): Settings {
@@ -1727,7 +1834,8 @@ export class Store {
       completedAt: (stored.get("setup.completedAt") as string | undefined) ?? null,
       skippedAt: (stored.get("setup.skippedAt") as string | undefined) ?? null,
     };
-    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup };
+    const planOnly = stored.get("planOnly") === true;
+    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly };
   }
 
   /** Authority keys are written as `authority.<name>` and only a human may change them. */
@@ -1753,6 +1861,10 @@ export class Store {
       // Which engines the CTO may hire on spends Billy's usage, so only a human writes it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
       value = validateWorkerEngines(key, value);
+    } else if (key === "planOnly") {
+      // Plan-only mode holds back every implementation run, so only Billy switches it.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      if (typeof value !== "boolean") throw new ValidationError("planOnly must be on or off.", { key, value });
     } else if (key === "setup.completedAt" || key === "setup.skippedAt") {
       authorize(by, "change_authority", {}, this.getSettings().authority);
       if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new ValidationError(`${key} must be a time.`, { key, value });

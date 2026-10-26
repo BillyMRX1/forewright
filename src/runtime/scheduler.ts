@@ -9,6 +9,7 @@ import { NOT_GIT_MARKER } from "./project-runtime.js";
 import { dispatchReviews } from "./review.js";
 import { integrateNext } from "./integration.js";
 import { dispatchWork } from "./workers.js";
+import { nudgeKickoff } from "./kickoff.js";
 import { reconcileLeases } from "./recovery.js";
 import { hasCommits, isGitRepo } from "./git.js";
 import { NO_COMMITS_MARKER } from "./workspace.js";
@@ -87,7 +88,9 @@ export class Scheduler {
     this.gateEnvironment(reason);
     integrateNext(rt);
     dispatchReviews(rt);
-    dispatchWork(rt);
+    // Plan-only mode holds back new work only; reviews and integration of finished work go on, and so does the CTO.
+    if (!store.getSettings().planOnly) dispatchWork(rt);
+    if (!rt.cto.busy()) nudgeKickoff(rt, "progress");
     rt.cto.maybeStart(reason);
   }
 

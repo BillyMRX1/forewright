@@ -92,6 +92,32 @@ export interface RequirementDoc {
   requirements: Array<{ key: string; text: string }>;
 }
 
+export type KickoffScale = "small" | "full";
+
+/** The project's kickoff pack manifest. One per project; its files live in the project data directory. */
+export interface KickoffPack {
+  scale: KickoffScale;
+  status: "generating" | "ready";
+  startedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KickoffDoc {
+  key: string;
+  title: string;
+  position: number;
+  status: "pending" | "written";
+  /** How many times Forewright wrote it; every version is kept on disk. 0 while pending. */
+  version: number;
+  /** Relative to the pack folder, for example brief.md. */
+  path: string;
+  /** Hash of the file as Forewright last wrote it; null while pending. */
+  sha256: string | null;
+  author: string | null;
+  updatedAt: string;
+}
+
 export interface Adr {
   id: string;
   number: number;
@@ -234,7 +260,10 @@ export interface SetupSettings {
 export const WORKER_ENGINES_KEY = "workers.engines";
 export const SETUP_KEYS = ["setup.completedAt", "setup.skippedAt"] as const;
 
-export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings };
+/** While true, no work run starts: Billy and the CTO plan, tasks may be created, and nothing is implemented. */
+export const PLAN_ONLY_KEY = "planOnly";
+
+export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean };
 
 export const DEFAULT_LIMITS: Limits = {
   maxConcurrentWorkers: 2,

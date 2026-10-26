@@ -12,6 +12,7 @@ export type ActionId =
   | "go.chat"
   | "approve"
   | "prd"
+  | "kickoff"
   | "pause"
   | "resume"
   | "stop"
@@ -61,6 +62,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "evidence", description: "open Tasks; a task's Checks and Diff tabs hold its evidence", action: "go.tasks" },
   { name: "log", description: "read the raw log of the current run", action: "log" },
   { name: "terminate", description: "terminate the team: pause, stop every run, retire the workers (asks first)", action: "terminate" },
+  { name: "kickoff", description: "open the kickoff pack: brief, requirements, risks, plan", action: "kickoff" },
 ];
 
 /** The slash command named by a whole message, or null. A message with more words is an ordinary message. */

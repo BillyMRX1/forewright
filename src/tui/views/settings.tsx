@@ -16,6 +16,7 @@ type Item =
   | { kind: "cto-model" }
   | { kind: "setup" }
   | { kind: "initial-commit" }
+  | { kind: "plan-only" }
   | { kind: "authority"; name: keyof typeof DEFAULT_AUTHORITY }
   | { kind: "limit"; name: keyof typeof DEFAULT_LIMITS }
   | { kind: "fallback"; list: FallbackList };
@@ -37,6 +38,7 @@ const ITEMS: Array<{ group: Group; item: Item }> = [
   { group: "Engines", item: { kind: "setup" } },
   ...FALLBACK_LISTS.map((list) => ({ group: "Backups" as const, item: { kind: "fallback" as const, list } })),
   ...AUTH_NAMES.map((name) => ({ group: "Control" as const, item: { kind: "authority" as const, name } })),
+  { group: "Control", item: { kind: "plan-only" } },
   ...LIMIT_NAMES.map((name) => ({ group: "Limits" as const, item: { kind: "limit" as const, name } })),
 ];
 const MODES = ["ask", "auto", "deny"] as const;
@@ -156,6 +158,7 @@ export function SettingsView() {
     if (it.kind === "cto-model") return data.data!.ctoModel ?? "(engine default)";
     if (it.kind === "setup") return "Run setup again";
     if (it.kind === "initial-commit") return "Create initial commit";
+    if (it.kind === "plan-only") return s.planOnly;
     if (it.kind === "authority") return s.authority[it.name];
     if (it.kind === "fallback") return fallbackWords(fb[it.list]);
     return s[it.name];
@@ -262,7 +265,7 @@ export function SettingsView() {
       return;
     }
     const v = value(it);
-    const key = it.kind === "authority" ? `authority.${it.name}` : it.name;
+    const key = it.kind === "plan-only" ? "planOnly" : it.kind === "authority" ? `authority.${it.name}` : it.name;
     if (typeof v === "boolean") void set(key, !v);
     else if (typeof v === "string") void set(key, cycle([...MODES], v as (typeof MODES)[number], dir));
     else if (fromEnter) {
@@ -310,7 +313,7 @@ export function SettingsView() {
   let selLine = 0;
   const heading = (t: string) => lines.push({ text: t.toUpperCase(), bold: true, dim: true });
   const itemsOfGroup = items.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
-  const labelOf = (it: Item) => (it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} backup order` : LABELS[it.name]!);
+  const labelOf = (it: Item) => (it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "plan-only" ? "Plan only: tasks wait until you turn this off" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} backup order` : LABELS[it.name]!);
   const labelW = Math.min(Math.max(...itemsOfGroup.map((x) => [...labelOf(x.item)].length)), Math.max(12, Math.floor(inner * 0.6)));
   const pushItem = (it: Item, i: number) => {
     const name = labelOf(it);
