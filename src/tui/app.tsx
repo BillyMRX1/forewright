@@ -158,7 +158,7 @@ export function App(props: AppProps) {
   const [prdOpen, setPrdOpen] = useState(false);
   const [kickoffOpen, setKickoffOpen] = useState(false);
   /** Which of the kickoff pack's key tables the hint line shows: no pack yet, the list, or a document. */
-  const [kickoffScope, setKickoffScope] = useState<"kickoff.empty" | "kickoff" | "kickoff.doc">("kickoff");
+  const [kickoffScope, setKickoffScope] = useState<string>("kickoff");
   const [wizard, setWizard] = useState(false);
   /** False while the repository has no commits (from state.settings); undefined until known. */
   const [hasCommits, setHasCommits] = useState<boolean | undefined>(undefined);

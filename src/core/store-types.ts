@@ -30,6 +30,8 @@ export interface Task {
   updatedAt: string;
   dependsOn: string[]; // task ids
   requirementKeys: string[];
+  /** Kickoff catalog keys whose approved versions this task's worker is shown. */
+  kickoffDocs: string[];
 }
 
 export interface Agent {
@@ -98,6 +100,8 @@ export type KickoffScale = "small" | "full";
 export interface KickoffPack {
   scale: KickoffScale;
   status: "generating" | "ready";
+  /** Bumped every time a document changes version, so an approval names exactly what it covered. */
+  revision: number;
   startedBy: string;
   createdAt: string;
   updatedAt: string;
@@ -116,6 +120,39 @@ export interface KickoffDoc {
   sha256: string | null;
   author: string | null;
   updatedAt: string;
+}
+
+/** One document of an approved pack revision: the version and the hash of the file Billy read. */
+export interface KickoffApprovedDoc {
+  key: string;
+  version: number;
+  sha256: string;
+}
+
+/** Billy's approval of one pack revision. */
+export interface KickoffApproval {
+  id: string;
+  revision: number;
+  docs: KickoffApprovedDoc[];
+  approvedBy: string;
+  approvedAt: string;
+}
+
+export type KickoffProposalStatus = "open" | "applied" | "declined" | "superseded" | "conflict";
+
+/** The CTO's proposal to revise a written document; Billy answers it in the Inbox. */
+export interface KickoffProposal {
+  id: string;
+  key: string;
+  status: KickoffProposalStatus;
+  /** Hash of the document file on disk when the CTO proposed (Billy's edits included). */
+  baseSha256: string;
+  proposalSha256: string;
+  summary: string;
+  author: string;
+  decisionId: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
 }
 
 export interface Adr {

@@ -19,7 +19,7 @@ import { isGateDecision } from "./gates.js";
 import { git, gitLine, gitTry, hasCommits, isGitRepo, revParse } from "./git.js";
 import type { ProviderHealthCache } from "./health.js";
 import type { EngineUse, RuntimeStatus } from "./protocol.js";
-import { nudgeKickoff } from "./kickoff.js";
+import { nudgeKickoff, resolveKickoffProposal } from "./kickoff.js";
 import { reconcileOnOpen } from "./recovery.js";
 import { type ActiveRun, type StopKind } from "./runs.js";
 import { Scheduler } from "./scheduler.js";
@@ -332,6 +332,7 @@ export class ProjectRuntime {
     try {
       if (decision.kind === "git_init" && approved) this.initGit(decision);
       if (decision.kind === "merge" && approved) this.executeMerge(decision.id);
+      if ((decision.boundAction as { action?: string } | null)?.action === "kickoff_revise") resolveKickoffProposal(this, decision, approved);
     } catch (err) {
       if (err instanceof ForewrightError) {
         this.store.recordEvent(`${decision.kind}.refused`, "decision", decision.id, { kind: "system" }, { code: err.code, message: err.message });

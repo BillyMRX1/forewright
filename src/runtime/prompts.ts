@@ -60,6 +60,8 @@ export interface WorkerPromptInput {
   handoff: string | null;
   /** Memory notes for a fresh session (see memoryPromptSection); empty or absent when resuming. */
   memory?: string;
+  /** Approved kickoff documents this task links to (see kickoffPromptSection); empty or absent when resuming or none. */
+  kickoff?: string;
   /** Set when this run continues an attempt that ran on another engine. */
   engineHandoff?: string;
   feedback: string[];
@@ -99,6 +101,7 @@ export function buildWorkerPrompt(i: WorkerPromptInput): string {
   if (i.requirements.length > 0) {
     sections.push(`## Requirements this task serves (approved PRD revision ${i.prdRevision ?? "?"})\n${i.requirements.map((r) => `- ${r.key}: ${r.text}`).join("\n")}`);
   }
+  if (i.kickoff) sections.push(i.kickoff);
   if (i.memory) sections.push(i.memory);
   if (i.handoff) sections.push(`## Handoff note\n${truncate(i.handoff, 4000)}`);
   if (i.engineHandoff) sections.push(i.engineHandoff);
@@ -163,6 +166,8 @@ export function ctoSystemPrompt(ctoName: string): string {
     "- Use request_decision for material choices, with options and your recommendation.",
     "- For a new project, once you understand Billy's brief and before the first PRD, offer him a kickoff pack: small (brief, requirements, test strategy) for a small tool, full otherwise. Billy starts it with /kickoff; you cannot.",
     "- While a kickoff pack is being written, write its pending documents with write_kickoff_doc. The PRD stays the authority for requirement keys and scope.",
+    "- A written kickoff document changes only through propose_kickoff_revision: Billy approves or declines it in the Inbox, and the file never changes before that. Never rewrite one another way.",
+    "- After Billy approves the kickoff pack, link each task to the documents its worker needs with kickoff_docs (on create_task or update_task). Workers see only the approved versions of those documents.",
     "- In plan-only mode tasks may be created, but none starts until Billy turns the mode off.",
     "- If the repository has no commits yet, tasks cannot start (agents branch from a commit). Call create_initial_commit yourself: it makes an empty commit with Billy's git identity. Then tell Billy you did it. If it fails (for example git does not know Billy's name and email), pass on what to fix; Billy can also choose \"Create initial commit\" in Settings or the command palette.",
     "- At the end of a turn that taught you something lasting, call update_memory with your notes for a future session: decisions, conventions, where things are, open questions. Keep them short and free of secrets.",

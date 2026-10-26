@@ -9,7 +9,8 @@ import { helpLines } from "./keys.js";
 import { markdownLines } from "./markdown.js";
 import { borderStyle, palette, statusGlyph, sym } from "./theme.js";
 import type { RequirementDoc } from "../core/store-types.js";
-import type { KickoffState } from "../runtime/protocol.js";
+import type { KickoffProposalState, KickoffState } from "../runtime/protocol.js";
+import { ClientError } from "./client.js";
 
 /** A small centered card that asks a yes or no question. */
 export function ConfirmCard({ text, width, height }: { text: string; width: number; height: number }) {
@@ -98,7 +99,8 @@ type KickoffDocRow = KickoffState["docs"][number];
 export function kickoffMarker(d: KickoffDocRow): { text: string; color: string } {
   if (d.status === "pending") return { text: "pending", color: palette.muted };
   if (d.missing) return { text: "missing", color: palette.error };
-  if (d.edited) return { text: "edited by you", color: palette.attention };
+  if (d.edited) return { text: d.proposal ? "edited by you, revision proposed" : "edited by you", color: palette.attention };
+  if (d.proposal) return { text: "revision proposed", color: palette.attention };
   return { text: "written", color: palette.done };
 }
 
@@ -115,6 +117,11 @@ export function kickoffListLines(state: KickoffState, sel: number, width: number
     else lines.push({ text, segs: [{ text: `  ${glyph} ${d.title.padEnd(titleW)}  ` }, { text: m.text, color: m.color }, { text: version ? `  ${version}` : "", dim: true }] });
   });
   lines.push({ text: "" });
+  if (state.pack?.status === "ready") {
+    const a = state.approval;
+    const words = state.approvedCurrent ? `Revision ${state.pack.revision} is approved.` : a ? `Revision ${state.pack.revision}. It changed since you approved revision ${a.revision}.` : `Revision ${state.pack.revision}. You have not approved the pack yet.`;
+    for (const l of wrapText(words, width)) lines.push({ text: l, dim: true });
+  }
   if (state.pack?.status === "generating") {
     for (const l of wrapText("The CTO is writing the pending documents. Written ones are never replaced, and your edits to the files stay as they are. If nothing moves, press r to ask again.", width)) lines.push({ text: l, dim: true });
   }
@@ -122,20 +129,44 @@ export function kickoffListLines(state: KickoffState, sel: number, width: number
   return lines;
 }
 
+/** What the open document shows when its proposed revision is on: why, the tasks it touches, and the changes. */
+export function proposalLines(p: KickoffProposalState, width: number): DLine[] {
+  const lines: DLine[] = [{ text: "Proposed revision", bold: true }];
+  for (const l of wrapText(`Why: ${p.summary}`, width)) lines.push({ text: l });
+  for (const l of wrapText(p.affectedTasks.length > 0 ? `Tasks whose worker reads this document: ${p.affectedTasks.join(", ")}.` : "No task reads this document yet.", width)) lines.push({ text: l, dim: true });
+  for (const l of wrapText("Answer it in the Inbox. Nothing changes on disk until you do.", width)) lines.push({ text: l, dim: true });
+  lines.push({ text: "" });
+  for (const d of diffLines(p.current, p.proposed)) lines.push({ text: `${d.kind === "add" ? "+ " : d.kind === "del" ? "- " : "  "}${d.text}`, ...(d.kind === "add" ? { color: palette.done } : d.kind === "del" ? { color: palette.error } : {}) });
+  return lines;
+}
+
+/** The pill of a pack that is written: approved, changed since the approval, or not approved. */
+export function kickoffPill(state: KickoffState): { text: string; color: string } {
+  if (state.approvedCurrent && state.approval) return { text: `approved r${state.approval.revision}`, color: palette.done };
+  return { text: state.approval ? "changed since approval" : "not approved", color: palette.attention };
+}
+
+/** The folder an export goes to when Billy does not choose: under the project root, beside the code and never inside it by accident. */
+export const KICKOFF_EXPORT_DIR = "docs/kickoff";
+
 /**
  * The kickoff pack. With none yet, f starts a full pack and s a small one. With a pack, the documents and their
- * state; enter reads one, esc goes back, esc again closes. r asks the CTO again while the pack is being written.
+ * state; enter reads one, esc goes back, esc again closes. r asks the CTO again while the pack is being written,
+ * a approves the revision, k keeps an edit of yours, x exports. In a document, p shows the CTO's proposed revision.
  */
-export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onScope: (scope: "kickoff.empty" | "kickoff" | "kickoff.doc") => void }) {
+export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onScope: (scope: string) => void }) {
   const ctx = useCtx();
   const { api, projectId } = ctx;
   const { data, reload } = useLoad(() => api.call("state.kickoff", { projectId }));
   const [sel, setSel] = useState(0);
   const [open, setOpen] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<KickoffProposalState | null>(null);
+  const [showProposal, setShowProposal] = useState(false);
+  const [ask, setAsk] = useState<{ text: string; onYes: () => void } | null>(null);
   const pack = data?.pack ?? null;
   const docs = data?.docs ?? [];
-  const scope = open !== null ? "kickoff.doc" : pack ? "kickoff" : "kickoff.empty";
+  const scope = ask ? "confirm" : open !== null ? "kickoff.doc" : pack ? "kickoff" : "kickoff.empty";
   useEffect(() => onScope(scope), [scope, onScope]);
   const openDoc = open !== null ? docs.find((d) => d.key === open) : undefined;
   // Read the open document again whenever the pack changes (a new version or an edit).
@@ -157,12 +188,80 @@ export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onSco
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, openDoc?.version, openDoc?.edited, ctx.tick]);
+  // The open proposal of the open document, read again when it changes.
+  const proposalId = openDoc?.proposal?.id ?? null;
+  useEffect(() => {
+    if (open === null || proposalId === null) {
+      setProposal(null);
+      return;
+    }
+    let cancelled = false;
+    api.call("kickoff.proposal", { projectId, key: open }).then(
+      (r) => {
+        if (!cancelled) setProposal(r);
+      },
+      (err: unknown) => {
+        if (!cancelled) ctx.fail(err);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, proposalId, ctx.tick]);
   const start = (scale: "small" | "full") =>
     api.call("kickoff.start", { projectId, scale }).then(() => {
       ctx.notify(scale === "full" ? "Kickoff pack started. The CTO writes the documents now." : "Small kickoff pack started. The CTO writes the documents now.");
       reload();
     }, ctx.fail);
+  const exportTo = (overwrite: boolean) => {
+    const where = `${ctx.root}/${KICKOFF_EXPORT_DIR}`;
+    api.call("kickoff.export", { projectId, dir: KICKOFF_EXPORT_DIR, ...(overwrite ? { overwrite: true } : {}) }).then(
+      (r) => ctx.notify(`Exported ${r.files.length} files to ${r.dir}. Nothing was staged or committed.`),
+      (err: unknown) => {
+        const conflicts = err instanceof ClientError ? conflictsOf(err) : null;
+        if (conflicts === null || overwrite) return ctx.fail(err);
+        setAsk({ text: `Replace ${conflicts.length} existing ${conflicts.length === 1 ? "file" : "files"} in ${where}?`, onYes: () => exportTo(true) });
+      },
+    );
+  };
+  const approve = () => {
+    if (!pack) return;
+    if (pack.status !== "ready") return ctx.notify(`The pack is still being written: ${docs.filter((d) => d.status === "pending").length} documents are pending.`);
+    if (data?.approvedCurrent) return ctx.notify(`Revision ${pack.revision} is already approved.`);
+    const edited = docs.find((d) => d.edited);
+    if (edited) return ctx.notify(`You edited ${edited.title}. Select it and press k to keep your edit first, so the approval covers what is on disk.`);
+    const missing = docs.find((d) => d.missing);
+    if (missing) return ctx.notify(`The file of ${missing.title} is missing from the pack folder. Restore it first.`);
+    const revision = pack.revision;
+    setAsk({
+      text: `Approve kickoff pack revision ${revision}? Workers then get these versions.`,
+      onYes: () => void api.call("kickoff.approve", { projectId, revision }).then(() => (ctx.notify(`Approved kickoff pack revision ${revision}.`), reload()), (err: unknown) => (ctx.fail(err), reload())),
+    });
+  };
+  const keepEdit = () => {
+    const d = docs[Math.min(sel, docs.length - 1)];
+    if (!d) return;
+    if (!d.edited) return ctx.notify(`You have not edited ${d.title}; there is nothing to keep.`);
+    setAsk({
+      text: `Keep your edit of ${d.title} as version ${d.version + 1}?`,
+      onYes: () => void api.call("kickoff.keepEdit", { projectId, key: d.key }).then(() => (ctx.notify(`Kept your edit of ${d.title} as version ${d.version + 1}.`), reload()), ctx.fail),
+    });
+  };
+  const exportAsk = () => {
+    const n = docs.filter((d) => d.status === "written").length;
+    if (n === 0) return ctx.notify("There is nothing to export yet: no document is written.");
+    setAsk({ text: `Export ${n} ${n === 1 ? "document" : "documents"} to ${ctx.root}/${KICKOFF_EXPORT_DIR}?`, onYes: () => exportTo(false) });
+  };
   useInput((input, key) => {
+    if (ask) {
+      if (input === "y" || input === "Y") {
+        const a = ask;
+        setAsk(null);
+        a.onYes();
+      } else if (input === "n" || input === "N" || key.escape) setAsk(null);
+      return;
+    }
     if (!data) {
       if (key.escape || input === "q") onClose();
       return;
@@ -171,6 +270,10 @@ export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onSco
       if (key.escape || input === "q") {
         setOpen(null);
         setText(null);
+        setShowProposal(false);
+      } else if (input === "p") {
+        if (!openDoc?.proposal) ctx.notify("No revision is proposed for this document.");
+        else setShowProposal((v) => !v);
       }
       return;
     }
@@ -188,22 +291,34 @@ export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onSco
       if (d.status === "pending") return ctx.notify(`${d.title} is not written yet.`);
       if (d.missing) return ctx.notify(`The file of ${d.title} is missing from the pack folder.`);
       setText(null);
+      setShowProposal(false);
       setOpen(d.key);
     } else if (input === "r") {
       if (pack.status !== "generating") return ctx.notify("The pack is complete. Nothing to ask for.");
       api.call("kickoff.start", { projectId, scale: pack.scale }).then(() => ctx.notify("Asked the CTO again to write the pending documents."), ctx.fail);
-    }
+    } else if (input === "a") approve();
+    else if (input === "k") keepEdit();
+    else if (input === "x") exportAsk();
   });
   const w = ctx.bodyWidth;
   const h = ctx.bodyHeight;
   const written = docs.filter((d) => d.status === "written").length;
-  const pill = pack ? <Chip text={`${sym().bullet} ${pack.status === "ready" ? "ready" : `writing ${written}/${docs.length}`}`} color={pack.status === "ready" ? palette.done : palette.attention} /> : undefined;
+  const pillSpec = data && pack ? (pack.status === "ready" ? kickoffPill(data) : { text: `writing ${written}/${docs.length}`, color: palette.attention }) : null;
+  const pill = pillSpec ? <Chip text={`${sym().bullet} ${pillSpec.text}`} color={pillSpec.color} /> : undefined;
   let body;
-  if (!data) body = <SafeText dimColor>Loading...</SafeText>;
+  if (ask) body = <ConfirmCard text={ask.text} width={w} height={Math.max(1, h - 1)} />;
+  else if (!data) body = <SafeText dimColor>Loading...</SafeText>;
   else if (openDoc) {
     const m = kickoffMarker(openDoc);
     const head: DLine[] = [{ text: `${openDoc.title}  ${m.text}${openDoc.version > 0 ? `  v${openDoc.version}` : ""}`, bold: true }, { text: "" }];
-    body = text === null ? <SafeText dimColor>Loading...</SafeText> : <ScrollLines lines={[...head, ...markdownLines(text, w)]} height={Math.max(1, h - 1)} width={w} arrows resetKey={openDoc.key} />;
+    if (showProposal && proposal) body = <ScrollLines lines={[...head, ...proposalLines(proposal, w)]} height={Math.max(1, h - 1)} width={w} arrows resetKey={`${openDoc.key}:proposal`} />;
+    else {
+      if (openDoc.proposal) {
+        for (const l of wrapText("The CTO proposed a revision of this document. Press p to see the changes; answer it in the Inbox.", w)) head.push({ text: l, color: palette.attention });
+        head.push({ text: "" });
+      }
+      body = text === null ? <SafeText dimColor>Loading...</SafeText> : <ScrollLines lines={[...head, ...markdownLines(text, w)]} height={Math.max(1, h - 1)} width={w} arrows resetKey={openDoc.key} />;
+    }
   } else if (!pack) {
     const lines: DLine[] = [];
     for (const l of wrapText("There is no kickoff pack yet. A kickoff pack is a set of planning documents the CTO writes once from your brief and the repository, so later planning starts from shared, written assumptions.", w)) lines.push({ text: l });
@@ -220,4 +335,15 @@ export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onSco
       {body}
     </Box>
   );
+}
+
+/** The files an export refused to replace, from the error the service sent; null when the error is something else. */
+function conflictsOf(err: ClientError): string[] | null {
+  if (err.detail === null) return null;
+  try {
+    const parsed = JSON.parse(err.detail) as { conflicts?: unknown };
+    return Array.isArray(parsed.conflicts) && parsed.conflicts.every((c) => typeof c === "string") && parsed.conflicts.length > 0 ? (parsed.conflicts as string[]) : null;
+  } catch {
+    return null;
+  }
 }

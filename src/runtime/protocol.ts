@@ -58,8 +58,22 @@ export interface RuntimeStatus {
 
 export interface KickoffState {
   pack: KickoffPack | null;
-  docs: Array<KickoffDoc & { edited: boolean; missing: boolean }>;
+  docs: Array<KickoffDoc & { edited: boolean; missing: boolean; proposal: { id: string; summary: string; decisionId: string | null; createdAt: string } | null }>;
   dir: string | null;
+  /** The latest approval of the pack, or null when Billy never approved it. */
+  approval: { revision: number; approvedAt: string } | null;
+  /** True while the latest approval covers the pack's current revision. */
+  approvedCurrent: boolean;
+}
+
+/** The open revision proposal of one document: both texts, why, and the tasks whose worker reads the document. */
+export interface KickoffProposalState {
+  key: string;
+  current: string;
+  proposed: string;
+  summary: string;
+  decisionId: string | null;
+  affectedTasks: string[];
 }
 
 export type Overview = ReturnType<Store["overview"]>;
@@ -115,6 +129,8 @@ export interface Methods {
   "state.kickoff": { params: { projectId: string }; result: KickoffState };
   /** The current text of a written kickoff document, Billy's edits included. */
   "kickoff.doc": { params: { projectId: string; key: string }; result: { key: string; text: string } };
+  /** The open revision proposal of a document, or null when it has none. */
+  "kickoff.proposal": { params: { projectId: string; key: string }; result: KickoffProposalState | null };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
   "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
@@ -134,6 +150,12 @@ export interface Methods {
   "prd.approve": { params: { projectId: string; revision: number }; result: { doc: RequirementDoc; affectedTaskIds: string[] } };
   /** Starts the project's kickoff pack, or asks the CTO again for one that is still being written. Returns state.kickoff. */
   "kickoff.start": { params: { projectId: string; scale: KickoffScale }; result: KickoffState };
+  /** Billy approves the pack revision he read; refused when the pack changed since or a document is edited or missing. Returns state.kickoff. */
+  "kickoff.approve": { params: { projectId: string; revision: number }; result: KickoffState };
+  /** Billy keeps his own edit of a document as its next version. Returns state.kickoff. */
+  "kickoff.keepEdit": { params: { projectId: string; key: string }; result: KickoffState };
+  /** Billy copies the pack's files to a folder (relative paths are under the project root). A differing file there blocks the export unless `overwrite`. */
+  "kickoff.export": { params: { projectId: string; dir: string; overwrite?: boolean }; result: { dir: string; files: string[] } };
   "decisions.resolve": { params: { projectId: string; decisionId: string; option: string; note?: string }; result: { decision: Decision } };
   "settings.set": { params: { projectId: string; key: string; value: unknown }; result: { settings: Settings } };
   "agents.update": {

@@ -19,6 +19,8 @@ export type ActionName =
   | "send_message"
   | "update_memory"
   | "write_kickoff_doc"
+  | "propose_kickoff_revision"
+  | "approve_kickoff"
   | "request_decision"
   | "submit_work"
   | "submit_review"
@@ -61,7 +63,7 @@ export interface ActionContext {
 
 export type AuthDecision = { allowed: true };
 
-const HUMAN_ONLY: ReadonlySet<ActionName> = new Set(["approve_prd", "resolve_decision", "change_authority"]);
+const HUMAN_ONLY: ReadonlySet<ActionName> = new Set(["approve_prd", "approve_kickoff", "resolve_decision", "change_authority"]);
 const GATED: Readonly<Record<string, keyof Authority>> = {
   merge_to_user_branch: "mergeToUserBranch",
   publish: "publish",
@@ -77,6 +79,7 @@ const CTO_ACTIONS: ReadonlySet<ActionName> = new Set([
   "send_message",
   "update_memory",
   "write_kickoff_doc",
+  "propose_kickoff_revision",
   "request_decision",
   "request_integration",
   "read_state",

@@ -17,6 +17,7 @@ import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
 import { memoryPromptSection } from "./memory.js";
+import { kickoffPromptSection } from "./kickoff.js";
 import { overflowedRun, sessionIsFull } from "./overflow.js";
 
 export const taskPort = (shortId: string): number => 41000 + Number(shortId.slice(2)) * 10;
@@ -205,7 +206,7 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
       task: current,
       requirements,
       prdRevision: doc?.revision ?? null,
-      ...(canResume ? {} : { memory: memoryPromptSection(rt.projectId, agent.id) }),
+      ...(canResume ? {} : { memory: memoryPromptSection(rt.projectId, agent.id), kickoff: kickoffPromptSection(store, current) }),
       handoff,
       ...(engineHandoff ? { engineHandoff } : {}),
       feedback: [...shownFeedback.values()].map((m) => `- ${truncate(m.body, 3000)}`),

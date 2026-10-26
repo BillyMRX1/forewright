@@ -3,12 +3,13 @@
 // data directory, never in the repository. A written document is never rewritten here, and an owner's edit
 // on disk is detected by hash and left alone. Every written version is kept for later diffs.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { NotFoundError, ValidationError } from "../core/errors.js";
-import { projectDir } from "../core/paths.js";
-import { redactSecrets } from "../core/safety.js";
-import type { KickoffDoc, KickoffPack, KickoffScale, Store } from "../core/store.js";
+import { forewrightHome, projectDir } from "../core/paths.js";
+import { newId } from "../core/ids.js";
+import { redactSecrets, truncate } from "../core/safety.js";
+import type { Decision, DecisionOption, KickoffApproval, KickoffDoc, KickoffPack, KickoffScale, Store, Task } from "../core/store.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 
 export interface KickoffDocSpec {
@@ -47,6 +48,7 @@ const specOf = (key: string): KickoffDocSpec | undefined => KICKOFF_DOCS.find((d
 export const kickoffDir = (projectId: string): string => path.join(projectDir(projectId), "kickoff");
 const currentPath = (projectId: string, key: string): string => path.join(kickoffDir(projectId), `${key}.md`);
 const versionPath = (projectId: string, key: string, version: number): string => path.join(kickoffDir(projectId), "versions", `${key}.v${version}.md`);
+const proposalPath = (projectId: string, id: string): string => path.join(kickoffDir(projectId), "proposals", `${id}.md`);
 
 const sha256 = (data: string | Buffer): string => createHash("sha256").update(data).digest("hex");
 
@@ -100,25 +102,52 @@ export function readKickoffDoc(projectId: string, key: string): string {
   return readFileSync(file, "utf8");
 }
 
-export type KickoffDocView = KickoffDoc & { edited: boolean; missing: boolean };
+export interface KickoffDocProposal {
+  id: string;
+  summary: string;
+  decisionId: string | null;
+  createdAt: string;
+}
+
+export type KickoffDocView = KickoffDoc & { edited: boolean; missing: boolean; proposal: KickoffDocProposal | null };
 
 export interface KickoffView {
   pack: KickoffPack | null;
   docs: KickoffDocView[];
   dir: string | null;
+  /** The latest approval of the pack, or null when Billy never approved it. */
+  approval: { revision: number; approvedAt: string } | null;
+  /** True while the latest approval covers the pack's current revision. */
+  approvedCurrent: boolean;
 }
 
 /** The manifest with what is on disk: `edited` when the file differs from what Forewright wrote, `missing` when it is gone. */
 export function kickoffView(store: Store): KickoffView {
   const found = store.getKickoffPack();
-  if (!found) return { pack: null, docs: [], dir: null };
+  if (!found) return { pack: null, docs: [], dir: null, approval: null, approvedCurrent: false };
+  const open = store.listKickoffProposals({ status: "open" });
   const docs = found.docs.map((d): KickoffDocView => {
-    if (d.status !== "written") return { ...d, edited: false, missing: false };
+    const p = open.find((x) => x.key === d.key);
+    const proposal = p ? { id: p.id, summary: p.summary, decisionId: p.decisionId, createdAt: p.createdAt } : null;
+    if (d.status !== "written") return { ...d, edited: false, missing: false, proposal };
     const file = currentPath(store.projectId, d.key);
-    if (!existsSync(file)) return { ...d, edited: false, missing: true };
-    return { ...d, edited: sha256(readFileSync(file)) !== d.sha256, missing: false };
+    if (!existsSync(file)) return { ...d, edited: false, missing: true, proposal };
+    return { ...d, edited: sha256(readFileSync(file)) !== d.sha256, missing: false, proposal };
   });
-  return { pack: found.pack, docs, dir: kickoffDir(store.projectId) };
+  const approval = store.latestKickoffApproval();
+  return {
+    pack: found.pack,
+    docs,
+    dir: kickoffDir(store.projectId),
+    approval: approval ? { revision: approval.revision, approvedAt: approval.approvedAt } : null,
+    approvedCurrent: approval !== null && approval.revision === found.pack.revision,
+  };
+}
+
+/** The pack's approval in words: what the CTO and Billy see next to the revision number. */
+function approvalWords(v: KickoffView): string {
+  if (v.approvedCurrent) return "approved";
+  return v.approval ? `changed since approval r${v.approval.revision}` : "not approved yet";
 }
 
 /** The digest section: a line when the pack is ready, the pending documents and how to write them while it is generating. */
@@ -128,13 +157,323 @@ export function kickoffDigest(store: Store): string | null {
   const written = v.docs.filter((d) => d.status === "written");
   const pending = v.docs.filter((d) => d.status === "pending");
   const writtenText = written.length === 0 ? "none" : written.map((d) => `${d.key}${d.edited ? " (edited by Billy)" : d.missing ? " (file missing)" : ""}`).join(", ");
-  const head = `Kickoff pack (${v.pack.scale}, ${v.pack.status}). Written: ${writtenText}.`;
-  if (pending.length === 0) return `${head} Read a document with read_kickoff_doc.`;
+  const proposed = v.docs.filter((d) => d.proposal !== null).map((d) => d.key);
+  const head = `Kickoff pack (${v.pack.scale}, ${v.pack.status}, revision ${v.pack.revision}, ${approvalWords(v)}). Written: ${writtenText}.${proposed.length > 0 ? ` Open revision proposals, waiting for Billy: ${proposed.join(", ")}.` : ""}`;
+  if (pending.length === 0) return `${head} Read a document with read_kickoff_doc. A written document changes only through propose_kickoff_revision.`;
   return [
     `${head} Pending, in order:`,
     ...pending.map((d) => `- ${d.key}: ${specOf(d.key)?.purpose ?? d.title}`),
     "Write each pending document with write_kickoff_doc, in this order, one call per document. Read written ones with read_kickoff_doc (Billy may have edited them; never contradict his edits). Base them on Billy's brief in the CTO channel and on the repository. Make them specific to this project, never empty templates, and keep verified facts apart from proposals. Then propose the PRD with propose_prd, using the same R- keys as the requirements document.",
   ].join("\n");
+}
+
+// ---------------------------------------------------------------- approval and Billy's edits
+
+const titleOf = (key: string): string => specOf(key)?.title ?? key;
+
+/**
+ * Billy approves the pack revision he read. Refused while a document is edited or missing, so the approval covers
+ * exactly what is on disk; the store refuses a revision that is no longer current. Then the CTO is told to link tasks.
+ */
+export function approveKickoffPack(rt: ProjectRuntime, revision: number): KickoffApproval {
+  const v = kickoffView(rt.store);
+  if (!v.pack) throw new NotFoundError("Kickoff pack");
+  for (const d of v.docs) {
+    if (d.edited) throw new ValidationError(`Keep or undo your edit of ${d.title} first, so the approval covers what is on disk.`, { key: d.key });
+    if (d.missing) throw new ValidationError(`Keep or undo your edit of ${d.title} first, so the approval covers what is on disk: its file is missing from the pack folder.`, { key: d.key });
+  }
+  const approval = rt.store.approveKickoffPack({
+    revision,
+    docs: v.docs.map((d) => ({ key: d.key, version: d.version, sha256: d.sha256 ?? "" })),
+    by: { kind: "human" },
+  });
+  rt.notifyCto(`kickoff-approved:${approval.revision}`, `Billy approved kickoff pack revision ${approval.revision}. Link tasks to the documents they need with kickoff_docs.`);
+  rt.publish();
+  return approval;
+}
+
+/** Billy keeps his own edit of a document as its next version (the file stays as he wrote it). */
+export function keepOwnerEdit(rt: ProjectRuntime, key: string): KickoffDoc {
+  if (!specOf(key)) throw new NotFoundError(`Kickoff document ${key}`, { key });
+  const doc = kickoffView(rt.store).docs.find((d) => d.key === key);
+  if (!doc) throw new NotFoundError(`Kickoff document ${key}`, { key });
+  if (doc.missing) throw new ValidationError(`The file of ${doc.title} is missing from the pack folder.`, { key });
+  if (!doc.edited) throw new ValidationError(`You have not edited ${doc.title}; there is nothing to keep.`, { key });
+  const bytes = readFileSync(currentPath(rt.projectId, key));
+  const version = doc.version + 1;
+  writeAtomic(versionPath(rt.projectId, key, version), bytes.toString("utf8"));
+  const kept = rt.store.recordKickoffOwnerEdit({ key, sha256: sha256(bytes), by: { kind: "human" } });
+  rt.notifyCto(`kickoff-edit:${key}:${kept.version}`, `Billy edited the kickoff ${doc.title} and kept it as version ${kept.version}. Read it with read_kickoff_doc before you rely on it, and never contradict his edit.`);
+  rt.publish();
+  return kept;
+}
+
+// ---------------------------------------------------------------- revision proposals
+
+/** A compact line diff of two texts: changed lines with up to two lines of context, "..." between hunks. */
+export function compactDiff(oldText: string, newText: string, cap = 4000): string {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  type Op = { kind: " " | "-" | "+"; text: string };
+  const ops: Op[] = [];
+  if (a.length * b.length > 4_000_000) {
+    ops.push(...a.map((text): Op => ({ kind: "-", text })), ...b.map((text): Op => ({ kind: "+", text })));
+  } else {
+    const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+    let i = 0;
+    let j = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) {
+        ops.push({ kind: " ", text: a[i]! });
+        i++;
+        j++;
+      } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) ops.push({ kind: "-", text: a[i++]! });
+      else ops.push({ kind: "+", text: b[j++]! });
+    }
+    while (i < a.length) ops.push({ kind: "-", text: a[i++]! });
+    while (j < b.length) ops.push({ kind: "+", text: b[j++]! });
+  }
+  const keep = new Array<boolean>(ops.length).fill(false);
+  ops.forEach((o, i) => {
+    if (o.kind === " ") return;
+    for (let k = Math.max(0, i - 2); k <= Math.min(ops.length - 1, i + 2); k++) keep[k] = true;
+  });
+  const out: string[] = [];
+  let gap = false;
+  ops.forEach((o, i) => {
+    if (!keep[i]) {
+      gap = true;
+      return;
+    }
+    if (gap && out.length > 0) out.push("...");
+    gap = false;
+    out.push(`${o.kind} ${o.text}`);
+  });
+  const text = out.join("\n");
+  return text.length > cap ? `${text.slice(0, cap)}\n... (cut; full diff in /kickoff)` : text;
+}
+
+const ACTION = "kickoff_revise";
+
+/** Open (non-terminal) tasks whose worker reads this document. */
+function tasksLinkedTo(store: Store, key: string): Task[] {
+  return store.listTasks().filter((t) => t.state !== "done" && t.state !== "cancelled" && t.kickoffDocs.includes(key));
+}
+
+/**
+ * The CTO proposes a new text for a written document. Nothing on disk changes: the text is kept beside the pack, and
+ * Billy answers an Inbox decision that shows the difference, the tasks it touches, and (when he edited the file
+ * himself) that applying it would replace his edit.
+ */
+export function proposeKickoffRevision(rt: ProjectRuntime, agentId: string, input: { key: string; body: string; summary: string }): { proposal: string; decision: string; affectedTasks: string[] } {
+  const { store } = rt;
+  const found = store.getKickoffPack();
+  if (!found) throw new NotFoundError("Kickoff pack");
+  const doc = found.docs.find((d) => d.key === input.key);
+  if (!doc) throw new ValidationError(`This pack has no "${input.key}" document. Its documents: ${found.docs.map((d) => d.key).join(", ")}.`, { key: input.key });
+  if (doc.status !== "written") throw new ValidationError(`The ${doc.title} document is not written yet. Write it with write_kickoff_doc.`, { key: input.key });
+  const file = currentPath(rt.projectId, input.key);
+  if (!existsSync(file)) throw new ValidationError(`The file of ${doc.title} is missing from the pack folder, so it cannot be revised.`, { key: input.key });
+  const clean = redactSecrets(input.body).trim();
+  if (clean === "") throw new ValidationError("The revised document is empty. Write its full text.", { key: input.key });
+  if (clean.length > KICKOFF_DOC_CAP) throw new ValidationError(`The document is too long (${clean.length} characters, limit ${KICKOFF_DOC_CAP}).`, { key: input.key, length: clean.length });
+  if (input.key === "requirements" && !/\bR-\d{3,}\b/.test(clean)) throw new ValidationError("The requirements document needs stable requirement keys like R-001, R-002.", { key: input.key });
+  const summary = redactSecrets(input.summary).trim();
+  if (summary === "") throw new ValidationError("Say what changes and why in a short summary.", { key: input.key });
+  const proposed = `${clean}\n`;
+  const current = readFileSync(file, "utf8");
+  if (proposed === current) throw new ValidationError(`The proposed text equals the current ${doc.title}. Nothing to revise.`, { key: input.key });
+
+  const baseSha256 = sha256(Buffer.from(current, "utf8"));
+  const proposalSha256 = sha256(Buffer.from(proposed, "utf8"));
+  const edited = baseSha256 !== doc.sha256;
+  const affected = tasksLinkedTo(store, input.key);
+  const id = newId("kpr");
+  writeAtomic(proposalPath(rt.projectId, id), proposed);
+  const diff = compactDiff(current, proposed);
+  const options: DecisionOption[] = edited
+    ? [
+        { key: "use_cto", label: "Use the CTO's version (replaces your edit)", consequence: `${doc.title} becomes the CTO's text as version ${doc.version + 1}. Your edit is saved in the versions folder first.`, approves: true },
+        { key: "keep_mine", label: "Keep your edit", consequence: "The file stays exactly as you edited it. The CTO is told." },
+      ]
+    : [
+        { key: "apply", label: "Apply the revision", consequence: `${doc.title} becomes the proposed text as version ${doc.version + 1}.`, approves: true },
+        { key: "keep", label: "Keep the current version", consequence: "Nothing changes on disk. The CTO is told." },
+      ];
+  const question = [
+    ...(edited ? ["You edited this file. Applying the CTO's version replaces your edit (a copy of it is kept).", ""] : []),
+    `The CTO proposes a revision of the kickoff ${doc.title} (now version ${doc.version}).`,
+    `Why: ${summary}`,
+    "",
+    "Changes:",
+    diff,
+  ].join("\n");
+  const { proposal, decision } = store.createKickoffProposal({
+    id,
+    key: input.key,
+    baseSha256,
+    proposalSha256,
+    summary,
+    author: `agent:${agentId}`,
+    decision: (proposalId) => ({
+      kind: "scope",
+      title: `Revise the kickoff ${doc.title}?`,
+      question,
+      options,
+      recommendation: edited ? "keep_mine" : "apply",
+      impact: affected.length > 0 ? `Tasks whose worker reads this document: ${affected.map((t) => t.shortId).join(", ")}.` : "No task reads this document yet.",
+      affectedTaskIds: affected.map((t) => t.id),
+      boundAction: { action: ACTION, proposalId, key: input.key, baseSha256, proposalSha256 },
+      createdBy: agentId,
+    }),
+  });
+  rt.publish();
+  return { proposal: proposal.id, decision: decision.id, affectedTasks: affected.map((t) => t.shortId) };
+}
+
+/** What the viewer shows for a document's open proposal: both texts, the summary and the tasks it touches. */
+export function kickoffProposalView(rt: ProjectRuntime, key: string): { key: string; current: string; proposed: string; summary: string; decisionId: string | null; affectedTasks: string[] } | null {
+  const p = rt.store.listKickoffProposals({ key, status: "open" }).at(-1);
+  if (!p) return null;
+  const file = proposalPath(rt.projectId, p.id);
+  if (!existsSync(file)) throw new NotFoundError(`The text of the revision proposal for ${key}`, { key, file });
+  return {
+    key,
+    current: readKickoffDoc(rt.projectId, key),
+    proposed: readFileSync(file, "utf8"),
+    summary: p.summary,
+    decisionId: p.decisionId,
+    affectedTasks: tasksLinkedTo(rt.store, key).map((t) => t.shortId),
+  };
+}
+
+/**
+ * Billy answered a revision decision. Declined: the proposal closes and nothing on disk changes. Approved: the
+ * approval is consumed, and the text is written only when the file still is what the CTO proposed against; if Billy
+ * edited it since, nothing is written (proposal `conflict`) and the CTO is told to propose again from his text.
+ */
+export function resolveKickoffProposal(rt: ProjectRuntime, decision: Decision, approved: boolean): void {
+  const { store } = rt;
+  const bound = decision.boundAction as { proposalId?: string } | null;
+  if (!bound || typeof bound.proposalId !== "string") throw new ValidationError("This decision names no revision proposal.", { decisionId: decision.id });
+  const proposal = store.getKickoffProposal(bound.proposalId);
+  if (!approved) {
+    store.closeKickoffProposalFor(proposal.id, "declined", "Billy declined");
+    return;
+  }
+  if (proposal.status !== "open") throw new ValidationError(`The revision proposal is ${proposal.status}, so it was not applied.`, { proposalId: proposal.id, status: proposal.status });
+  store.consumeApproval(decision.id, { action: ACTION, proposalId: proposal.id, key: proposal.key, baseSha256: proposal.baseSha256, proposalSha256: proposal.proposalSha256 }, decision.boundRevision);
+  const doc = store.getKickoffPack()?.docs.find((d) => d.key === proposal.key);
+  if (!doc || doc.status !== "written") throw new ValidationError(`The ${titleOf(proposal.key)} document is not written, so the revision was not applied.`, { key: proposal.key });
+  const title = doc.title;
+  const file = currentPath(rt.projectId, proposal.key);
+  const onDisk = existsSync(file) ? readFileSync(file) : null;
+  if (onDisk === null || sha256(onDisk) !== proposal.baseSha256) {
+    store.closeKickoffProposalFor(proposal.id, "conflict", "the file changed after the proposal");
+    const why = `The kickoff ${title} changed on disk after the CTO proposed its revision, so the revision was not applied and your file is untouched.`;
+    store.postMessage({ channel: "cto", sender: { kind: "system" }, body: `${why} Ask the CTO to propose again from your current text.`, recipients: [], dedupeKey: `kickoff-conflict-note:${proposal.id}` });
+    rt.notifyCto(`kickoff-conflict:${proposal.id}`, `${why} Read the current text with read_kickoff_doc and propose the revision again from it.`);
+    return;
+  }
+  const proposalFile = proposalPath(rt.projectId, proposal.id);
+  if (!existsSync(proposalFile)) throw new NotFoundError(`The text of the revision proposal for ${proposal.key}`, { proposalId: proposal.id });
+  const text = readFileSync(proposalFile, "utf8");
+  if (sha256(Buffer.from(text, "utf8")) !== proposal.proposalSha256) throw new ValidationError("The stored text of the revision changed after it was proposed, so it was not applied.", { proposalId: proposal.id });
+  if (proposal.baseSha256 !== doc.sha256) {
+    // Billy's own edit is being replaced at his request: keep his bytes beside the versions first.
+    writeAtomic(path.join(kickoffDir(rt.projectId), "versions", `${proposal.key}.owner-${proposal.baseSha256.slice(0, 12)}.md`), onDisk.toString("utf8"));
+  }
+  writeAtomic(versionPath(rt.projectId, proposal.key, doc.version + 1), text);
+  writeAtomic(file, text);
+  const updated = store.recordKickoffRevision({ key: proposal.key, sha256: proposal.proposalSha256, author: proposal.author, proposalId: proposal.id });
+  for (const t of tasksLinkedTo(store, proposal.key)) {
+    if (!t.assigneeAgentId) continue;
+    store.postMessage({
+      channel: "direct",
+      taskId: t.id,
+      sender: { kind: "system" },
+      body: `The kickoff ${title} changed to version ${updated.version}: ${proposal.summary}`,
+      recipients: [t.assigneeAgentId],
+      dedupeKey: `kickoff-rev:${proposal.id}:${t.id}`,
+    });
+  }
+}
+
+// ---------------------------------------------------------------- export
+
+function writeFilePlain(file: string, data: string): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, file);
+}
+
+/**
+ * Billy copies the pack's current files (his edits included) into a folder he names, with a README index. Plain
+ * file writes only: nothing is staged or committed. A differing file already there blocks the whole export unless
+ * he chose to replace it.
+ */
+export function exportKickoff(rt: ProjectRuntime, dirInput: string, overwrite: boolean): { dir: string; files: string[] } {
+  const v = kickoffView(rt.store);
+  const written = v.docs.filter((d) => d.status === "written");
+  if (!v.pack || written.length === 0) throw new ValidationError("There is nothing to export yet: no kickoff document is written.");
+  if (dirInput.trim() === "") throw new ValidationError("Say which folder to export to.");
+  const dir = path.resolve(rt.root, dirInput);
+  const home = forewrightHome();
+  const rel = path.relative(home, dir);
+  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+    throw new ValidationError(`Export to a folder outside Forewright's own data folder (${home}).`, { dir });
+  }
+  const missing = written.filter((d) => d.missing);
+  if (missing.length > 0) throw new ValidationError(`The file of ${missing.map((d) => d.title).join(", ")} is missing from the pack folder, so the pack cannot be exported.`, { keys: missing.map((d) => d.key) });
+  const index = [
+    "# Kickoff pack",
+    "",
+    `Pack revision ${v.pack.revision}. ${v.approvedCurrent ? `This revision is the one Billy approved (revision ${v.approval!.revision}).` : v.approval ? `Not approved: the pack changed since the approval of revision ${v.approval.revision}.` : "Not approved yet."}`,
+    "",
+    "| Document | Version | File |",
+    "| --- | --- | --- |",
+    ...written.map((d) => `| ${d.title}${d.edited ? " (edited by Billy)" : ""} | ${d.version} | [${d.key}.md](${d.key}.md) |`),
+    "",
+  ].join("\n");
+  const targets = [...written.map((d) => ({ name: `${d.key}.md`, data: readFileSync(currentPath(rt.projectId, d.key), "utf8") })), { name: "README.md", data: index }];
+  const conflicts = targets.filter((t) => {
+    const f = path.join(dir, t.name);
+    return existsSync(f) && (statSync(f).isDirectory() || readFileSync(f, "utf8") !== t.data);
+  });
+  if (conflicts.length > 0 && !overwrite) {
+    throw new ValidationError(`These files already exist in ${dir} with different content: ${conflicts.map((c) => c.name).join(", ")}. Nothing was written.`, { conflicts: conflicts.map((c) => c.name), dir });
+  }
+  for (const t of targets) writeFilePlain(path.join(dir, t.name), t.data);
+  const files = targets.map((t) => t.name);
+  rt.store.recordKickoffExport({ dir, files, by: { kind: "human" } });
+  return { dir, files };
+}
+
+// ---------------------------------------------------------------- what workers read
+
+const DOC_PROMPT_CAP = 12 * 1024;
+const SECTION_PROMPT_CAP = 32 * 1024;
+
+/**
+ * The prompt section for a task's linked kickoff documents: "" when it links none or Billy never approved the pack.
+ * It names the approved versions of the latest approval (never a newer, unapproved one) and reads their files.
+ */
+export function kickoffPromptSection(store: Store, task: Task): string {
+  if (task.kickoffDocs.length === 0) return "";
+  const approval = store.latestKickoffApproval();
+  if (!approval) return "";
+  const blocks: string[] = [];
+  for (const key of task.kickoffDocs) {
+    const d = approval.docs.find((x) => x.key === key);
+    if (!d) continue;
+    const file = versionPath(store.projectId, key, d.version);
+    if (!existsSync(file)) continue;
+    blocks.push(`### ${titleOf(key)} (version ${d.version}, ${file})\n${truncate(readFileSync(file, "utf8").trim(), DOC_PROMPT_CAP)}`);
+  }
+  if (blocks.length === 0) return "";
+  return truncate(`## Kickoff documents (approved pack revision ${approval.revision}; read only)\n${blocks.join("\n\n")}`, SECTION_PROMPT_CAP);
 }
 
 export type NudgeReason = "start" | "progress" | "boot" | "billy";

@@ -18,7 +18,7 @@ import type { TokenRecord } from "./tokens.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { engineRoleProblem } from "./engine-roles.js";
 import { MEMORY_CAP_BYTES, writeMemory } from "./memory.js";
-import { KICKOFF_DOC_CAP, KICKOFF_KEYS, readKickoffDoc, writeKickoffDoc } from "./kickoff.js";
+import { KICKOFF_DOC_CAP, KICKOFF_KEYS, proposeKickoffRevision, readKickoffDoc, writeKickoffDoc } from "./kickoff.js";
 
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -113,6 +113,7 @@ function taskView(ctx: ToolCtx, taskRef: string): unknown {
     blockDetail: t.blockDetail,
     assignee: t.assigneeAgentId ? store.getAgent(t.assigneeAgentId).name : null,
     dependsOn: t.dependsOn.map((d) => store.getTask(d).shortId),
+    kickoffDocs: t.kickoffDocs,
     requirements: (doc?.requirements ?? []).filter((r) => t.requirementKeys.includes(r.key)),
     retries: t.retries,
     repairLoops: t.repairLoops,
@@ -204,6 +205,7 @@ const TOOLS: ToolDef[] = [
       requirement_keys: { type: "array", items: { type: "string" } },
       depends_on: { type: "array", items: { type: "string" } },
       assignee: { type: "string" },
+      kickoff_docs: { type: "array", items: { type: "string", enum: KICKOFF_KEYS }, description: "Kickoff documents the worker needs (approved versions are shown to it)" },
     },
     required: ["title", "requirement_keys"],
     roles: ["cto"],
@@ -223,6 +225,7 @@ const TOOLS: ToolDef[] = [
         verifyCommands: strList(a, "verify_commands", { max: 1000, maxItems: 20 }),
         requirementKeys: keys,
         dependsOn: strList(a, "depends_on", { max: 60 }),
+        ...(a["kickoff_docs"] === undefined ? {} : { kickoffDocs: strList(a, "kickoff_docs", { max: 60, maxItems: 20 }) }),
         ...(assignee ? { assignee: assignee.id } : {}),
         actor: ctx.actor,
       });
@@ -238,6 +241,7 @@ const TOOLS: ToolDef[] = [
       description: { type: "string" },
       acceptance: { type: "string" },
       verify_commands: { type: "array", items: { type: "string" } },
+      kickoff_docs: { type: "array", items: { type: "string", enum: KICKOFF_KEYS }, description: "Replaces the kickoff documents the worker is shown; changing only this does not make evidence stale" },
     },
     required: ["task"],
     roles: ["cto"],
@@ -250,8 +254,20 @@ const TOOLS: ToolDef[] = [
       const description = optStr(a, "description", 20_000);
       const acceptance = optStr(a, "acceptance", 10_000);
       const verify = a["verify_commands"] === undefined ? undefined : strList(a, "verify_commands", { max: 1000, maxItems: 20 });
-      const updated = store.updateTask(t.id, { ...(title !== undefined ? { title } : {}), ...(description !== undefined ? { description } : {}), ...(acceptance !== undefined ? { acceptance } : {}), ...(verify !== undefined ? { verifyCommands: verify } : {}) }, ctx.actor);
-      if (updated.assigneeAgentId) {
+      const kickoffDocs = a["kickoff_docs"] === undefined ? undefined : strList(a, "kickoff_docs", { max: 60, maxItems: 20 });
+      const updated = store.updateTask(t.id, { ...(kickoffDocs !== undefined ? { kickoffDocs } : {}), ...(title !== undefined ? { title } : {}), ...(description !== undefined ? { description } : {}), ...(acceptance !== undefined ? { acceptance } : {}), ...(verify !== undefined ? { verifyCommands: verify } : {}) }, ctx.actor);
+      if (updated.assigneeAgentId && updated.revision === t.revision) {
+        if (kickoffDocs !== undefined) {
+          store.postMessage({
+            channel: "task",
+            taskId: updated.id,
+            sender: { kind: "agent", id: ctx.agent.id },
+            body: `The CTO changed the kickoff documents of ${updated.shortId}: ${updated.kickoffDocs.join(", ") || "none"}. They show in your next fresh session.`,
+            recipients: [updated.assigneeAgentId],
+            dedupeKey: `task-kickoff-docs:${updated.id}:${updated.kickoffDocs.join(",")}`,
+          });
+        }
+      } else if (updated.assigneeAgentId) {
         store.postMessage({
           channel: "task",
           taskId: updated.id,
@@ -380,6 +396,24 @@ const TOOLS: ToolDef[] = [
       const key = oneOf(a, "key", KICKOFF_KEYS)!;
       const r = writeKickoffDoc(store, key, str(a, "body", { max: KICKOFF_DOC_CAP * 2 }), `agent:${ctx.agent.id}`);
       return { key, version: r.doc.version, written: r.docs.filter((d) => d.status === "written").map((d) => d.key), pending: r.docs.filter((d) => d.status === "pending").map((d) => d.key), status: r.pack.status };
+    },
+  },
+  {
+    name: "propose_kickoff_revision",
+    description: `Propose a new full text for a WRITTEN kickoff document (Markdown, at most ${KICKOFF_DOC_CAP} characters). Nothing changes on disk until Billy approves it in the Inbox, where he sees the difference and the tasks that read the document. Give a short summary of what changes and why. Keys: ${KICKOFF_KEYS.join(", ")}.`,
+    properties: {
+      key: { type: "string", enum: KICKOFF_KEYS },
+      body: { type: "string", description: "The whole revised document in Markdown" },
+      summary: { type: "string", description: "What changes and why, in a sentence or two" },
+    },
+    required: ["key", "body", "summary"],
+    roles: ["cto"],
+    action: "propose_kickoff_revision",
+    mutating: true,
+    run: (ctx, a) => {
+      if (!ctx.rt.store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
+      const r = proposeKickoffRevision(ctx.rt, ctx.agent.id, { key: oneOf(a, "key", KICKOFF_KEYS)!, body: str(a, "body", { max: KICKOFF_DOC_CAP * 2 }), summary: str(a, "summary", { max: 1000 }) });
+      return { ...r, note: "Billy decides in the Inbox. Nothing on disk changes until he approves." };
     },
   },
   {

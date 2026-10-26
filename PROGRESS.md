@@ -2,6 +2,19 @@
 
 Resumable log of the build. Newest state first.
 
+## Status (2026-10-26, kickoff review)
+
+Kickoff pack review, revision and export (issue #40).
+
+- [x] Approval bound to a pack revision (migration 7): every document version change bumps the pack revision, and Billy's approval records the revision with each document's version and hash. Refused while a document is pending, edited or missing, or when the pack changed since he read it. Agents can never approve. The pill shows approved rN, changed since approval, or not approved.
+- [x] Billy's own edits: `k` keeps an edit as the document's next version (his bytes, in `versions/`); open revision proposals for that document are superseded and their decisions made stale.
+- [x] CTO revisions through `propose_kickoff_revision` only: the text is kept beside the pack, an Inbox decision shows the summary, a compact diff and the tasks whose worker reads the document, and nothing changes on disk until Billy applies it. A file Billy edited gets use the CTO's version (his edit is saved first) or keep yours; an edit made after the proposal turns it into a conflict and nothing is written. A newer proposal supersedes the older one.
+- [x] Export (`x`): copies the current files and a README index to `docs/kickoff` (or any folder Billy names), refuses folders inside the data directory, blocks the whole export when a differing file exists unless he chose to replace, and never stages or commits.
+- [x] Workers get only the documents a task links with `kickoff_docs` (create_task, update_task), at the version of the latest approval, never a newer unapproved one.
+- [ ] Not done: a manual "undo my edit" action (Billy restores the file himself or keeps the edit).
+
+Verification: `pnpm typecheck`, `pnpm test`, see latest run.
+
 ## Status (2026-10-26)
 
 Kickoff pack core (issue #39): planning documents the CTO writes once for a new project, kept resumable and readable in the TUI, plus plan-only mode.
@@ -12,7 +25,7 @@ Kickoff pack core (issue #39): planning documents the CTO writes once for a new 
 - [x] Bounded nudging: the CTO is asked again only after progress, once per service start, or when Billy asks again; a turn that writes nothing ends it.
 - [x] TUI: `/kickoff` (and the palette) opens the pack: start a full or small pack, the documents with their state (pending, written, edited by you, missing) and version, the data folder, and each document rendered as Markdown.
 - [x] Plan-only mode: a Settings switch that holds back every work run while the CTO keeps planning; the top bar shows PLAN ONLY.
-- [ ] Review, revision and export of the pack (issue #40).
+- [ ] Review, revision and export of the pack: see the 2026-10-26 entry below (issue #40).
 
 Verification: `pnpm test`, see latest run.
 

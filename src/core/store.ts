@@ -41,8 +41,12 @@ import {
   type SetupSettings,
   type DecisionOption,
   type ForewrightEvent,
+  type KickoffApproval,
+  type KickoffApprovedDoc,
   type KickoffDoc,
   type KickoffPack,
+  type KickoffProposal,
+  type KickoffProposalStatus,
   type KickoffScale,
   type Limits,
   type Message,
@@ -214,6 +218,7 @@ export class Store {
       requirementKeys: this.all("SELECT requirement_key AS k FROM task_requirement WHERE task_id = ? ORDER BY requirement_key", id).map(
         (x) => x["k"] as string,
       ),
+      kickoffDocs: JSON.parse((r["kickoff_docs"] as string | undefined) ?? "[]") as string[],
     };
   }
 
@@ -254,6 +259,7 @@ export class Store {
     requirementKeys?: string[];
     dependsOn?: string[];
     assignee?: string;
+    kickoffDocs?: string[];
     actor?: Actor;
   }): Task {
     if (input.title.trim().length === 0) throw new ValidationError("A task needs a title.");
@@ -270,13 +276,14 @@ export class Store {
       }
       const deps = (input.dependsOn ?? []).map((d) => this.getTask(d).id);
       if (input.assignee) this.getAgent(input.assignee);
+      const kickoffDocs = this.checkKickoffDocKeys(input.kickoffDocs ?? []);
 
       const id = newId("tsk");
       const shortId = nextTaskShortId(this.db, this.projectId);
       const now = this.nowIso();
       this.run(
         `INSERT INTO task (id, project_id, short_id, title, description, acceptance, verify_commands, state, assignee_agent_id,
-           requirement_revision, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+           requirement_revision, kickoff_docs, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         id,
         this.projectId,
         shortId,
@@ -287,6 +294,7 @@ export class Store {
         "planned",
         input.assignee ?? null,
         doc?.revision ?? null,
+        JSON.stringify(kickoffDocs),
         now,
         now,
       );
@@ -300,6 +308,7 @@ export class Store {
         title: input.title,
         dependsOn: deps,
         requirementKeys: keys,
+        kickoffDocs,
       });
       return this.getTask(id);
     });
@@ -328,12 +337,22 @@ export class Store {
   /** Material edit: bumps the task revision and marks existing evidence stale. */
   updateTask(
     taskId: string,
-    patch: { title?: string; description?: string; acceptance?: string; verifyCommands?: string[] },
+    patch: { title?: string; description?: string; acceptance?: string; verifyCommands?: string[]; kickoffDocs?: string[] },
     actor: Actor,
   ): Task {
     return tx(this.db, () => {
       const t = this.getTask(taskId);
       if (TERMINAL.includes(t.state)) throw new ValidationError(`${t.shortId} is ${t.state} and cannot be edited.`);
+      if (patch.kickoffDocs !== undefined) {
+        const docs = this.checkKickoffDocKeys(patch.kickoffDocs);
+        this.run("UPDATE task SET kickoff_docs = ? WHERE id = ?", JSON.stringify(docs), t.id);
+        // Linking documents changes what the worker reads, not what the task asks for: no revision bump, no stale evidence.
+        if (patch.title === undefined && patch.description === undefined && patch.acceptance === undefined && patch.verifyCommands === undefined) {
+          this.run("UPDATE task SET updated_at = ? WHERE id = ?", this.nowIso(), t.id);
+          this.appendEvent("task.updated", "task", t.id, actorLabel(actor), { fields: ["kickoffDocs"], newRevision: t.revision, kickoffDocs: docs });
+          return this.getTask(t.id);
+        }
+      }
       this.run(
         "UPDATE task SET title = ?, description = ?, acceptance = ?, verify_commands = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
         patch.title ?? t.title,
@@ -1749,6 +1768,7 @@ export class Store {
     const pack: KickoffPack = {
       scale: r["scale"] as KickoffScale,
       status: r["status"] as KickoffPack["status"],
+      revision: r["revision"] as number,
       startedBy: r["started_by"] as string,
       createdAt: r["created_at"] as string,
       updatedAt: r["updated_at"] as string,
@@ -1799,7 +1819,7 @@ export class Store {
         this.projectId,
         input.key,
       );
-      this.run("UPDATE kickoff_pack SET updated_at = ? WHERE project_id = ?", now, this.projectId);
+      this.run("UPDATE kickoff_pack SET revision = revision + 1, updated_at = ? WHERE project_id = ?", now, this.projectId);
       this.appendEvent("kickoff.doc_written", "kickoff", this.projectId, input.author, { key: input.key, version: doc.version + 1 });
       const left = this.one("SELECT COUNT(*) AS n FROM kickoff_doc WHERE project_id = ? AND status = 'pending'", this.projectId)?.["n"] as number;
       if (left === 0) {
@@ -1815,6 +1835,196 @@ export class Store {
       }
       return this.getKickoffPack()!.docs.find((d) => d.key === input.key)!;
     });
+  }
+
+  /** Validates catalog keys a task links to: a pack must exist and every key must be one of its documents. */
+  private checkKickoffDocKeys(keys: string[]): string[] {
+    const unique = [...new Set(keys)];
+    if (unique.length === 0) return [];
+    const found = this.getKickoffPack();
+    if (!found) throw new ValidationError("There is no kickoff pack, so a task cannot link to kickoff documents.", { keys: unique });
+    const valid = found.docs.map((d) => d.key);
+    const unknown = unique.filter((k) => !valid.includes(k));
+    if (unknown.length > 0) throw new ValidationError(`Unknown kickoff documents: ${unknown.join(", ")}. This pack has: ${valid.join(", ")}.`, { unknown, valid });
+    return unique;
+  }
+
+  private kickoffApprovalFromRow(r: Row): KickoffApproval {
+    return {
+      id: r["id"] as string,
+      revision: r["revision"] as number,
+      docs: JSON.parse(r["docs"] as string) as KickoffApprovedDoc[],
+      approvedBy: r["approved_by"] as string,
+      approvedAt: r["approved_at"] as string,
+    };
+  }
+
+  /** The latest approval of the pack (the most recently approved revision), or null when never approved. */
+  latestKickoffApproval(): KickoffApproval | null {
+    const r = this.one("SELECT * FROM kickoff_approval WHERE project_id = ? ORDER BY rowid DESC LIMIT 1", this.projectId);
+    return r ? this.kickoffApprovalFromRow(r) : null;
+  }
+
+  /**
+   * Human-only. Approves exactly one pack revision: `docs` is what Billy read (key, version, hash) and must match
+   * the manifest, and `revision` must still be the pack's revision, so a document that changed in between is refused.
+   */
+  approveKickoffPack(input: { revision: number; docs: KickoffApprovedDoc[]; by: Actor }): KickoffApproval {
+    const by = input.by;
+    if (by.kind !== "human") throw new PolicyDeniedError("Only the human owner can approve a kickoff pack.", { revision: input.revision });
+    return tx(this.db, () => {
+      const found = this.getKickoffPack();
+      if (!found) throw new NotFoundError("Kickoff pack");
+      if (found.pack.status !== "ready") {
+        throw new ValidationError("The pack is not complete yet. Approve it once every document is written.", { status: found.pack.status });
+      }
+      if (input.revision !== found.pack.revision) {
+        throw new StaleApprovalError(`The pack changed since you read it (revision ${found.pack.revision} now). Read it again before approving.`, { revision: input.revision, current: found.pack.revision });
+      }
+      const manifest = found.docs.map((d) => ({ key: d.key, version: d.version, sha256: d.sha256 ?? "" }));
+      const given = JSON.stringify([...input.docs].sort((a, b) => a.key.localeCompare(b.key)).map((d) => [d.key, d.version, d.sha256]));
+      const have = JSON.stringify([...manifest].sort((a, b) => a.key.localeCompare(b.key)).map((d) => [d.key, d.version, d.sha256]));
+      if (given !== have) throw new StaleApprovalError("The documents differ from the ones recorded for this revision. Read the pack again before approving.", { revision: input.revision });
+      const id = newId("kap");
+      const now = this.nowIso();
+      this.run("INSERT INTO kickoff_approval (id, project_id, revision, docs, approved_by, approved_at) VALUES (?,?,?,?,?,?)", id, this.projectId, input.revision, JSON.stringify(manifest), by.id ?? "human", now);
+      this.appendEvent("kickoff.approved", "kickoff", this.projectId, actorLabel(by), { revision: input.revision, docs: manifest });
+      return this.latestKickoffApproval()!;
+    });
+  }
+
+  private kickoffProposalFromRow(r: Row): KickoffProposal {
+    return {
+      id: r["id"] as string,
+      key: r["key"] as string,
+      status: r["status"] as KickoffProposalStatus,
+      baseSha256: r["base_sha256"] as string,
+      proposalSha256: r["proposal_sha256"] as string,
+      summary: r["summary"] as string,
+      author: r["author"] as string,
+      decisionId: (r["decision_id"] as string | null) ?? null,
+      createdAt: r["created_at"] as string,
+      resolvedAt: (r["resolved_at"] as string | null) ?? null,
+    };
+  }
+
+  getKickoffProposal(id: string): KickoffProposal {
+    const r = this.one("SELECT * FROM kickoff_proposal WHERE id = ? AND project_id = ?", id, this.projectId);
+    if (!r) throw new NotFoundError(`Kickoff proposal ${id}`, { proposalId: id });
+    return this.kickoffProposalFromRow(r);
+  }
+
+  listKickoffProposals(filter: { key?: string; status?: KickoffProposalStatus } = {}): KickoffProposal[] {
+    return this.all("SELECT * FROM kickoff_proposal WHERE project_id = ? ORDER BY created_at, rowid", this.projectId)
+      .map((r) => this.kickoffProposalFromRow(r))
+      .filter((p) => (!filter.key || p.key === filter.key) && (!filter.status || p.status === filter.status));
+  }
+
+  /** Closes a proposal as superseded, declined or conflicting, and marks its decision stale when Billy has not used it. */
+  private closeKickoffProposal(p: KickoffProposal, status: Exclude<KickoffProposalStatus, "open" | "applied">, why: string): void {
+    this.run("UPDATE kickoff_proposal SET status = ?, resolved_at = ? WHERE id = ?", status, this.nowIso(), p.id);
+    this.appendEvent(`kickoff.proposal_${status}`, "kickoff", this.projectId, "system", { proposalId: p.id, key: p.key, why });
+    if (status !== "superseded" || p.decisionId === null) return;
+    const d = this.getDecision(p.decisionId);
+    if ((d.status === "open" || d.status === "resolved") && !this.one("SELECT key FROM action_receipt WHERE key = ?", `approval:${d.id}`)) {
+      this.run("UPDATE decision SET status = 'stale' WHERE id = ?", d.id);
+      this.appendEvent("decision.stale", "decision", d.id, "system", { kickoffProposalId: p.id, why });
+      this.clearHumanInputBlocks(d.affectedTaskIds);
+    }
+  }
+
+  /**
+   * The CTO's proposal to revise a written document, with the Inbox decision Billy answers. Any open proposal for
+   * the same document is superseded and its decision made stale, in the same transaction.
+   */
+  createKickoffProposal(input: {
+    id: string;
+    key: string;
+    baseSha256: string;
+    proposalSha256: string;
+    summary: string;
+    author: string;
+    decision: (proposalId: string) => Parameters<Store["requestDecision"]>[0];
+  }): { proposal: KickoffProposal; decision: Decision } {
+    return tx(this.db, () => {
+      const doc = this.getKickoffPack()?.docs.find((d) => d.key === input.key);
+      if (!doc) throw new NotFoundError(`Kickoff document ${input.key}`, { key: input.key });
+      if (doc.status !== "written") throw new ValidationError(`The ${doc.title} document is not written yet. Write it with write_kickoff_doc.`, { key: input.key });
+      for (const open of this.listKickoffProposals({ key: input.key, status: "open" })) this.closeKickoffProposal(open, "superseded", "a newer proposal for the same document");
+      const decision = this.requestDecision(input.decision(input.id));
+      this.run(
+        `INSERT INTO kickoff_proposal (id, project_id, key, status, base_sha256, proposal_sha256, summary, author, decision_id, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        input.id,
+        this.projectId,
+        input.key,
+        "open",
+        input.baseSha256,
+        input.proposalSha256,
+        input.summary,
+        input.author,
+        decision.id,
+        this.nowIso(),
+      );
+      this.appendEvent("kickoff.proposed", "kickoff", this.projectId, input.author, { proposalId: input.id, key: input.key, decisionId: decision.id });
+      return { proposal: this.getKickoffProposal(input.id), decision };
+    });
+  }
+
+  /** The proposal was answered no, or could not be applied because the file changed after it was proposed. */
+  closeKickoffProposalFor(proposalId: string, status: "declined" | "conflict", why: string): KickoffProposal {
+    return tx(this.db, () => {
+      const p = this.getKickoffProposal(proposalId);
+      if (p.status !== "open") return p;
+      this.closeKickoffProposal(p, status, why);
+      return this.getKickoffProposal(proposalId);
+    });
+  }
+
+  /**
+   * Billy's own edit of a written document, kept as the next version: the new version, hash and author "human",
+   * and a new pack revision (so an earlier approval no longer covers the pack). Open proposals for the document
+   * were written against the old text, so they are superseded and their decisions made stale.
+   */
+  recordKickoffOwnerEdit(input: { key: string; sha256: string; by: Actor }): KickoffDoc {
+    if (input.by.kind !== "human") throw new PolicyDeniedError("Only the human owner can keep an edit of a kickoff document.", { key: input.key });
+    return tx(this.db, () => {
+      const doc = this.requireWrittenKickoffDoc(input.key);
+      const now = this.nowIso();
+      this.run("UPDATE kickoff_doc SET version = version + 1, sha256 = ?, author = 'human', updated_at = ? WHERE project_id = ? AND key = ?", input.sha256, now, this.projectId, input.key);
+      this.run("UPDATE kickoff_pack SET revision = revision + 1, updated_at = ? WHERE project_id = ?", now, this.projectId);
+      for (const open of this.listKickoffProposals({ key: input.key, status: "open" })) this.closeKickoffProposal(open, "superseded", "Billy kept his own edit");
+      this.appendEvent("kickoff.edit_kept", "kickoff", this.projectId, actorLabel(input.by), { key: input.key, version: doc.version + 1 });
+      return this.getKickoffPack()!.docs.find((d) => d.key === input.key)!;
+    });
+  }
+
+  private requireWrittenKickoffDoc(key: string): KickoffDoc {
+    const doc = this.getKickoffPack()?.docs.find((d) => d.key === key);
+    if (!doc) throw new NotFoundError(`Kickoff document ${key}`, { key });
+    if (doc.status !== "written") throw new ValidationError(`The ${doc.title} document is not written yet.`, { key, status: doc.status });
+    return doc;
+  }
+
+  /** An approved proposal was written to disk: the next version of the document, a new pack revision, the proposal applied. */
+  recordKickoffRevision(input: { key: string; sha256: string; author: string; proposalId: string }): KickoffDoc {
+    return tx(this.db, () => {
+      const doc = this.requireWrittenKickoffDoc(input.key);
+      const p = this.getKickoffProposal(input.proposalId);
+      if (p.status !== "open" || p.key !== input.key) throw new ValidationError(`The revision proposal is ${p.status}, so it cannot be applied.`, { proposalId: p.id, status: p.status });
+      const now = this.nowIso();
+      this.run("UPDATE kickoff_doc SET version = version + 1, sha256 = ?, author = ?, updated_at = ? WHERE project_id = ? AND key = ?", input.sha256, input.author, now, this.projectId, input.key);
+      this.run("UPDATE kickoff_pack SET revision = revision + 1, updated_at = ? WHERE project_id = ?", now, this.projectId);
+      this.run("UPDATE kickoff_proposal SET status = 'applied', resolved_at = ? WHERE id = ?", now, p.id);
+      this.appendEvent("kickoff.revised", "kickoff", this.projectId, input.author, { key: input.key, version: doc.version + 1, proposalId: p.id });
+      return this.getKickoffPack()!.docs.find((d) => d.key === input.key)!;
+    });
+  }
+
+  /** Human-only. Records that Billy exported the pack to a folder he chose. */
+  recordKickoffExport(input: { dir: string; files: string[]; by: Actor }): void {
+    if (input.by.kind !== "human") throw new PolicyDeniedError("Only the human owner can export a kickoff pack.", { dir: input.dir });
+    this.recordEvent("kickoff.exported", "kickoff", this.projectId, input.by, { dir: input.dir, files: input.files });
   }
 
   // ------------------------------------------------------------ settings and drafts

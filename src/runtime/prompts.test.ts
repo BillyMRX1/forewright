@@ -64,3 +64,29 @@ test("CTO prompt offers a kickoff pack before the first PRD and explains plan-on
   assert.match(p, /write_kickoff_doc/);
   assert.match(p, /plan-only mode tasks may be created, but none starts/);
 });
+
+test("the kickoff documents section sits right after the requirements and before memory and the handoff", () => {
+  const agent = { name: "Wren", role: "backend" } as Agent;
+  const task = { shortId: "T-3", title: "Add login", description: "desc", acceptance: "", verifyCommands: [] } as unknown as Task;
+  const prompt = buildWorkerPrompt({
+    agent,
+    ctoName: "Ada",
+    projectName: "demo",
+    task,
+    requirements: [{ key: "R-001", text: "Users can log in" }],
+    prdRevision: 2,
+    memory: "## Your memory notes\nremember",
+    kickoff: "## Kickoff documents (approved pack revision 3; read only)\n### Architecture (version 1, /x/architecture.v1.md)\nOne module.",
+    handoff: "pick up from the branch",
+    feedback: [],
+    messages: [],
+    instructions: "",
+  });
+  const at = (s: string) => prompt.indexOf(s);
+  assert.ok(at("## Requirements this task serves") >= 0);
+  assert.ok(at("## Kickoff documents (approved pack revision 3; read only)") > at("## Requirements this task serves"));
+  assert.ok(at("## Your memory notes") > at("## Kickoff documents"));
+  assert.ok(at("## Handoff note") > at("## Your memory notes"));
+  const without = buildWorkerPrompt({ agent, ctoName: "Ada", projectName: "demo", task, requirements: [], prdRevision: null, handoff: null, feedback: [], messages: [], instructions: "" });
+  assert.ok(!without.includes("Kickoff documents"));
+});

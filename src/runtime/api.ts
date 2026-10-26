@@ -20,7 +20,7 @@ import { engineRoleProblem } from "./engine-roles.js";
 import { fallbackStatus } from "./fallback.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { MEMORY_CAP_BYTES, clearMemory, readMemory } from "./memory.js";
-import { KICKOFF_SCALES, kickoffView, nudgeKickoff, readKickoffDoc, startKickoffPack } from "./kickoff.js";
+import { KICKOFF_SCALES, approveKickoffPack, exportKickoff, keepOwnerEdit, kickoffProposalView, kickoffView, nudgeKickoff, readKickoffDoc, startKickoffPack } from "./kickoff.js";
 import type { KickoffScale } from "../core/store.js";
 
 type P = Record<string, unknown>;
@@ -149,6 +149,7 @@ export class ClientApi {
         const key = reqStr(p, "key", 100);
         return { key, text: readKickoffDoc(rt.projectId, key) };
       },
+      "kickoff.proposal": async (p) => kickoffProposalView(await this.rt(p), reqStr(p, "key", 100)),
       "state.adrs": async (p) => ({ adrs: (await this.rt(p)).store.listAdrs() }),
       "state.evidence": async (p) => {
         const rt = await this.rt(p);
@@ -246,6 +247,21 @@ export class ClientApi {
         if (r.created) nudgeKickoff(rt, "start");
         else if (r.pack.status === "generating") nudgeKickoff(rt, "billy"); // Billy asks again for a pack that stalled
         return kickoffView(rt.store);
+      },
+      "kickoff.approve": async (p) => {
+        const rt = await this.rt(p);
+        approveKickoffPack(rt, reqInt(p, "revision"));
+        return kickoffView(rt.store);
+      },
+      "kickoff.keepEdit": async (p) => {
+        const rt = await this.rt(p);
+        keepOwnerEdit(rt, reqStr(p, "key", 100));
+        return kickoffView(rt.store);
+      },
+      "kickoff.export": async (p) => {
+        const rt = await this.rt(p);
+        const r = exportKickoff(rt, reqStr(p, "dir", 4096), p["overwrite"] === true);
+        return r;
       },
       "decisions.resolve": async (p) => {
         const rt = await this.rt(p);

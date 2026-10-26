@@ -1,7 +1,7 @@
 // In-memory ClientApi for view tests. Records every call so tests can assert on them.
 
-import type { ClientApi, ConnectionState, Subscription } from "./client.js";
-import type { EngineUse, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
+import { ClientError, type ClientApi, type ConnectionState, type Subscription } from "./client.js";
+import type { EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
 import type { Agent, Authority, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
@@ -31,6 +31,7 @@ export function makeTask(over: Partial<Task> & Pick<Task, "id" | "shortId" | "ti
     createdAt: NOW,
     updatedAt: NOW,
     dependsOn: [],
+    kickoffDocs: [],
     requirementKeys: ["R-001"],
     ...over,
   };
@@ -195,9 +196,11 @@ export function fakeKickoff(scale: "small" | "full"): KickoffState {
   ];
   const keys = scale === "small" ? all.filter(([k]) => ["brief", "requirements", "test-strategy"].includes(k)) : all;
   return {
-    pack: { scale, status: "generating", startedBy: "human", createdAt: NOW, updatedAt: NOW },
-    docs: keys.map(([key, title], position) => ({ key, title, position, status: "pending", version: 0, path: `${key}.md`, sha256: null, author: null, updatedAt: NOW, edited: false, missing: false })),
+    pack: { scale, status: "generating", revision: 0, startedBy: "human", createdAt: NOW, updatedAt: NOW },
+    docs: keys.map(([key, title], position) => ({ key, title, position, status: "pending", version: 0, path: `${key}.md`, sha256: null, author: null, updatedAt: NOW, edited: false, missing: false, proposal: null })),
     dir: "/Users/billy/.local/share/forewright/projects/p1/kickoff",
+    approval: null,
+    approvedCurrent: false,
   };
 }
 
@@ -214,7 +217,11 @@ export class FakeClient implements ClientApi {
   /** Plan-only mode, as state.settings and the runtime report it. Changed by settings.set. */
   planOnly = false;
   /** The kickoff pack as state.kickoff returns it (none by default). kickoff.start creates one. */
-  kickoff: KickoffState = { pack: null, docs: [], dir: null };
+  kickoff: KickoffState = { pack: null, docs: [], dir: null, approval: null, approvedCurrent: false };
+  /** Open revision proposals as kickoff.proposal returns them, keyed by document key. */
+  kickoffProposals: Record<string, KickoffProposalState> = {};
+  /** Files kickoff.export reports as already existing with different content; refused unless overwrite is true. */
+  kickoffExportConflicts: string[] = [];
   /** Document texts returned by kickoff.doc, keyed by document key. */
   kickoffTexts: Record<string, string> = {};
   /** Fallback lists returned by state.settings and changed by settings.set. */
@@ -369,6 +376,34 @@ export class FakeClient implements ClientApi {
           if (text === undefined) throw new Error(`A file for the kickoff document ${String(p["key"])} was not found.`);
           return { key: p["key"], text };
         }
+        case "kickoff.proposal":
+          return this.kickoffProposals[String(p["key"])] ?? null;
+        case "kickoff.approve": {
+          const pack = this.kickoff.pack;
+          if (!pack) throw new Error("There is no kickoff pack.");
+          if (pack.status !== "ready") throw new Error("The pack is not complete yet. Approve it once every document is written.");
+          if (p["revision"] !== pack.revision) throw new Error(`The pack changed since you read it (revision ${pack.revision} now). Read it again before approving.`);
+          const bad = this.kickoff.docs.find((d) => d.edited || d.missing);
+          if (bad) throw new Error(`Keep or undo your edit of ${bad.title} first, so the approval covers what is on disk.`);
+          this.kickoff = { ...this.kickoff, approval: { revision: pack.revision, approvedAt: NOW }, approvedCurrent: true };
+          return this.kickoff;
+        }
+        case "kickoff.keepEdit": {
+          const doc = this.kickoff.docs.find((d) => d.key === p["key"]);
+          if (!doc || !doc.edited) throw new Error("You have not edited this document; there is nothing to keep.");
+          this.kickoff = {
+            ...this.kickoff,
+            pack: this.kickoff.pack ? { ...this.kickoff.pack, revision: this.kickoff.pack.revision + 1 } : null,
+            docs: this.kickoff.docs.map((d) => (d.key === doc.key ? { ...d, edited: false, version: d.version + 1, author: "human" } : d)),
+            approvedCurrent: false,
+          };
+          return this.kickoff;
+        }
+        case "kickoff.export":
+          if (this.kickoffExportConflicts.length > 0 && p["overwrite"] !== true) {
+            throw new ClientError("validation", `These files already exist with different content: ${this.kickoffExportConflicts.join(", ")}. Nothing was written.`, JSON.stringify({ conflicts: this.kickoffExportConflicts }));
+          }
+          return { dir: String(p["dir"]), files: this.kickoff.docs.filter((d) => d.status === "written").map((d) => `${d.key}.md`).concat("README.md") };
         case "kickoff.start":
           if (!this.kickoff.pack) this.kickoff = fakeKickoff(p["scale"] === "small" ? "small" : "full");
           return this.kickoff;

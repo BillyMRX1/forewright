@@ -756,6 +756,153 @@ describe("Kickoff pack", () => {
     assert.doesNotMatch(h.frame(), /Requirements\s+edited by you/);
   });
 
+  /** A pack whose every document is written (version 1), at pack revision 4. */
+  function readyKickoff(over: Partial<ReturnType<typeof fakeKickoff>> = {}) {
+    const pack = fakeKickoff("full");
+    return {
+      ...pack,
+      pack: { ...pack.pack!, status: "ready" as const, revision: 4 },
+      docs: pack.docs.map((d) => ({ ...d, status: "written" as const, version: 1, sha256: "a", author: "agent:cto" })),
+      ...over,
+    };
+  }
+  const setDoc = (k: ReturnType<typeof fakeKickoff>, key: string, over: Partial<(typeof k.docs)[number]>) => ({ ...k, docs: k.docs.map((d) => (d.key === key ? { ...d, ...over } : d)) });
+  const PROPOSAL = { id: "kpr_1", summary: "split rounding out", decisionId: "dec_1", createdAt: "2026-01-01T00:00:00.000Z" };
+
+  it("the pill says not approved, approved rN or changed since approval, and a proposal shows as a marker", async () => {
+    const api = new FakeClient();
+    api.kickoff = setDoc(setDoc(readyKickoff(), "architecture", { proposal: PROPOSAL }), "brief", { edited: true, proposal: { ...PROPOSAL, id: "kpr_2" } });
+    const { h } = await mount({ view: VIEW.home, api });
+    await openKickoff(h);
+    let f = h.frame();
+    assert.match(f, /not approved/);
+    assert.match(f, /Architecture\s+revision proposed/);
+    assert.match(f, /Brief\s+edited by you, revision proposed/);
+    assert.match(f, /You have not approved the pack yet\./);
+    await esc(h);
+
+    const approved = new FakeClient();
+    approved.kickoff = { ...readyKickoff(), approval: { revision: 4, approvedAt: "2026-01-01T00:00:00.000Z" }, approvedCurrent: true };
+    const second = await mount({ view: VIEW.home, api: approved });
+    await openKickoff(second.h);
+    f = second.h.frame();
+    assert.match(f, /approved r4/);
+    assert.match(f, /Revision 4 is approved\./);
+
+    const changed = new FakeClient();
+    changed.kickoff = { ...readyKickoff(), approval: { revision: 2, approvedAt: "2026-01-01T00:00:00.000Z" }, approvedCurrent: false };
+    const third = await mount({ view: VIEW.home, api: changed });
+    await openKickoff(third.h);
+    f = third.h.frame();
+    assert.match(f, /changed since approval/);
+    assert.match(f, /It changed since you approved revision 2\./);
+  });
+
+  it("p in a document shows the proposed revision as changes with the summary and the affected tasks", async () => {
+    const api = new FakeClient();
+    api.kickoff = setDoc(readyKickoff(), "architecture", { proposal: PROPOSAL });
+    api.kickoffTexts["architecture"] = "# Architecture\nOne module.\nKeep this.";
+    api.kickoffProposals["architecture"] = { key: "architecture", current: "# Architecture\nOne module.\nKeep this.", proposed: "# Architecture\nTwo modules.\nKeep this.", summary: "split rounding out", decisionId: "dec_1", affectedTasks: ["T-2", "T-5"] };
+    const { h } = await mount({ view: VIEW.home, api });
+    await openKickoff(h);
+    for (let i = 0; i < 3; i++) await down(h); // Architecture is the fourth document
+    await enter(h);
+    await h.settle(250);
+    assert.match(h.frame(), /The CTO proposed a revision of this document\. Press p/);
+    assert.match(hints(h), /p revision/);
+    await h.send("p");
+    await h.settle(100);
+    const f = h.frame();
+    assert.match(f, /Proposed revision/);
+    assert.match(f, /Why: split rounding out/);
+    assert.match(f, /Tasks whose worker reads this document: T-2, T-5\./);
+    assert.match(f, /Answer it in the Inbox/);
+    assert.match(f, /- One module\./);
+    assert.match(f, /\+ Two modules\./);
+    await h.send("p");
+    await h.settle(100);
+    assert.doesNotMatch(h.frame(), /Proposed revision/);
+    assert.match(h.frame(), /One module\./);
+  });
+
+  it("a asks before approving the revision, refuses with a reason while documents are pending or edited, and n cancels", async () => {
+    const pending = new FakeClient();
+    pending.kickoff = fakeKickoff("small");
+    const p = await mount({ view: VIEW.home, api: pending });
+    await openKickoff(p.h);
+    await p.h.send("a");
+    await p.h.settle(100);
+    assert.match(p.h.frame(), /still being written: 3/);
+    assert.match(p.h.frame(), /documents are pending\./);
+    assert.equal(pending.callsTo("kickoff.approve").length, 0);
+
+    const edited = new FakeClient();
+    edited.kickoff = setDoc(readyKickoff(), "requirements", { edited: true });
+    const e = await mount({ view: VIEW.home, api: edited });
+    await openKickoff(e.h);
+    await e.h.send("a");
+    await e.h.settle(100);
+    assert.match(e.h.frame(), /You edited Requirements/);
+    assert.equal(edited.callsTo("kickoff.approve").length, 0);
+
+    const api = new FakeClient();
+    api.kickoff = readyKickoff();
+    const { h } = await mount({ view: VIEW.home, api });
+    await openKickoff(h);
+    await h.send("a");
+    await h.settle(100);
+    assert.match(h.frame(), /Approve kickoff pack revision 4\?/);
+    assert.match(h.frame(), /versions\./);
+    assert.match(hints(h), /y yes/);
+    await h.send("n");
+    await h.settle(100);
+    assert.equal(api.callsTo("kickoff.approve").length, 0);
+    await h.send("a");
+    await h.settle(100);
+    await h.send("y");
+    await h.settle(250);
+    assert.deepEqual(api.callsTo("kickoff.approve").map((c) => c.params), [{ projectId: "p1", revision: 4 }]);
+    assert.match(h.frame(), /approved r4/);
+  });
+
+  it("k keeps your edit of the chosen document after asking, and says so when there is nothing to keep", async () => {
+    const api = new FakeClient();
+    api.kickoff = setDoc(readyKickoff(), "requirements", { edited: true });
+    const { h } = await mount({ view: VIEW.home, api });
+    await openKickoff(h);
+    await h.send("k");
+    await h.settle(100);
+    assert.match(h.frame(), /You have not edited Brief; there is/);
+    assert.match(h.frame(), /nothing to keep\./);
+    await down(h);
+    await h.send("k");
+    await h.settle(100);
+    assert.match(h.frame(), /Keep your edit of Requirements as version 2\?/);
+    await h.send("y");
+    await h.settle(250);
+    assert.deepEqual(api.callsTo("kickoff.keepEdit").map((c) => c.params), [{ projectId: "p1", key: "requirements" }]);
+    assert.doesNotMatch(h.frame(), /Requirements\s+edited by you/);
+  });
+
+  it("x exports to docs/kickoff after asking, and asks again before replacing files that differ", async () => {
+    const api = new FakeClient();
+    api.kickoff = readyKickoff();
+    api.kickoffExportConflicts = ["brief.md", "README.md"];
+    const { h } = await mount({ view: VIEW.home, api });
+    await openKickoff(h);
+    await h.send("x");
+    await h.settle(100);
+    assert.match(h.frame(), /Export 7 documents to/);
+    await h.send("y");
+    await h.settle(250);
+    assert.deepEqual(api.callsTo("kickoff.export").map((c) => c.params), [{ projectId: "p1", dir: "docs/kickoff" }]);
+    assert.match(h.frame(), /Replace 2 existing files in/);
+    await h.send("y");
+    await h.settle(250);
+    assert.deepEqual(api.callsTo("kickoff.export").map((c) => c.params).at(-1), { projectId: "p1", dir: "docs/kickoff", overwrite: true });
+    assert.match(h.frame(), /Exported 8 files to docs\/kickoff/);
+  });
+
   it("Settings switches plan-only mode, and the top bar shows PLAN ONLY while it is on", async () => {
     const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
     await tab(h);
