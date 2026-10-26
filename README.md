@@ -93,9 +93,38 @@ The service (`forewright serve`) owns execution and persistence for all your pro
 - On demand: running `forewright` starts it in the background when nothing is listening. Log: `daemon.log` in the data directory.
 - At login (optional, macOS launchd or Linux systemd): `forewright service install`, `forewright service status`, `forewright service uninstall`. The service file is `~/Library/LaunchAgents/local.forewright.daemon.plist` on macOS and `~/.config/systemd/user/forewright.service` on Linux. It restarts the service if it crashes. On Windows these commands report that they only work on macOS and Linux; there `forewright` starts the service on demand, and `forewright serve` can run in a terminal.
 
+## GUI
+
+`forewright gui` opens Forewright in your browser. It starts the service if needed, asks it to start the GUI bridge, prints a link such as `http://127.0.0.1:7420/#token=...` and opens it. The browser GUI shows the same projects and does the same things as the terminal UI, through the same service.
+
+```
+forewright gui                 open the GUI in your browser
+forewright gui --print-url     print the link only (for servers and scripts)
+forewright gui --no-open       print the link and how to reach it from another computer
+forewright gui --port 8123     use another port this time
+```
+
+How it is protected:
+
+- The bridge listens on `127.0.0.1` only, never on a network address. There is no setting to change that.
+- The part after `#token=` is a secret made fresh every time the bridge starts and held only in memory. The page reads it from the address bar and then removes it from there. Browsers never send the `#` part to a server, so it does not appear in any log. A connection without the right token is closed, and after 10 wrong tokens in a minute the bridge refuses new connections for a minute.
+- The bridge accepts only requests addressed to `127.0.0.1`, `localhost` or a host name you allowed (this blocks DNS rebinding), and only connections from its own page (this blocks other websites from talking to it). It sends no CORS headers.
+- The token changes whenever the service restarts. Get a fresh link with `forewright gui --print-url`.
+
+Settings, stored with the proxy settings in `config.json` in the data folder:
+
+```
+forewright config gui port 8123                              port of the GUI (default 7420)
+forewright config gui allow-host myserver.example.ts.net     also answer to this name (for Tailscale Serve and similar)
+forewright config gui allow-host --clear                     answer to 127.0.0.1 and localhost only
+forewright config gui autostart on                           start the GUI whenever the service starts
+```
+
+A new port applies the next time the service starts; allowed host names apply at once. If the port is busy, `forewright gui` says so; pick another one with `forewright config gui port <n>`.
+
 ## Running on a Linux server
 
-Forewright runs on a Linux machine you reach over SSH, for one user. The terminal UI works over SSH; there is no web or remote GUI yet (that comes later, see issue #44).
+Forewright runs on a Linux machine you reach over SSH, for one user. The terminal UI works over SSH, and the GUI works from your laptop or phone through a tunnel (see "Using the GUI from your laptop or phone").
 
 1. Install Node.js 24 or newer and `git`, then build and link Forewright as in "Install".
 2. Install at least one engine CLI and sign in with your own account. Without a display, `forewright doctor` prints a hint under each installed engine that is not signed in (for Claude Code and Codex it names the browser-less login; for the others it points to the engine's docs). Run `forewright doctor` again until an engine shows as ready.
@@ -104,6 +133,29 @@ Forewright runs on a Linux machine you reach over SSH, for one user. The termina
 5. Use it: `ssh` in, `cd` into a project, run `forewright`. Closing the SSH session never stops the agents, because the service owns them (with linger on).
 
 State lives in `$XDG_DATA_HOME/forewright`, or `~/.local/share/forewright` when that is unset (override with `FOREWRIGHT_HOME`). The service log is `daemon.log` there.
+
+## Using the GUI from your laptop or phone
+
+When Forewright runs on a server, the GUI still listens on `127.0.0.1` of that server only. You reach it through a private tunnel, never by opening a port to the internet. Forewright has no built-in login with TLS yet, so the bridge must never be exposed to the internet directly: anyone who reaches it and has the link controls your agents.
+
+**SSH tunnel (laptop).** Works anywhere you can SSH to the server.
+
+1. On your laptop: `ssh -N -L 7420:127.0.0.1:7420 you@server` (leave it running). Use another local port if 7420 is taken on the laptop, for example `-L 9000:127.0.0.1:7420`.
+2. Get the link: `ssh you@server forewright gui --print-url`. It prints `http://127.0.0.1:7420/#token=...`.
+3. Open that link in the laptop's browser (change the port in it if you used another local port). The page talks to the server through the tunnel.
+
+**Tailscale (laptop and phone).** Only devices in your tailnet can reach it.
+
+1. Install Tailscale on the server, the laptop and the phone, and sign in to the same tailnet.
+2. On the server: `tailscale serve --bg 7420`. This makes `https://<machine>.<tailnet>.ts.net` forward to `127.0.0.1:7420` on the server, inside your tailnet only (not `tailscale funnel`, which would publish it to the internet).
+3. On the server, allow that name once: `forewright config gui allow-host <machine>.<tailnet>.ts.net`.
+4. Get the token: `forewright gui --print-url` on the server. Open `https://<machine>.<tailnet>.ts.net/#token=<token>` on the laptop or phone, with the token from that link.
+
+**WireGuard or another VPN.** Run the SSH tunnel above over the VPN. Or, if you already run a reverse proxy on the server that is reachable only inside the VPN, point it at `127.0.0.1:7420`, keep the original Host header, and allow its host name with `forewright config gui allow-host <name>`. Never change the bridge itself to listen wider.
+
+**Keep it running on the server.** `forewright service install` starts the service at login (with `loginctl enable-linger $USER`, also at boot), and `forewright config gui autostart on` starts the GUI with it. The token changes on every service start, so get a fresh link with `forewright gui --print-url` after a restart.
+
+A request that does not come through the tunnel is refused: the bridge does not listen on any network address, and a request addressed to a name you did not allow gets an error.
 
 ## Where data lives
 

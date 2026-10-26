@@ -107,6 +107,8 @@ export interface Methods {
   // projects
   "projects.open": { params: { cwd: string }; result: ProjectOpenResult };
   "projects.init": { params: { cwd: string; name?: string }; result: ProjectOpenResult };
+  /** Projects the service has seen, most recently opened first. */
+  "projects.list": { params: Record<string, never>; result: { projects: Array<{ projectId: string; root: string; name: string }> } };
   "projects.initialCommit": { params: { projectId: string }; result: { created: boolean; message: string } };
 
   // read models
@@ -169,6 +171,9 @@ export interface Methods {
   "tasks.outcome": { params: { projectId: string; taskId: string; fixMinutes?: number }; result: { ok: true } };
   "drafts.save": { params: { projectId: string; view: string; key: string; body: string }; result: { ok: true } };
   "drafts.get": { params: { projectId: string; view: string; key: string }; result: { body: string | null } };
+
+  /** Starts the local web bridge for the GUI (or returns the running one). `note` says when a different port was asked of a running bridge. */
+  "gui.start": { params: { port?: number }; result: { url: string; port: number; host: "127.0.0.1"; note?: string } };
 
   // execution controls (distinct behaviors, see docs/architecture.md)
   "control.pauseAll": { params: { projectId: string }; result: RuntimeStatus };

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // The `forewright` command: `forewright` (interface), `forewright serve`, `forewright mcp-bridge`,
-// `forewright doctor`, `forewright status`, `forewright report`, `forewright service install|uninstall|status`.
+// `forewright doctor`, `forewright status`, `forewright report`, `forewright gui`, `forewright service install|uninstall|status`.
 import { ForewrightError } from "../core/errors.js";
 import { forewrightHome, migrateLegacyHome, socketPath } from "../core/paths.js";
 import { createAdapters } from "../providers/registry.js";
 import { startDaemon } from "../runtime/daemon.js";
 import { runBridge } from "../runtime/mcp-bridge.js";
 import { runConfig } from "./config.js";
+import { runGui } from "./gui.js";
 import { queryService, runDoctor } from "./doctor.js";
 import { runReport } from "./report.js";
 import { serviceInstall, serviceStatus, serviceUninstall } from "./service.js";
@@ -17,10 +18,11 @@ const HELP = `forewright: a CTO agent and specialist coding agents for one proje
 Usage:
   forewright                       open the interface for the project in the current folder
   forewright serve                 run the background service in the foreground
+  forewright gui                   open the GUI in your browser (--print-url, --no-open, --port N)
   forewright status                say whether the service is running
   forewright doctor                check the service, data folder and every engine (--verbose, --json)
   forewright report                what your agents used: tokens and estimated cost (--days N, --json)
-  forewright config              show or set the company proxy and certificate file (forewright config --help)
+  forewright config                show or set the company proxy, certificate file and GUI settings (forewright config --help)
   forewright service install       start the service at login (macOS launchd, Linux systemd user unit)
   forewright service uninstall     remove the login service
   forewright service status        show the login service state
@@ -106,6 +108,8 @@ async function main(argv: string[]): Promise<number> {
       return runReport(argv.slice(1));
     case "config":
       return runConfig(argv.slice(1));
+    case "gui":
+      return runGui(argv.slice(1));
     case "service": {
       if (sub === "install") process.stdout.write(`${serviceInstall()}\n`);
       else if (sub === "uninstall") process.stdout.write(`${serviceUninstall()}\n`);

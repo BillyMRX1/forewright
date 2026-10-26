@@ -5,7 +5,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Clock, systemClock } from "../core/clock.js";
-import { DuplicateProjectIdError, NotFoundError } from "../core/errors.js";
+import { DuplicateProjectIdError, ForewrightError, NotFoundError } from "../core/errors.js";
 import { samePathString } from "../core/platform.js";
 import { initProject, openProject, readRegistry, resolveProject } from "../core/identity.js";
 import { ensureDir, socketPathFor } from "../core/paths.js";
@@ -17,6 +17,8 @@ import { ProviderHealthCache } from "./health.js";
 import { ProjectRuntime, type RuntimeDeps } from "./project-runtime.js";
 import type { ProjectOpenResult } from "./protocol.js";
 import { type Connection, RpcServer } from "./server.js";
+import { WebBridge } from "./web-bridge.js";
+import { readGuiConfig } from "../core/gui-config.js";
 import { type TokenRecord, tokenProjectId } from "./tokens.js";
 
 export interface DaemonOptions {
@@ -30,6 +32,8 @@ export interface DaemonOptions {
   bridgeEntry?: string;
   /** Engine for a new project's CTO (default claude). */
   defaultCtoEngine?: EngineId;
+  /** For tests: the folder the GUI bridge serves the web app from. */
+  guiStaticDir?: string;
 }
 
 interface LockRecord {
@@ -64,6 +68,9 @@ export class Daemon {
   private readonly pidFile: string;
   private closed = false;
   readonly startedAt: string;
+  /** The local web bridge for the GUI, created on the first gui.start (or at start with autostart on). */
+  private gui: WebBridge | null = null;
+  private guiStarting: Promise<{ url: string; port: number }> | null = null;
 
   constructor(readonly opts: DaemonOptions, clientToken: string, pidFile: string) {
     this.adapters = opts.adapters;
@@ -100,6 +107,60 @@ export class Daemon {
   async start(): Promise<void> {
     await this.server.listen();
     void this.health.refresh();
+    let autostart = false;
+    try {
+      autostart = readGuiConfig(this.opts.forewrightHome).autostart;
+    } catch (err) {
+      process.stderr.write(`[forewright] GUI autostart skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    if (autostart) {
+      this.startGui().then(
+        (r) => process.stdout.write(`forewright GUI listening on http://127.0.0.1:${r.port}/ (get the link with: forewright gui --print-url)\n`),
+        (err: unknown) => process.stderr.write(`[forewright] GUI autostart failed: ${err instanceof Error ? err.message : String(err)}\n`),
+      );
+    }
+  }
+
+  // ------------------------------------------------------------ GUI bridge
+
+  /**
+   * Starts the GUI bridge on `port` (default: the configured port), or returns the running one. A running bridge is
+   * never moved to another port, because that would cut off pages that are open; the result then says so in `note`.
+   */
+  async startGui(port?: number): Promise<{ url: string; port: number; host: "127.0.0.1"; note?: string }> {
+    if (this.closed) throw new ForewrightError("service_stopping", "The Forewright service is stopping.");
+    if (this.guiStarting) await this.guiStarting.catch(() => undefined); // a concurrent start: use its outcome
+    const bridge = this.gui;
+    if (bridge?.running) {
+      const res = { url: bridge.url, port: bridge.port, host: "127.0.0.1" as const };
+      return port !== undefined && port !== bridge.port
+        ? { ...res, note: `The GUI is already running on port ${bridge.port}, so it stays there. Restart the service to use port ${port}.` }
+        : res;
+    }
+    const home = this.opts.forewrightHome;
+    const wanted = port ?? readGuiConfig(home).port;
+    const next = new WebBridge({
+      socketPath: this.socketPath,
+      clientToken: this.clientToken,
+      allowHosts: () => readGuiConfig(home).allowHosts,
+      ...(this.opts.guiStaticDir ? { staticDir: this.opts.guiStaticDir } : {}),
+    });
+    this.gui = next;
+    this.guiStarting = next.start({ port: wanted });
+    try {
+      const r = await this.guiStarting;
+      return { url: r.url, port: r.port, host: "127.0.0.1" };
+    } catch (err) {
+      if (this.gui === next) this.gui = null;
+      throw err;
+    } finally {
+      this.guiStarting = null;
+    }
+  }
+
+  /** The running GUI bridge, or null. */
+  guiBridge(): WebBridge | null {
+    return this.gui?.running ? this.gui : null;
   }
 
   // ------------------------------------------------------------ projects
@@ -179,8 +240,15 @@ export class Daemon {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // Nothing may be awaited before the runtimes start shutting down: shutdown() marks them stopping synchronously.
+    const guiStopped = (this.guiStarting ?? Promise.resolve())
+      .catch(() => undefined) // a start that failed left nothing to stop
+      .then(async () => {
+        await this.gui?.stop();
+        this.gui = null;
+      });
     const stopped = this.server.stopAccepting();
-    await Promise.all([...this.runtimes.values()].map((rt) => rt.shutdown()));
+    await Promise.all([guiStopped, ...[...this.runtimes.values()].map((rt) => rt.shutdown())]);
     this.server.destroyConnections();
     await stopped;
     this.release();
@@ -189,6 +257,8 @@ export class Daemon {
   /** Test-only: die without stopping children or finishing runs. The lock is dropped as a dead process's would be. */
   crash(): void {
     this.closed = true;
+    void this.gui?.stop();
+    this.gui = null;
     for (const rt of this.runtimes.values()) rt.crash();
     this.server.destroyConnections();
     void this.server.stopAccepting();

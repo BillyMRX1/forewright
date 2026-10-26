@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { ValidationError } from "../core/errors.js";
+import { readRegistry } from "../core/identity.js";
 import { forewrightHome, logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
 import { loadPrices, readUsageRows, summarizeUsage, windowStart } from "../core/usage.js";
@@ -22,6 +23,7 @@ import { INTEGRATION_BRANCH } from "./workspace.js";
 import { MEMORY_CAP_BYTES, clearMemory, readMemory } from "./memory.js";
 import { KICKOFF_SCALES, approveKickoffPack, exportKickoff, keepOwnerEdit, kickoffProposalView, kickoffView, nudgeKickoff, readKickoffDoc, startKickoffPack } from "./kickoff.js";
 import type { KickoffScale } from "../core/store.js";
+import { validateGuiPort } from "../core/gui-config.js";
 
 type P = Record<string, unknown>;
 type Handler = (p: P, conn: Connection) => unknown | Promise<unknown>;
@@ -51,6 +53,11 @@ export class ClientApi {
 
   constructor(private readonly d: Daemon) {
     this.handlers = this.build();
+  }
+
+  /** Every client method name, for tests that check each one works through the GUI bridge. */
+  methodNames(): string[] {
+    return Object.keys(this.handlers);
   }
 
   async call(method: string, params: P, conn: Connection): Promise<unknown> {
@@ -104,6 +111,12 @@ export class ClientApi {
 
       "projects.open": (p) => d.openProject(reqStr(p, "cwd", 4096)),
       "projects.init": (p) => d.initProject(reqStr(p, "cwd", 4096), optStr(p, "name")),
+
+      "projects.list": () => ({
+        projects: Object.entries(readRegistry())
+          .sort(([, a], [, b]) => b.lastOpenedAt.localeCompare(a.lastOpenedAt))
+          .map(([projectId, e]) => ({ projectId, root: e.root, name: path.basename(e.root) })),
+      }),
 
       "projects.initialCommit": async (p) => (await this.rt(p)).initialCommit(),
 
@@ -344,6 +357,11 @@ export class ClientApi {
       "control.resumeTask": async (p) => ({ task: (await this.rt(p)).resumeTask(reqStr(p, "taskId", 200)) }),
       "control.cancelTask": async (p) => ({ task: await (await this.rt(p)).cancelTask(reqStr(p, "taskId", 200)) }),
       "control.terminateTeam": async (p) => (await this.rt(p)).terminateTeam(),
+
+      "gui.start": (p) => {
+        const port = p["port"];
+        return d.startGui(port === undefined || port === null ? undefined : validateGuiPort(port));
+      },
 
       // Not part of protocol.ts: used by `forewright status`.
       "daemon.status": () => d.statusSummary(),

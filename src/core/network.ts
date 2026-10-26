@@ -91,15 +91,37 @@ export function validateCaFile(file: string): string {
 
 export const networkConfigPath = (home: string = forewrightHome()): string => path.join(home, "config.json");
 
-function parseConfig(text: string, file: string): NetworkConfig {
+/**
+ * The whole config file as an object (the proxy settings and other sections such as "gui"). A missing file is an
+ * empty object; an unreadable or invalid one is an error.
+ */
+export function readConfigFile(home: string = forewrightHome()): Record<string, unknown> {
+  const file = networkConfigPath(home);
+  if (!existsSync(file)) return {};
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(readFileSync(file, "utf8"));
   } catch (err) {
     throw new ValidationError(`The Forewright config ${file} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`, { file });
   }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new ValidationError(`The Forewright config ${file} must be a JSON object.`, { file });
-  const proxyRaw = (raw as Record<string, unknown>)["proxy"];
+  return raw as Record<string, unknown>;
+}
+
+/** Replaces one section of the config file (removes it when `value` is undefined) and keeps the others. */
+export function writeConfigSection(key: string, value: unknown, home: string = forewrightHome()): void {
+  const file = networkConfigPath(home);
+  const next = { ...readConfigFile(home) };
+  if (value === undefined) delete next[key];
+  else next[key] = value;
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 }); // a proxy URL can carry a password
+  renameSync(tmp, file);
+}
+
+function parseConfig(raw: Record<string, unknown>, file: string): NetworkConfig {
+  const proxyRaw = raw["proxy"];
   if (proxyRaw === undefined) return {};
   if (typeof proxyRaw !== "object" || proxyRaw === null || Array.isArray(proxyRaw)) throw new ValidationError(`"proxy" in ${file} must be an object.`, { file });
   const proxy: NonNullable<NetworkConfig["proxy"]> = {};
@@ -114,17 +136,12 @@ function parseConfig(text: string, file: string): NetworkConfig {
 
 /** Reads the user-level config. A missing file is an empty config; an unreadable or invalid one is an error. */
 export function readNetworkConfig(home: string = forewrightHome()): NetworkConfig {
-  const file = networkConfigPath(home);
-  if (!existsSync(file)) return {};
-  return parseConfig(readFileSync(file, "utf8"), file);
+  return parseConfig(readConfigFile(home), networkConfigPath(home));
 }
 
+/** Writes the proxy section; other sections of the file (such as "gui") are kept. */
 export function writeNetworkConfig(cfg: NetworkConfig, home: string = forewrightHome()): void {
-  const file = networkConfigPath(home);
-  mkdirSync(home, { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 }); // a proxy URL can carry a password
-  renameSync(tmp, file);
+  writeConfigSection("proxy", cfg.proxy, home);
 }
 
 /** Sets the proxy (both http and https) and/or the no-proxy list. Returns the new config. */
