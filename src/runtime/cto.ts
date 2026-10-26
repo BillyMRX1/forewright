@@ -12,6 +12,7 @@ import { billingProblem } from "./billing.js";
 import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { ProviderUnavailableError } from "./errors.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
+import { memoryPromptSection } from "./memory.js";
 import { overflowedRun, sessionIsFull } from "./overflow.js";
 import { looksLikeSessionLoss, nameOfSender } from "./workers.js";
 
@@ -202,6 +203,7 @@ export class CtoDriver {
       digest: buildStateDigest(store),
       messages: batch.map((m) => formatMessage(m, nameOf, taskShort)),
       instructions: readInstructionFiles([rt.root], cto.engine),
+      ...(resume ? {} : { memory: memoryPromptSection(rt.projectId, cto.id) }),
       ...(contextSummary ? { contextSummary } : {}),
       ...(extraPrompt ? { extra: extraPrompt } : {}),
     });

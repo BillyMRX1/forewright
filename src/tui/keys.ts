@@ -41,6 +41,7 @@ export const SCOPE_TITLES: Array<[KeyScope, string]> = [
   ["chat.input", "Team chat, message box"],
   ["chat.input.empty", "Team chat, empty message box"],
   ["agent", "Agent, session"],
+  ["agent.memory", "Agent, memory notes"],
   ["agent.input", "Agent, message box"],
   ["agent.input.empty", "Agent, empty message box"],
   ["slash", "Slash command suggestions"],
@@ -138,6 +139,10 @@ export const BINDINGS: Binding[] = [
 
   { id: "agent.type", keys: ["enter", "i"], label: "enter", action: "message", description: "go to the message box: it sends a direct message to this agent", scope: "agent", footer: true },
   { id: "agent.edit", keys: ["e"], label: "e", action: "edit", description: "edit the agent's engine, model and permission", scope: "agent", footer: true },
+  { id: "agent.memory", keys: ["m"], label: "m", action: "memory", description: "show the agent's memory notes", scope: "agent", footer: true },
+  { id: "agent.memory.scroll", keys: ["up", "down", "pgup", "pgdn"], label: "↑↓", action: "scroll", description: "scroll the memory notes", scope: "agent.memory", footer: true },
+  { id: "agent.memory.clear", keys: ["c"], label: "c", action: "clear", description: "clear the agent's memory (asks first)", scope: "agent.memory", footer: true },
+  { id: "agent.memory.back", keys: ["esc"], label: "esc", action: "back", description: "back to the agent", scope: "agent.memory", footer: true },
   { id: "agent.task", keys: ["t"], label: "t", action: "task", description: "open the agent's task", scope: "agent", footer: true },
   { id: "agent.log", keys: ["l"], label: "l", action: "log", description: "raw log of the agent's run", scope: "agent", footer: true },
   { id: "agent.back", keys: ["esc"], label: "esc", action: "sidebar", description: "back to the sidebar", scope: "agent", footer: true },

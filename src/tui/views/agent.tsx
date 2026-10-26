@@ -4,9 +4,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, type Key } from "ink";
 import { ComposeBox, composeHeight } from "../compose.js";
-import { Row, Rule, SafeText, useSpinner, type DLine } from "../components.js";
+import { Row, Rule, SafeText, ScrollLines, useSpinner, type DLine } from "../components.js";
 import { useClaim, useCtx, useDraft, useHintScope, useKeys, useLoad } from "../context.js";
-import { VIEW, oneLine } from "../format.js";
+import { VIEW, oneLine, wrapText } from "../format.js";
 import { workerRows } from "../home-model.js";
 import { LogPeek, runIdFor } from "../peek.js";
 import { messageLines } from "./cto.js";
@@ -32,11 +32,12 @@ export function AgentView() {
   const msgs = useLoad(() => (agentId ? api.call("state.messages", { projectId, channel: "direct", agentId, limit: 40 }) : Promise.resolve(null)), [agentId]);
   const draft = useDraft("agent", agentId ?? "none");
   const sending = useRef(false);
-  const [mode, setMode] = useState<"view" | "edit">("view");
+  const [mode, setMode] = useState<"view" | "edit" | "memory">("view");
+  const memory = useLoad(() => (agentId && mode === "memory" ? api.call("agents.memory", { projectId, agentId }) : Promise.resolve(null)), [agentId, mode]);
   const [field, setField] = useState(0);
   const [edit, setEdit] = useState<{ engine: EngineId; model: string | null; permission: PermissionProfile } | null>(null);
   const typing = ctx.focus === "input";
-  useHintScope(typing ? null : mode === "edit" ? "home.worker.edit" : "agent");
+  useHintScope(typing ? null : mode === "edit" ? "home.worker.edit" : mode === "memory" ? "agent.memory" : "agent");
   useClaim("level", mode === "edit");
   useClaim("digits", mode === "edit");
 
@@ -74,6 +75,21 @@ export function AgentView() {
   };
 
   useKeys((input, key) => {
+    if (mode === "memory") {
+      if (key.escape) return setMode("view");
+      if (input === "c" && member && (memory.data?.text ?? "") !== "") {
+        ctx.ask(`Clear ${oneLine(member.name)}'s memory notes?`, async () => {
+          try {
+            await api.call("agents.clearMemory", { projectId, agentId: member.id });
+            ctx.notify(`Cleared ${member.name}'s memory.`);
+            memory.reload();
+          } catch (err) {
+            ctx.fail(err);
+          }
+        });
+      }
+      return;
+    }
     if (mode === "edit") {
       if (!edit || !member) return;
       if (key.escape) return setMode("view");
@@ -96,7 +112,8 @@ export function AgentView() {
     if (key.escape) return ctx.back();
     if (!member) return;
     if (key.return || input === "i") return ctx.setFocus("input");
-    if (input === "e") {
+    if (input === "m") setMode("memory");
+    else if (input === "e") {
       setEdit({ engine: member.engine, model: member.model, permission: member.permission });
       setField(0);
       setMode("edit");
@@ -136,6 +153,20 @@ export function AgentView() {
     text: `${oneLine(member.name)} ${glyph} ${STATUS_LABEL[status]}`,
     segs: [{ text: oneLine(member.name), bold: true }, { text: `  ${glyph} ${STATUS_LABEL[status]}`, color: color.color, ...(color.dim ? { dim: true } : {}), bold: status === "needs_you" }, { text: `   ${row?.engine ?? member.engine} ${row?.model ?? member.model ?? "default"}  ${member.role}  ${member.permission}${row?.elapsed ? `  ${row.elapsed}` : ""}`, dim: true }],
   };
+
+  if (mode === "memory") {
+    const text = memory.data?.text ?? "";
+    const lines: DLine[] = [header, { text: memory.data ? `Memory notes  ${memory.data.bytes} of ${memory.data.limit} bytes. Only the agent edits them (update_memory); you can clear them.` : "Loading...", dim: true }];
+    const body: DLine[] = text === "" ? [{ text: memory.data ? "(no notes yet)" : "", dim: true }] : text.split("\n").flatMap((l) => wrapText(l === "" ? " " : l, Math.max(10, w - 2)).map((t) => ({ text: t })));
+    return (
+      <Box flexDirection="column" height={h} width={w}>
+        {lines.map((l, i) => (
+          <Row key={i} line={l} width={w} />
+        ))}
+        <ScrollLines lines={body} height={Math.max(1, h - lines.length)} width={w} arrows resetKey={agentId ?? ""} />
+      </Box>
+    );
+  }
 
   if (mode === "edit" && edit) {
     const prov = ctx.providers.find((p) => p.health.engine === edit.engine);

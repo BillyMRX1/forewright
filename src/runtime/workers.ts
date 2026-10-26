@@ -16,6 +16,7 @@ import { buildEngineHandoff, buildSessionHandoff, buildWorkerPrompt, formatMessa
 import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
+import { memoryPromptSection } from "./memory.js";
 import { overflowedRun, sessionIsFull } from "./overflow.js";
 
 export const taskPort = (shortId: string): number => 41000 + Number(shortId.slice(2)) * 10;
@@ -192,6 +193,10 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
     }
     if (freshReason) store.recordEvent("session.reset", "task", task.id, { kind: "system" }, { agentId: agent.id, role: "worker", taskId: task.id, reason: freshReason });
 
+    // Resume only this agent's session for this task on this engine: never another task's or engine's.
+    const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId && r.engine === agent.engine).at(-1);
+    const canResume = adapterFor(rt, agent).capabilities.resume && session !== null && !overflowed && !(prior?.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
+
     const cto = rt.ctoAgent();
     const prompt = buildWorkerPrompt({
       agent,
@@ -200,6 +205,7 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
       task: current,
       requirements,
       prdRevision: doc?.revision ?? null,
+      ...(canResume ? {} : { memory: memoryPromptSection(rt.projectId, agent.id) }),
       handoff,
       ...(engineHandoff ? { engineHandoff } : {}),
       feedback: [...shownFeedback.values()].map((m) => `- ${truncate(m.body, 3000)}`),
@@ -209,9 +215,6 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
 
     const tmp = path.join(ws.worktreePath, ".forewright-tmp");
     mkdirSync(tmp, { recursive: true });
-    // Resume only this agent's session for this task on this engine: never another task's or engine's.
-    const prior = store.listRuns({ taskId: task.id }).filter((r) => r.agentId === agent.id && r.id !== run.id && r.providerSessionId && r.engine === agent.engine).at(-1);
-    const canResume = adapterFor(rt, agent).capabilities.resume && session !== null && !overflowed && !(prior?.error && looksLikeSessionLoss(`${prior.error} ${prior.errorDetail ?? ""}`));
     launchRun(rt, {
       run,
       agent,

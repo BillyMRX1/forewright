@@ -17,6 +17,7 @@ export type ActionName =
   | "hire_agent"
   | "retire_agent"
   | "send_message"
+  | "update_memory"
   | "request_decision"
   | "submit_work"
   | "submit_review"
@@ -73,6 +74,7 @@ const CTO_ACTIONS: ReadonlySet<ActionName> = new Set([
   "hire_agent",
   "retire_agent",
   "send_message",
+  "update_memory",
   "request_decision",
   "request_integration",
   "read_state",
@@ -117,6 +119,7 @@ export function authorize(actor: Actor, action: ActionName, context: ActionConte
 
   switch (action) {
     case "send_message":
+    case "update_memory":
       return { allowed: true };
     case "read_state":
       if (context.taskId !== undefined && context.taskId === context.agentCurrentTaskId) return { allowed: true };

@@ -131,7 +131,7 @@ test("tools/list shows only the tools a token's role may call, and a token dies 
     assert.ok(ctoTools.includes("propose_prd") && ctoTools.includes("create_task") && ctoTools.includes("hire_agent") && ctoTools.includes("request_merge_to_user_branch") && ctoTools.includes("create_initial_commit"));
     assert.ok(!ctoTools.includes("submit_work") && !ctoTools.includes("submit_review") && !ctoTools.includes("approve_prd"));
     const workerTools = await names(tokenOf(workRequests(h)[0]!));
-    assert.deepEqual(workerTools, ["get_my_task", "send_message", "submit_work"]);
+    assert.deepEqual(workerTools, ["get_my_task", "send_message", "submit_work", "update_memory"]);
 
     const oldToken = tokenOf(workRequests(h)[0]!);
     const active = [...h.rt.active.values()].find((a) => a.kind === "work")!;

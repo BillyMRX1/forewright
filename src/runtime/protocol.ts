@@ -123,6 +123,9 @@ export interface Methods {
     params: { projectId: string; agentId: string; engine?: Agent["engine"]; model?: string | null; permission?: Agent["permission"] };
     result: { agent: Agent };
   };
+  /** An agent's memory notes (empty text when it has none) and the size limit. */
+  "agents.memory": { params: { projectId: string; agentId: string }; result: { text: string; bytes: number; limit: number } };
+  "agents.clearMemory": { params: { projectId: string; agentId: string }; result: { ok: true } };
   "tasks.reassign": { params: { projectId: string; taskId: string; agentId: string; note: string }; result: { task: Task } };
   "tasks.outcome": { params: { projectId: string; taskId: string; fixMinutes?: number }; result: { ok: true } };
   "drafts.save": { params: { projectId: string; view: string; key: string; body: string }; result: { ok: true } };

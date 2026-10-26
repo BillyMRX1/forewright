@@ -8,6 +8,7 @@ import type { RunOutcome } from "../core/types.js";
 import { BillingBlockedError } from "./errors.js";
 import { gitTry } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
+import { memoryPromptSection } from "./memory.js";
 import { buildReviewPrompt, readInstructionFiles, reviewSystemPrompt } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
@@ -124,6 +125,7 @@ function startReview(rt: ProjectRuntime, t: Task, primary: Agent, res: RunnableR
     checks: store.listVerifications(t.id).filter((v) => v.kind === "check" && v.commitSha === candidate),
     candidate,
     instructions: readInstructionFiles([rt.root, wt], reviewer.engine),
+    memory: memoryPromptSection(rt.projectId, reviewer.id),
   });
   launchRun(rt, {
     run,

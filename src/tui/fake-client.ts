@@ -209,6 +209,8 @@ export class FakeClient implements ClientApi {
   failSetting: { key: string; message: string } | null = null;
   /** Problems reported per fallback entry engine (a missing key means the entry is ready). */
   fallbackProblems: Record<string, string> = {};
+  /** Memory notes per agent id, as agents.memory returns them. */
+  memory: Record<string, string> = {};
   /** Engine actually in use per agent id, as the service reports it in state.team. */
   engineUse: Record<string, EngineUse> = {};
   /** When false, the latest PRD revision is already approved (nothing to approve). */
@@ -376,6 +378,13 @@ export class FakeClient implements ClientApi {
           return { settings: this.settings() };
         case "agents.update":
           return { agent: d.agents[0] };
+        case "agents.memory": {
+          const text = this.memory[String(p["agentId"])] ?? "";
+          return { text, bytes: Buffer.byteLength(text), limit: 4096 };
+        }
+        case "agents.clearMemory":
+          delete this.memory[String(p["agentId"])];
+          return { ok: true };
         default:
           throw new Error(`FakeClient: ${method} is not implemented`);
       }

@@ -17,6 +17,7 @@ import { recordReview } from "./review.js";
 import type { TokenRecord } from "./tokens.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { engineRoleProblem } from "./engine-roles.js";
+import { MEMORY_CAP_BYTES, writeMemory } from "./memory.js";
 
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -350,6 +351,19 @@ const TOOLS: ToolDef[] = [
     action: "send_message",
     mutating: true,
     run: (ctx, a) => sendMessage(ctx, str(a, "to", { max: 80 }).trim(), str(a, "body", { max: 8000 })),
+  },
+  {
+    name: "update_memory",
+    description: `Replace your memory notes with a new version (Markdown, at most ${MEMORY_CAP_BYTES} bytes): decisions, conventions, where things are, open questions. A future session of yours starts from them. Never put secrets in it.`,
+    properties: { text: { type: "string" } },
+    required: ["text"],
+    roles: ["cto", "work", "review"],
+    action: "update_memory",
+    mutating: true,
+    run: (ctx, a) => {
+      const stored = writeMemory(ctx.rt.projectId, ctx.agent.id, str(a, "text", { max: MEMORY_CAP_BYTES * 4 }));
+      return { ok: true, bytes: Buffer.byteLength(stored), limit: MEMORY_CAP_BYTES };
+    },
   },
   {
     name: "request_decision",

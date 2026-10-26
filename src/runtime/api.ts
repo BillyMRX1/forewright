@@ -19,6 +19,7 @@ import type { Connection } from "./server.js";
 import { engineRoleProblem } from "./engine-roles.js";
 import { fallbackStatus } from "./fallback.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
+import { MEMORY_CAP_BYTES, clearMemory, readMemory } from "./memory.js";
 
 type P = Record<string, unknown>;
 type Handler = (p: P, conn: Connection) => unknown | Promise<unknown>;
@@ -251,6 +252,18 @@ export class ClientApi {
         }
         rt.scheduler.wake("settings");
         return { settings: rt.store.getSettings() };
+      },
+      "agents.memory": async (p) => {
+        const rt = await this.rt(p);
+        const text = readMemory(rt.projectId, rt.store.getAgent(reqStr(p, "agentId", 200)).id);
+        return { text, bytes: Buffer.byteLength(text), limit: MEMORY_CAP_BYTES };
+      },
+      "agents.clearMemory": async (p) => {
+        const rt = await this.rt(p);
+        const agent = rt.store.getAgent(reqStr(p, "agentId", 200));
+        clearMemory(rt.projectId, agent.id);
+        rt.store.recordEvent("memory.cleared", "agent", agent.id, HUMAN, { agentId: agent.id });
+        return { ok: true };
       },
       "agents.update": async (p) => {
         const rt = await this.rt(p);

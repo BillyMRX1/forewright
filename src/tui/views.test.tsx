@@ -671,4 +671,29 @@ describe("CTO, Team chat and agent messages", () => {
   });
 });
 
-void [up, release];
+describe("Agent memory", () => {
+  it("m shows the agent's memory notes and c clears them after confirmation", async () => {
+    const api = new FakeClient();
+    api.memory["a2"] = "- Decision: parser lives in src/cli.ts\n- Open question: default to --json?";
+    const { h } = await mount({ view: VIEW.agent, api });
+    await up(h);
+    await h.send("m");
+    await h.settle(250);
+    assert.match(h.frame(), /Memory notes/);
+    assert.match(h.frame(), /parser lives in src\/cli\.ts/);
+    assert.match(hints(h), /c clear/);
+    await h.send("c");
+    await h.settle(100);
+    assert.match(h.frame(), /Clear Bo's memory notes\?/);
+    assert.equal(api.callsTo("agents.clearMemory").length, 0);
+    await h.send("y");
+    await h.settle(250);
+    assert.equal(api.callsTo("agents.clearMemory").length, 1);
+    assert.deepEqual(api.memory, {});
+    assert.match(h.frame(), /no notes yet/);
+    await esc(h);
+    assert.doesNotMatch(h.frame(), /Memory notes/);
+  });
+});
+
+void [release];

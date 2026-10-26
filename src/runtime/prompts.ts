@@ -57,6 +57,8 @@ export interface WorkerPromptInput {
   requirements: Array<{ key: string; text: string }>;
   prdRevision: number | null;
   handoff: string | null;
+  /** Memory notes for a fresh session (see memoryPromptSection); empty or absent when resuming. */
+  memory?: string;
   /** Set when this run continues an attempt that ran on another engine. */
   engineHandoff?: string;
   feedback: string[];
@@ -72,6 +74,7 @@ export function workerSystemPrompt(): string {
     "- When you are done, commit your work with git (plain commit message), then call the submit_work tool with a short summary. Submitting is a statement, not acceptance: an independent review and integration checks follow.",
     "- If you are blocked or a decision is needed, call send_message to the CTO. Do not guess about scope.",
     "- Use the PORT and FOREWRIGHT_TASK_TMP environment variables for any server or scratch files.",
+    "- At the end of a task, call update_memory with your notes for a future session: decisions, conventions, where things are, open questions. Keep them short and free of secrets.",
     `- ${UNTRUSTED_NOTE}`,
   ].join("\n");
 }
@@ -95,6 +98,7 @@ export function buildWorkerPrompt(i: WorkerPromptInput): string {
   if (i.requirements.length > 0) {
     sections.push(`## Requirements this task serves (approved PRD revision ${i.prdRevision ?? "?"})\n${i.requirements.map((r) => `- ${r.key}: ${r.text}`).join("\n")}`);
   }
+  if (i.memory) sections.push(i.memory);
   if (i.handoff) sections.push(`## Handoff note\n${truncate(i.handoff, 4000)}`);
   if (i.engineHandoff) sections.push(i.engineHandoff);
   if (i.feedback.length > 0) sections.push(`## Feedback from earlier attempts (fix these first)\n${i.feedback.join("\n")}`);
@@ -114,12 +118,15 @@ export interface ReviewPromptInput {
   checks: Verification[];
   candidate: string;
   instructions: string;
+  /** Memory notes (a review run is always a fresh session). */
+  memory?: string;
 }
 
 export function reviewSystemPrompt(): string {
   return [
     "You are an independent reviewer. You did not write this change. Read the workspace (read-only) and judge the change against the task's acceptance criteria and requirements.",
     "Call submit_review exactly once with verdict \"pass\" or \"fail\" and concise notes (what is wrong and what to fix, when failing). Do not modify files.",
+    "- Before you finish you may call update_memory with short notes a future review needs (conventions, recurring problems). No secrets.",
     `- ${UNTRUSTED_NOTE}`,
   ].join("\n");
 }
@@ -134,6 +141,7 @@ export function buildReviewPrompt(i: ReviewPromptInput): string {
     s.push(`## Check results\n${i.checks.map((c) => `- ${c.verdict}: ${c.command ?? c.kind} ${c.stale ? "(stale)" : ""}`).join("\n")}`);
   }
   s.push(`## Diff against the integration branch${i.diffTruncated ? " (truncated)" : ""}\n\`\`\`diff\n${i.diff}\n\`\`\``);
+  if (i.memory) s.push(i.memory);
   if (i.instructions) s.push(i.instructions);
   return truncate(s.join("\n\n"), 150 * 1024);
 }
@@ -153,6 +161,7 @@ export function ctoSystemPrompt(ctoName: string): string {
     "- Hire the smallest useful team. Include at least one reviewer (role \"review\") who is not a worker. Pick engine and model per task with cost in mind.",
     "- Use request_decision for material choices, with options and your recommendation.",
     "- If the repository has no commits yet, tasks cannot start (agents branch from a commit). Call create_initial_commit yourself: it makes an empty commit with Billy's git identity. Then tell Billy you did it. If it fails (for example git does not know Billy's name and email), pass on what to fix; Billy can also choose \"Create initial commit\" in Settings or the command palette.",
+    "- At the end of a turn that taught you something lasting, call update_memory with your notes for a future session: decisions, conventions, where things are, open questions. Keep them short and free of secrets.",
     "- Reply to Billy in plain, short text. Your final message is posted to the CTO channel.",
     `- ${UNTRUSTED_NOTE}`,
   ].join("\n");
@@ -202,10 +211,13 @@ export function buildCtoPrompt(input: {
   messages: string[];
   instructions: string;
   contextSummary?: string;
+  /** Memory notes for a fresh session; empty or absent when resuming. */
+  memory?: string;
   extra?: string;
 }): string {
   const s: string[] = [input.digest];
   if (input.contextSummary) s.push(input.contextSummary);
+  if (input.memory) s.push(input.memory);
   if (input.instructions) s.push(input.instructions);
   if (input.extra) s.push(input.extra);
   s.push(`## New messages for you\n${input.messages.length > 0 ? input.messages.join("\n") : "(none)"}`);
