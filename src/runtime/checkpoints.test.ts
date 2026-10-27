@@ -108,7 +108,8 @@ test("undo to here: resets only the task branch, stales the evidence, moves revi
     assert.deepEqual(res.dropped.map((c) => c.sha), [s.shas[2], s.shas[1]]);
 
     assert.equal(tip(s), s.shas[0], "the task branch is at the chosen commit");
-    assert.equal(readFileSync(path.join(s.worktree, "greeting.txt"), "utf8"), "version 1\n", "the worktree too");
+    // git may check files out with CRLF on Windows (core.autocrlf), so compare line content, not bytes.
+    assert.equal(readFileSync(path.join(s.worktree, "greeting.txt"), "utf8").replace(/\r\n/g, "\n"), "version 1\n", "the worktree too");
     assert.equal(gitIn(s.h.repo, "rev-parse", "main"), mainBefore, "Billy's branch is untouched");
     assert.equal(gitIn(s.h.repo, "rev-parse", INTEGRATION_BRANCH), integrationBefore, "the integration branch is untouched");
     assert.equal(gitIn(s.h.repo, "cat-file", "-t", s.shas[2]!), "commit", "the dropped commits still exist");
