@@ -26,6 +26,8 @@ export const palette = {
 export type ThemeColor = (typeof palette)[keyof typeof palette];
 
 export function asciiMode(): boolean {
+  // The web app bundles this module and has no `process`; it always gets the Unicode symbols.
+  if (typeof process === "undefined") return false;
   return process.env["TERM"] === "dumb" || process.env["FOREWRIGHT_ASCII"] === "1";
 }
 

@@ -762,3 +762,210 @@ textarea:disabled {
     transition: none;
   }
 }
+
+/* Home */
+
+.badge {
+  float: right;
+  min-width: 1.4em;
+  padding: 0 6px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--accent-ink);
+  background: var(--attention);
+}
+
+.home {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 1100px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.card-wide {
+  grid-column: 1 / -1;
+}
+
+.card h2 {
+  font-size: 0.95rem;
+  color: var(--muted);
+  text-transform: none;
+  margin-bottom: 0.6em;
+}
+
+.card h3 {
+  font-size: 0.85rem;
+  margin: 0.8em 0 0.3em;
+  color: var(--muted);
+}
+
+.snapshot-head,
+.progress-row,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.project-title {
+  font-size: 1.1rem;
+}
+
+.progress-row {
+  margin: 10px 0;
+}
+
+.progress {
+  flex: 1 1 200px;
+  height: 10px;
+  accent-color: var(--done);
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ol.rows {
+  list-style: none;
+}
+
+.row,
+.row-btn {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.row-btn {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  padding: 8px 4px;
+}
+
+.row-btn:hover {
+  background: var(--surface-2);
+}
+
+.row-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.row-meta {
+  flex: none;
+  font-size: 0.85rem;
+}
+
+.team-row {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.team-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-sub {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.glyph {
+  display: inline-block;
+  width: 1.2em;
+  text-align: center;
+  font-weight: 700;
+}
+
+.glyph-needs_you,
+.glyph-waiting {
+  color: var(--attention);
+}
+
+.glyph-blocked {
+  color: var(--error);
+}
+
+.glyph-done {
+  color: var(--done);
+}
+
+.glyph-working {
+  color: var(--accent);
+}
+
+.usage {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.usage th,
+.usage td {
+  text-align: left;
+  padding: 4px 8px 4px 0;
+  vertical-align: top;
+  font-weight: 400;
+}
+
+.usage thead th {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.usage-total {
+  margin: 8px 0 4px;
+}
+
+.events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.events li {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 759px) {
+  .home {
+    padding: 12px 16px;
+  }
+
+  .home-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

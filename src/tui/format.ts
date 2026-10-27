@@ -1,6 +1,5 @@
 // Pure helpers: plain-language labels, time, and text layout. No React here.
 
-import os from "node:os";
 import type { BlockReason, RunState, TaskState } from "../core/types.js";
 import { sanitizeTerminal } from "../core/safety.js";
 import { TASK_STATE_COLOR, sym } from "./theme.js";
@@ -111,13 +110,6 @@ export function clockTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-export function abbreviatePath(p: string, max: number): string {
-  const home = os.homedir();
-  const shown = p === home || p.startsWith(`${home}/`) || p.startsWith(`${home}\\`) ? `~${p.slice(home.length)}` : p;
-  if (shown.length <= max) return shown;
-  return `...${shown.slice(shown.length - Math.max(1, max - 3))}`;
 }
 
 export function plainBlockReason(reason: BlockReason | null, detail: string | null): string {

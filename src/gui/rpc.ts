@@ -105,6 +105,11 @@ export class RpcClient {
     return this.attached ? { projectId: this.attached.projectId, root: this.attached.root } : null;
   }
 
+  /** The newest event sequence number seen for the open project (0 before any), so a view can ask for "the last N events". */
+  get latestSeq(): number {
+    return this.attached?.lastSeq ?? 0;
+  }
+
   start(): void {
     this.connect();
   }

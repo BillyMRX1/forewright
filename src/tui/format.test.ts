@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { abbreviatePath, ago, clip, diffLines, duration, plainBlockReason, windowed, wrapText } from "./format.js";
+import { ago, clip, diffLines, duration, plainBlockReason, windowed, wrapText } from "./format.js";
+import { abbreviatePath } from "./path-format.js";
 
 describe("format helpers", () => {
   it("wraps text at word boundaries and hard-breaks long words", () => {

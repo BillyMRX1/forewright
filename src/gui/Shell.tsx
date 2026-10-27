@@ -1,7 +1,7 @@
 // The app shell: top bar, sidebar (a drawer on narrow screens), the current view and the hint bar.
 // Named Shell (not App) so tsc's output does not clash with the bundle app.js on case-insensitive disks.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import type { RuntimeStatus } from "../runtime/protocol.js";
 import { Picker, plainError } from "./Picker.js";
@@ -9,7 +9,10 @@ import type { ProjectInfo } from "./Picker.js";
 import type { ConnectionState, RpcClient } from "./rpc.js";
 import { Toasts, readStore, writeStore } from "./ui.js";
 import type { Toast } from "./ui.js";
+import { NeedsProvider, ProjectContext, sidebarBadges, useNeeds, useProject } from "./live.js";
+import type { Badge, Focus, ProjectContextValue } from "./live.js";
 import { Cto } from "./views/Cto.js";
+import { Home } from "./views/Home.js";
 
 export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "settings";
 
@@ -24,7 +27,7 @@ export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> =
 
 export const HINTS: Record<ViewId, string[]> = {
   cto: ["Enter send", "Shift+Enter new line", "/ commands", "Tab complete command", "Esc close dialogs"],
-  home: ["Use the terminal UI for this view for now"],
+  home: ["Click a row under Needs you to open it", "Esc close dialogs"],
   tasks: ["Use the terminal UI for this view for now"],
   team: ["Use the terminal UI for this view for now"],
   inbox: ["Use the terminal UI for this view for now"],
@@ -115,7 +118,20 @@ export function TopBar({
   );
 }
 
-export function Sidebar({ view, open, onPick, onClose }: { view: ViewId; open: boolean; onPick: (v: ViewId) => void; onClose: () => void }) {
+export function Sidebar({
+  view,
+  open,
+  badges = {},
+  onPick,
+  onClose,
+}: {
+  view: ViewId;
+  open: boolean;
+  /** A count or dot next to a view, with words for screen readers. */
+  badges?: Partial<Record<ViewId, Badge>>;
+  onPick: (v: ViewId) => void;
+  onClose: () => void;
+}) {
   return (
     <>
       {open ? <button type="button" className="backdrop" aria-label="Close the menu" onClick={onClose} /> : null}
@@ -126,6 +142,14 @@ export function Sidebar({ view, open, onPick, onClose }: { view: ViewId; open: b
             <li key={v.id}>
               <button type="button" className={v.id === view ? "nav-item nav-active" : "nav-item"} aria-current={v.id === view ? "page" : undefined} onClick={() => onPick(v.id)}>
                 {v.label}
+                {badges[v.id] ? (
+                  <>
+                    <span className="badge" aria-hidden="true" title={badges[v.id]!.label}>
+                      {badges[v.id]!.text}
+                    </span>
+                    <span className="sr-only">, {badges[v.id]!.label}</span>
+                  </>
+                ) : null}
               </button>
             </li>
           ))}
@@ -133,6 +157,13 @@ export function Sidebar({ view, open, onPick, onClose }: { view: ViewId; open: b
       </nav>
     </>
   );
+}
+
+/** The sidebar with live badges; it must sit inside the project providers. */
+function BadgedSidebar(props: { view: ViewId; open: boolean; onPick: (v: ViewId) => void; onClose: () => void }) {
+  const { runtime } = useProject();
+  const { inboxCount, blockedCount } = useNeeds();
+  return <Sidebar {...props} badges={sidebarBadges(inboxCount, blockedCount, runtime)} />;
 }
 
 export function HintBar({ hints }: { hints: string[] }) {
@@ -154,12 +185,14 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
   const [project, setProject] = useState<ProjectInfo | null>(null);
   const [picking, setPicking] = useState(false);
   const [pickNotice, setPickNotice] = useState<string | null>(null);
-  const [view, setView] = useState<ViewId>("cto");
+  const [view, setView] = useState<ViewId>("home");
   const [drawer, setDrawer] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
+  const [focus, setFocus] = useState<Focus | null>(null);
+  const focusNonce = useRef(0);
   const triedRestore = useRef(false);
   const toastId = useRef(0);
 
@@ -249,6 +282,38 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     setPickNotice(null);
   };
 
+  const pick = (v: ViewId) => {
+    setView(v);
+    setFocus(null);
+    setDrawer(false);
+    setPicking(false);
+  };
+
+  const projectValue = useMemo<ProjectContextValue | null>(
+    () =>
+      project
+        ? {
+            rpc,
+            projectId: project.projectId,
+            root: project.root,
+            name: project.name,
+            connected: conn === "open",
+            runtime,
+            notify,
+            reloadKey,
+            focus,
+            go: (v, id) => {
+              setView(v);
+              setFocus(id === undefined ? null : { view: v, id, nonce: ++focusNonce.current });
+              setDrawer(false);
+              setPicking(false);
+            },
+            openPicker: () => setPicking(true),
+          }
+        : null,
+    [rpc, project, conn, runtime, notify, reloadKey, focus],
+  );
+
   if (conn === "unauthorized") return <UnauthorizedScreen />;
   if (conn === "connecting" && !project) {
     return (
@@ -275,12 +340,15 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
       </div>
     );
   } else if (view === "cto" && project) {
-    body = <Cto key={project.projectId} rpc={rpc} projectId={project.projectId} connected={connected} runtime={runtime} notify={notify} reloadKey={reloadKey} />;
+    body = <Cto key={project.projectId} />;
+  } else if (view === "home" && project) {
+    body = <Home key={project.projectId} />;
   } else {
     body = <ComingSoon title={current.label} text={current.soon} />;
   }
 
-  return (
+  const sidebarProps = { view, open: drawer, onPick: pick, onClose: () => setDrawer(false) };
+  const frame = (
     <div className="shell">
       <TopBar project={project} conn={conn} runtime={runtime} theme={theme} onMenu={() => setDrawer(true)} onProject={() => setPicking(true)} onTheme={toggleTheme} />
       {runtime?.ctoError ? (
@@ -289,20 +357,17 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
         </div>
       ) : null}
       <div className="main-row">
-        <Sidebar
-          view={view}
-          open={drawer}
-          onPick={(v) => {
-            setView(v);
-            setDrawer(false);
-            setPicking(false);
-          }}
-          onClose={() => setDrawer(false)}
-        />
+        {projectValue ? <BadgedSidebar {...sidebarProps} /> : <Sidebar {...sidebarProps} />}
         <main className="content">{body}</main>
       </div>
       <HintBar hints={showPicker ? ["Enter open the folder", "Tab next field"] : HINTS[view]} />
       <Toasts toasts={toasts} />
     </div>
+  );
+  if (!projectValue) return frame;
+  return (
+    <ProjectContext.Provider value={projectValue}>
+      <NeedsProvider key={projectValue.projectId}>{frame}</NeedsProvider>
+    </ProjectContext.Provider>
   );
 }

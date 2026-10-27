@@ -1,6 +1,7 @@
 // Pure model of the Home screen: the needs-you rows, the worker rows, the event wording and the row budget. No React.
 
-import { compactTokens, costText, type UsageSummary, type UsageTotals } from "../core/usage.js";
+import type { UsageSummary, UsageTotals } from "../core/usage.js";
+import { compactTokens, costText } from "../core/usage-format.js";
 import type { Decision, ForewrightEvent, RequirementDoc, Task } from "../core/store-types.js";
 import type { ProviderStatus, RuntimeStatus } from "../runtime/protocol.js";
 import type { AgentAttention, NeedItem } from "./attention.js";

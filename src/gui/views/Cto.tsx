@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { Message, RequirementDoc } from "../../core/store-types.js";
-import type { RuntimeStatus } from "../../runtime/protocol.js";
 import { Markdown } from "../markdown.js";
+import { PrdCard, PrdReader } from "../prd.js";
 import { plainError } from "../Picker.js";
-import type { RpcClient } from "../rpc.js";
+import { useProject } from "../live.js";
 import { ConfirmDialog, Modal, relTime, useInterval } from "../ui.js";
+
+export { PrdCard, PrdReader };
 
 export const COMMANDS: ReadonlyArray<{ name: string; help: string }> = [
   { name: "approve", help: "approve the PRD the CTO proposed" },
@@ -54,78 +56,10 @@ export function EmptyState() {
   );
 }
 
-export function PrdCard({ doc, approved, onRead, onApprove }: { doc: RequirementDoc; approved: boolean; onRead: () => void; onApprove: () => void }) {
-  return (
-    <div className="prd-card" role="region" aria-label="PRD waiting for approval">
-      <div className="prd-card-text">
-        <strong>
-          PRD r{doc.revision} {approved ? "approved" : "ready for you"}
-        </strong>
-        <span>: {doc.title}</span>
-      </div>
-      <div className="prd-card-actions">
-        <button type="button" className="btn" onClick={onRead}>
-          Read
-        </button>
-        {approved ? (
-          <span className="chip chip-done">Approved</span>
-        ) : (
-          <button type="button" className="btn btn-primary" onClick={onApprove}>
-            Approve
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function PrdReader({ doc, onClose, onApprove }: { doc: RequirementDoc; onClose: () => void; onApprove: (() => void) | null }) {
-  return (
-    <Modal title={`PRD r${doc.revision}: ${doc.title}`} onClose={onClose} wide>
-      <p className="muted">Status: {doc.status}</p>
-      <h3>Requirements</h3>
-      {doc.requirements.length === 0 ? (
-        <p className="muted">No requirements listed.</p>
-      ) : (
-        <ul className="reqs">
-          {doc.requirements.map((r) => (
-            <li key={r.key}>
-              <code className="req-key">{r.key}</code> {r.text}
-            </li>
-          ))}
-        </ul>
-      )}
-      <h3>Document</h3>
-      <Markdown text={doc.body} />
-      {onApprove ? (
-        <div className="modal-actions">
-          <button type="button" className="btn btn-primary" onClick={onApprove}>
-            Approve r{doc.revision}
-          </button>
-        </div>
-      ) : null}
-    </Modal>
-  );
-}
-
 type Dialog = { kind: "approve" } | { kind: "pause" } | { kind: "resume" } | { kind: "prd" } | { kind: "help" } | null;
 
-export function Cto({
-  rpc,
-  projectId,
-  connected,
-  runtime,
-  notify,
-  reloadKey,
-}: {
-  rpc: RpcClient;
-  projectId: string;
-  connected: boolean;
-  runtime: RuntimeStatus | null;
-  notify: (text: string) => void;
-  /** Changes when the connection was restored, so the view reloads. */
-  reloadKey: number;
-}) {
+export function Cto() {
+  const { rpc, projectId, connected, runtime, notify, reloadKey } = useProject();
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [prd, setPrd] = useState<RequirementDoc | null>(null);
   const [approvedRev, setApprovedRev] = useState<number | null>(null);

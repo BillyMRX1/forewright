@@ -10,7 +10,8 @@ import { Box, Text, useInput } from "ink";
 import type { EngineId } from "../core/types.js";
 import type { ClientApi } from "./client.js";
 import { Row, SafeText, useSpinner, type DLine } from "./components.js";
-import { abbreviatePath, clip, fit, windowed, wrapText } from "./format.js";
+import { clip, fit, windowed, wrapText } from "./format.js";
+import { abbreviatePath } from "./path-format.js";
 import {
   MERGE_OPTIONS,
   NOTHING_USABLE,
