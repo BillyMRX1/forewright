@@ -7,6 +7,7 @@ import type { TaskState } from "../core/types.js";
 import type { TaskDetail } from "../runtime/protocol.js";
 import { agent, fixture, idleRuntime, task } from "./fixtures.js";
 import { activeRunFor, boardModel, defaultRunId, describeLogLine, diffLineKind, diffLines, listOrder, logLines, moveSelection, reassignCandidates, taskActions, visibleOrder, workflowStages } from "./tasks-model.js";
+import { RunLogView } from "./runlog.js";
 import { ReassignDialog, TaskBoard, TaskDetailView, TaskList } from "./views/Tasks.js";
 import type { TaskDetailViewProps } from "./views/Tasks.js";
 
@@ -200,6 +201,11 @@ test("the list has one row per task in board order with state, assignee and age"
   assert.match(out, /task-row-age muted">1h</);
 });
 
+/** A run log slot that shows these raw lines, as the connected RunLog would. */
+function logSlot(raw: string[]): TaskDetailViewProps["runLog"] {
+  return (_id, live) => <RunLogView raw={raw} error={null} mode="readable" onMode={noop} live={live} following onJump={noop} onCopy={noop} copyNote={null} />;
+}
+
 function detailProps(over: Partial<TaskDetailViewProps> & { detail: TaskDetail }): TaskDetailViewProps {
   return {
     now: NOW,
@@ -210,8 +216,7 @@ function detailProps(over: Partial<TaskDetailViewProps> & { detail: TaskDetail }
     onTab: noop,
     selectedRunId: null,
     onSelectRun: noop,
-    log: null,
-    logError: null,
+    runLog: () => <RunLogView raw={null} error={null} mode="readable" onMode={noop} live={false} following onJump={noop} onCopy={noop} copyNote={null} />,
     diff: null,
     diffError: null,
     onOpenTask: noop,
@@ -235,7 +240,7 @@ function workingDetail(): TaskDetail {
 
 test("a working task shows its status, owner, stages, text, links, checks, runs and live output", () => {
   const d = workingDetail();
-  const out = renderToStaticMarkup(<TaskDetailView {...detailProps({ detail: d, activeRunId: "run_1", actions: taskActions(d.task, true), log: { runId: "run_1", lines: ["› working on it"] } })} />);
+  const out = renderToStaticMarkup(<TaskDetailView {...detailProps({ detail: d, activeRunId: "run_1", actions: taskActions(d.task, true), runLog: logSlot(["› working on it"]) })} />);
   assert.match(out, /T-2<\/span> Add the list view/);
   assert.match(out, /<strong>Working<\/strong><span class="muted">, Ada \(claude claude-sonnet-4\)/);
   assert.match(out, /Branch <code>fw\/t-2<\/code>/);
@@ -270,7 +275,7 @@ test("a done task offers no actions and shows every stage done", () => {
   const d = workingDetail();
   d.task = { ...d.task, state: "done" };
   d.runs = [run({ id: "r9" })];
-  const out = renderToStaticMarkup(<TaskDetailView {...detailProps({ detail: d, actions: taskActions(d.task, false), log: { runId: "r9", lines: [] } })} />);
+  const out = renderToStaticMarkup(<TaskDetailView {...detailProps({ detail: d, actions: taskActions(d.task, false), runLog: logSlot([]) })} />);
   assert.doesNotMatch(out, /Task actions/);
   assert.equal((out.match(/stage stage-done/g) ?? []).length, 4);
   assert.match(out, /No output yet\./);
@@ -296,7 +301,7 @@ test("untrusted markup in a title, description, log or diff shows as text", () =
   d.task = { ...d.task, title: evil, description: `${evil} and <img src=x onerror=alert(2)>` };
   const board = renderToStaticMarkup(<TaskBoard tasks={[d.task]} agents={agents} selectedId={null} onOpen={noop} now={NOW} showCancelled={false} onToggleCancelled={noop} />);
   const list = renderToStaticMarkup(<TaskList tasks={[d.task]} agents={agents} selectedId={null} onOpen={noop} now={NOW} />);
-  const detail = renderToStaticMarkup(<TaskDetailView {...detailProps({ detail: d, activeRunId: "run_1", log: { runId: "run_1", lines: [evil] } })} />);
+  const detail = renderToStaticMarkup(<TaskDetailView {...detailProps({ detail: d, activeRunId: "run_1", runLog: logSlot([evil]) })} />);
   const diff = renderToStaticMarkup(<TaskDetailView {...detailProps({ detail: d, tab: "diff", diff: { base: null, head: null, diff: `+${evil}`, truncated: false } })} />);
   for (const out of [board, list, detail, diff]) {
     assert.doesNotMatch(out, /<script/i);

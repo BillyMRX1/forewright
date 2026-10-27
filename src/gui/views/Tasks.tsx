@@ -11,18 +11,16 @@ import { TASK_STATE_LABEL, duration, oneLine, plainBlockReason, plainRunState, s
 import { taskGlyph } from "../../tui/theme.js";
 import { isAgentEvent, isRunEvent, isTaskEvent, useLive, useProject } from "../live.js";
 import { Markdown } from "../markdown.js";
+import { EvidenceTab } from "../evidence.js";
 import { plainError } from "../Picker.js";
+import { RunLog, RunLogModal } from "../runlog.js";
 import {
-  LOG_POLL_MS,
-  LOG_TAIL_LINES,
   STAGE_NAMES,
   activeRunFor,
   boardModel,
   defaultRunId,
   diffLines,
-  isRunActive,
   listOrder,
-  logLines,
   moveSelection,
   needsAttention,
   reassignCandidates,
@@ -161,12 +159,7 @@ export function TaskList({ tasks, agents, selectedId, onOpen, now }: PaneProps) 
 
 // ---------------------------------------------------------------- the detail
 
-export type DetailTab = "details" | "diff";
-
-export interface LogData {
-  runId: string;
-  lines: string[];
-}
+export type DetailTab = "details" | "diff" | "evidence";
 
 export interface DiffData {
   base: string | null;
@@ -204,26 +197,6 @@ function verdictChip(v: Verification): ReactNode {
 const KIND_LABEL: Record<Verification["kind"], string> = { check: "check", review: "review", integration_check: "integration check" };
 const RUN_KIND_LABEL: Record<Run["kind"], string> = { work: "work", review: "review", cto: "CTO", integration_check: "integration check" };
 
-/** Output that follows the end while the viewer has not scrolled up. */
-export function LogBox({ lines, label }: { lines: string[]; label: string }) {
-  const ref = useRef<HTMLPreElement>(null);
-  const stick = useRef(true);
-  useEffect(() => {
-    const el = ref.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [lines]);
-  const onScroll = () => {
-    const el = ref.current;
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  };
-  return (
-    // A scrollable region must be reachable by keyboard, so it takes focus.
-    <pre ref={ref} className="log-box" tabIndex={0} aria-label={label} onScroll={onScroll}>
-      {lines.length === 0 ? "No output yet." : lines.join("\n")}
-    </pre>
-  );
-}
-
 export function DiffBox({ diff }: { diff: DiffData | null }) {
   if (diff === null) return <p className="muted">Loading the changes.</p>;
   const lines: DiffLine[] = diffLines(diff.diff);
@@ -258,8 +231,9 @@ export interface TaskDetailViewProps {
   onTab: (t: DetailTab) => void;
   selectedRunId: string | null;
   onSelectRun: (id: string) => void;
-  log: LogData | null;
-  logError: string | null;
+  /** Renders the output of a run (the connected RunLog in the app). */
+  runLog: (runId: string, live: boolean) => ReactNode;
+  onOpenRun?: (runId: string) => void;
   diff: DiffData | null;
   diffError: string | null;
   onOpenTask: (id: string) => void;
@@ -330,15 +304,17 @@ export function TaskDetailView(p: TaskDetailViewProps) {
       <Stages state={t.state} verifications={d.verifications} />
 
       <div className="tabs" role="tablist" aria-label="Task sections">
-        {(["details", "diff"] as const).map((id) => (
+        {(["details", "diff", "evidence"] as const).map((id) => (
           <button key={id} type="button" role="tab" id={`task-tab-${id}`} aria-selected={p.tab === id} aria-controls="task-panel" className={p.tab === id ? "tab tab-active" : "tab"} onClick={() => p.onTab(id)}>
-            {id === "details" ? "Details" : "Changes"}
+            {id === "details" ? "Details" : id === "diff" ? "Changes" : "Evidence"}
           </button>
         ))}
       </div>
 
       <div id="task-panel" role="tabpanel" aria-labelledby={`task-tab-${p.tab}`}>
-        {p.tab === "diff" ? (
+        {p.tab === "evidence" ? (
+          <EvidenceTab task={t} />
+        ) : p.tab === "diff" ? (
           p.diffError ? (
             <p className="form-error" role="alert">
               Could not load the changes: {p.diffError}
@@ -424,7 +400,7 @@ export function TaskDetailView(p: TaskDetailViewProps) {
               ) : (
                 <ul className="rows">
                   {runs.map((r) => (
-                    <li key={r.id}>
+                    <li key={r.id} className="run-item">
                       <button type="button" className={r.id === shownRun ? "run-btn task-selected" : "run-btn"} aria-pressed={r.id === shownRun} onClick={() => p.onSelectRun(r.id)}>
                         <strong>{RUN_KIND_LABEL[r.kind]}</strong>
                         <span>{plainRunState(r.state)}</span>
@@ -436,6 +412,11 @@ export function TaskDetailView(p: TaskDetailViewProps) {
                           {r.startedAt ? relTime(r.startedAt, now) : "not started"}, {duration(r.startedAt, r.endedAt, now)}
                         </span>
                       </button>
+                      {p.onOpenRun ? (
+                        <button type="button" className="btn btn-quiet" onClick={() => p.onOpenRun?.(r.id)} aria-label={`Open the output of the ${RUN_KIND_LABEL[r.kind]} run full screen`}>
+                          Open
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -447,12 +428,7 @@ export function TaskDetailView(p: TaskDetailViewProps) {
                 <h3>
                   Run output {shownIsActive ? <span className="chip chip-accent">live</span> : null}
                 </h3>
-                {p.logError ? (
-                  <p className="form-error" role="alert">
-                    Could not load the output: {p.logError}
-                  </p>
-                ) : null}
-                {p.log && p.log.runId === shownRun ? <LogBox lines={p.log.lines} label={`Output of the run, last ${LOG_TAIL_LINES} lines`} /> : <p className="muted">Loading the output.</p>}
+                {p.runLog(shownRun, shownIsActive)}
               </section>
             ) : null}
           </>
@@ -580,6 +556,7 @@ export function Tasks() {
   const [tab, setTab] = useState<DetailTab>("details");
   const [runChoice, setRunChoice] = useState<{ taskId: string; runId: string } | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [viewRun, setViewRun] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -617,15 +594,6 @@ export function Tasks() {
 
   const active = selectedTaskId ? activeRunFor(runtime, selectedTaskId) : null;
   const chosen = runChoice && runChoice.taskId === selectedTaskId ? runChoice.runId : null;
-  const logRunId = d ? (chosen ?? defaultRunId(active, d.runs)) : null;
-  const log = useLive<LogData | null>(
-    async () => {
-      if (!logRunId) return null;
-      const r = await rpc.call("runs.log", { projectId, runId: logRunId, tailLines: LOG_TAIL_LINES });
-      return { runId: logRunId, lines: logLines(r.lines) };
-    },
-    { events: isRunEvent, deps: [logRunId], ...(isRunActive(runtime, logRunId) ? { pollMs: LOG_POLL_MS } : {}) },
-  );
   const diffWanted = tab === "diff" && selectedTaskId !== null;
   const diff = useLive<(DiffData & { taskId: string }) | null>(
     async () => {
@@ -748,8 +716,8 @@ export function Tasks() {
               onTab={setTab}
               selectedRunId={chosen}
               onSelectRun={(runId) => selectedTaskId && setRunChoice({ taskId: selectedTaskId, runId })}
-              log={log.data}
-              logError={log.error}
+              runLog={(runId, live) => <RunLog runId={runId} live={live} />}
+              onOpenRun={setViewRun}
               diff={diffData}
               diffError={diff.error}
               onOpenTask={open}
@@ -774,6 +742,7 @@ export function Tasks() {
     <div className="tasks">
       <h1 className="sr-only">Tasks</h1>
       {body}
+      {viewRun ? <RunLogModal runId={viewRun} title={`Run output, ${short}`} onClose={() => setViewRun(null)} /> : null}
       {dialog?.kind === "stop" && active ? (
         <ConfirmDialog
           title={`Stop the run for ${short}?`}

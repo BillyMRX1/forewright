@@ -24,6 +24,7 @@ import { MEMORY_CAP_BYTES, clearMemory, readMemory } from "./memory.js";
 import { KICKOFF_SCALES, approveKickoffPack, exportKickoff, keepOwnerEdit, kickoffProposalView, kickoffView, nudgeKickoff, readKickoffDoc, startKickoffPack } from "./kickoff.js";
 import type { KickoffScale } from "../core/store.js";
 import { validateGuiPort } from "../core/gui-config.js";
+import { taskCheckpoints, undoTaskTo } from "./checkpoints.js";
 
 type P = Record<string, unknown>;
 type Handler = (p: P, conn: Connection) => unknown | Promise<unknown>;
@@ -194,6 +195,11 @@ export class ClientApi {
         return summarizeUsage(rows, { now, days, prices: loadPrices(forewrightHome()) });
       },
       "evidence.diff": async (p) => this.diff(await this.rt(p), reqStr(p, "taskId", 200)),
+      "tasks.checkpoints": async (p) => taskCheckpoints(await this.rt(p), reqStr(p, "taskId", 200)),
+      "tasks.undoTo": async (p) => {
+        const rt = await this.rt(p);
+        return undoTaskTo(rt, reqStr(p, "taskId", 200), reqStr(p, "sha", 100));
+      },
       "runs.log": async (p) => {
         const rt = await this.rt(p);
         const runId = reqStr(p, "runId", 100);
@@ -321,9 +327,11 @@ export class ClientApi {
           const problem = engineRoleProblem(adapter, rt.store.getAgent(reqStr(p, "agentId", 200)).role);
           if (problem) throw new ValidationError(problem, { engine });
         }
+        const name = "name" in p ? validAgentName(rt, reqStr(p, "agentId", 200), p["name"]) : undefined;
         const agent = rt.store.updateAgent(
           reqStr(p, "agentId", 200),
           {
+            ...(name !== undefined ? { name } : {}),
             ...(engine ? { engine } : {}),
             ...("model" in p ? { model: (p["model"] as string | null) ?? null } : {}),
             ...(p["permission"] ? { permission: p["permission"] as PermissionProfile } : {}),
@@ -331,6 +339,14 @@ export class ClientApi {
           HUMAN,
         );
         return { agent };
+      },
+      "agents.retire": async (p) => {
+        const rt = await this.rt(p);
+        const agent = rt.store.getAgent(reqStr(p, "agentId", 200));
+        rt.store.retireAgent(agent.id, HUMAN);
+        rt.notifyCto(`retire:${agent.id}`, `Billy retired ${agent.name} (${agent.role}). It will not get new work.`);
+        rt.publish();
+        return { ok: true };
       },
       "tasks.reassign": async (p) => {
         const rt = await this.rt(p);
@@ -428,4 +444,15 @@ export class ClientApi {
     const raw = gitTry(rt.root, ["diff", t.state === "done" ? `${base}..${head}` : `${base}...${head}`]).stdout;
     return { base, head, diff: truncate(raw, 200_000), truncated: raw.length > 200_000 };
   }
+}
+
+/** An agent's new name: trimmed, 1 to 40 characters of letters, digits, space, dot, dash and underscore, unique among the project's active agents. */
+function validAgentName(rt: ProjectRuntime, agentId: string, value: unknown): string {
+  if (typeof value !== "string") throw new ValidationError("The name must be text.", { name: value });
+  const name = value.trim();
+  if (name.length === 0 || name.length > 40) throw new ValidationError("A name needs 1 to 40 characters.", { name });
+  if (!/^[\p{L}\p{N} ._-]+$/u.test(name)) throw new ValidationError("A name can use letters, digits, spaces, dots, dashes and underscores.", { name });
+  const clash = rt.store.listAgents().find((a) => a.id !== agentId && a.name.toLowerCase() === name.toLowerCase());
+  if (clash) throw new ValidationError(`Another agent is already called ${clash.name}.`, { name });
+  return name;
 }

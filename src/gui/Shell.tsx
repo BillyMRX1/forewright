@@ -15,6 +15,8 @@ import { Cto } from "./views/Cto.js";
 import { Home } from "./views/Home.js";
 import { Tasks } from "./views/Tasks.js";
 import { Inbox } from "./views/Inbox.js";
+import { Team } from "./views/Team.js";
+import { RunControls } from "./runcontrols.js";
 
 export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "settings";
 
@@ -31,7 +33,7 @@ export const HINTS: Record<ViewId, string[]> = {
   cto: ["Enter send", "Shift+Enter new line", "/ commands", "Tab complete command", "Esc close dialogs"],
   home: ["Click a row under Needs you to open it", "Esc close dialogs"],
   tasks: ["Arrow keys move between tasks", "Enter opens a task", "Esc back to the list", "Esc close dialogs"],
-  team: ["Use the terminal UI for this view for now"],
+  team: ["Tab moves between cards and buttons", "Space or Enter opens Memory notes", "Esc close dialogs"],
   inbox: ["Arrow keys move through the list", "Enter opens an item", "Esc goes back", "Esc close dialogs"],
   settings: ["Use the terminal UI for this view for now"],
 };
@@ -77,6 +79,7 @@ export function TopBar({
   conn,
   runtime,
   theme,
+  controls,
   onMenu,
   onProject,
   onTheme,
@@ -85,6 +88,8 @@ export function TopBar({
   conn: ConnectionState;
   runtime: RuntimeStatus | null;
   theme: "dark" | "light";
+  /** Run controls (pause, resume, terminate); only given when a project is open. */
+  controls?: ReactNode;
   onMenu: () => void;
   onProject: () => void;
   onTheme: () => void;
@@ -102,6 +107,7 @@ export function TopBar({
         </span>
       </button>
       <div className="topbar-spacer" />
+      {controls}
       {runtime?.paused ? <span className="chip chip-attention">PAUSED</span> : null}
       {runtime?.planOnly ? <span className="chip chip-attention">PLAN ONLY</span> : null}
       {runtime?.ctoBusy ? (
@@ -347,6 +353,8 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     body = <Home key={project.projectId} />;
   } else if (view === "tasks" && project) {
     body = <Tasks key={project.projectId} />;
+  } else if (view === "team" && project) {
+    body = <Team key={project.projectId} />;
   } else if (view === "inbox" && project) {
     body = <Inbox key={project.projectId} />;
   } else {
@@ -356,7 +364,7 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
   const sidebarProps = { view, open: drawer, onPick: pick, onClose: () => setDrawer(false) };
   const frame = (
     <div className="shell">
-      <TopBar project={project} conn={conn} runtime={runtime} theme={theme} onMenu={() => setDrawer(true)} onProject={() => setPicking(true)} onTheme={toggleTheme} />
+      <TopBar project={project} conn={conn} runtime={runtime} theme={theme} controls={projectValue ? <RunControls /> : null} onMenu={() => setDrawer(true)} onProject={() => setPicking(true)} onTheme={toggleTheme} />
       {runtime?.ctoError ? (
         <div className="banner" role="alert">
           The CTO cannot run right now: {runtime.ctoError}

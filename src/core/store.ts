@@ -608,6 +608,53 @@ export class Store {
     });
   }
 
+  /**
+   * Billy moved the task branch back to an earlier commit (Checkpoints, "Undo to here"). The caller already reset the
+   * branch. Here, in one transaction: the evidence goes stale, the candidate commit is cleared, a task in review (or a
+   * working one whose run is gone) returns to ready, and the generation is bumped so a result from a run that started
+   * before the undo can never land. The dropped commits are kept in the event (git also keeps them in its reflog).
+   */
+  revertTask(
+    taskId: string,
+    info: { from: string; to: string; toSubject: string; dropped: Array<{ sha: string; subject: string }> },
+    actor: Actor,
+  ): Task {
+    return tx(this.db, () => {
+      const t = this.getTask(taskId);
+      if (TERMINAL.includes(t.state)) throw new ValidationError(`${t.shortId} is ${t.state}, so its branch stays as it is.`, { taskId: t.id });
+      const newState: TaskState = t.state === "working" || t.state === "review" ? "ready" : t.state;
+      this.run(
+        `UPDATE task SET state = ?, candidate_commit = NULL, generation = generation + 1, lease_owner = NULL, lease_expires_at = NULL,
+           updated_at = ? WHERE id = ?`,
+        newState,
+        this.nowIso(),
+        t.id,
+      );
+      const staled = this.run("UPDATE verification SET stale = 1 WHERE task_id = ? AND stale = 0", t.id);
+      if (newState !== t.state) this.appendEvent("task.transitioned", "task", t.id, actorLabel(actor), { from: t.state, to: newState, via: "revert" });
+      this.appendEvent("task.reverted", "task", t.id, actorLabel(actor), {
+        from: info.from,
+        to: info.to,
+        dropped: info.dropped,
+        previousGeneration: t.generation,
+        newGeneration: t.generation + 1,
+        staleVerifications: staled,
+      });
+      if (t.assigneeAgentId) {
+        const list = info.dropped.map((c) => `${c.sha.slice(0, 7)} ${c.subject}`).join("\n");
+        this.postMessageTx({
+          channel: "direct",
+          taskId: t.id,
+          sender: { kind: "system" },
+          body: `Billy moved ${t.shortId} "${t.title}" back to ${info.to.slice(0, 7)} ${info.toSubject}. These commits were dropped from your branch:\n${list}\nYour workspace is at that commit now and earlier checks and reviews are stale. Continue from there.`,
+          recipients: [t.assigneeAgentId],
+          dedupeKey: `revert-assignee:${t.id}:${info.to}`,
+        });
+      }
+      return this.getTask(t.id);
+    });
+  }
+
   submitForReview(taskId: string, generation: number, work: { candidateCommit: string; branch?: string }): Task {
     this.assertCurrentGeneration(taskId, generation, { action: "submitForReview" });
     return tx(this.db, () => {

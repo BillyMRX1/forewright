@@ -24,6 +24,7 @@ import type {
 import type { Store } from "../core/store.js";
 import type { UsageSummary } from "../core/usage.js";
 import type { FallbackEntryStatus } from "./fallback.js";
+import type { Checkpoints, UndoResult } from "./checkpoints.js";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -140,6 +141,10 @@ export interface Methods {
   /** Tokens and estimated cost of this project's runs over the last `days` local days (default 7). */
   "state.usage": { params: { projectId: string; days?: number }; result: UsageSummary };
   "evidence.diff": { params: { projectId: string; taskId: string }; result: { base: string | null; head: string | null; diff: string; truncated: boolean } };
+  /** The task branch's commits since it left the integration branch (newest first, at most 200) and the PRD revisions. */
+  "tasks.checkpoints": { params: { projectId: string; taskId: string }; result: Checkpoints };
+  /** Billy moves the task branch back to a checkpoint commit (or its base). Refused while a run is live, for a finished task, or with uncommitted changes. */
+  "tasks.undoTo": { params: { projectId: string; taskId: string; sha: string }; result: UndoResult };
   "runs.log": { params: { projectId: string; runId: string; tailLines?: number }; result: { lines: string[]; path: string } };
   "providers.health": { params: { refresh?: boolean }; result: { providers: ProviderStatus[] } };
 
@@ -161,9 +166,11 @@ export interface Methods {
   "decisions.resolve": { params: { projectId: string; decisionId: string; option: string; note?: string }; result: { decision: Decision } };
   "settings.set": { params: { projectId: string; key: string; value: unknown }; result: { settings: Settings } };
   "agents.update": {
-    params: { projectId: string; agentId: string; engine?: Agent["engine"]; model?: string | null; permission?: Agent["permission"] };
+    params: { projectId: string; agentId: string; name?: string; engine?: Agent["engine"]; model?: string | null; permission?: Agent["permission"] };
     result: { agent: Agent };
   };
+  /** Billy retires an agent. Refused for the CTO and for an agent with active work; the CTO is told. */
+  "agents.retire": { params: { projectId: string; agentId: string }; result: { ok: true } };
   /** An agent's memory notes (empty text when it has none) and the size limit. */
   "agents.memory": { params: { projectId: string; agentId: string }; result: { text: string; bytes: number; limit: number } };
   "agents.clearMemory": { params: { projectId: string; agentId: string }; result: { ok: true } };
