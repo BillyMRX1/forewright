@@ -480,7 +480,7 @@ function runCfg(args: string[], home: string): { code: number; out: string; err:
 
 test("config gui: port, allow-host and autostart are saved next to the proxy settings and validated", () => {
   const home = tempDir();
-  assert.deepEqual(readGuiConfig(home), { port: 7420, allowHosts: [], autostart: false });
+  assert.deepEqual(readGuiConfig(home), { port: 7420, allowHosts: [], autostart: false, editorSshHost: null });
   assert.ok(runCfg([], home).out.includes("GUI port: 7420"));
   assert.equal(runCfg(["gui", "port", "8123"], home).code, 0);
   assert.equal(runCfg(["gui", "allow-host", "Fw.Example-Tailnet.ts.net"], home).code, 0);
@@ -488,14 +488,20 @@ test("config gui: port, allow-host and autostart are saved next to the proxy set
   assert.equal(runCfg(["gui", "allow-host", "other.example"], home).code, 0);
   assert.equal(runCfg(["gui", "autostart", "on"], home).code, 0);
   runCfg(["proxy", "http://proxy.example.invalid:8080"], home);
-  assert.deepEqual(readGuiConfig(home), { port: 8123, allowHosts: ["fw.example-tailnet.ts.net", "other.example"], autostart: true }, "the proxy setting keeps the gui section");
+  assert.deepEqual(readGuiConfig(home), { port: 8123, allowHosts: ["fw.example-tailnet.ts.net", "other.example"], autostart: true, editorSshHost: null }, "the proxy setting keeps the gui section");
   const shown = runCfg([], home).out;
   assert.ok(shown.includes("GUI port: 8123") && shown.includes("other.example") && shown.includes("GUI starts with the service: on"));
   runCfg(["proxy", "--clear"], home);
   assert.equal(readGuiConfig(home).port, 8123);
   assert.equal(runCfg(["gui", "allow-host", "--clear"], home).code, 0);
   assert.equal(runCfg(["gui", "autostart", "off"], home).code, 0);
-  assert.deepEqual(readGuiConfig(home), { port: 8123, allowHosts: [], autostart: false });
+  assert.equal(runCfg(["gui", "editor-host", "Dev-Box.example"], home).code, 0);
+  assert.equal(readGuiConfig(home).editorSshHost, "dev-box.example");
+  assert.ok(runCfg([], home).out.includes("GUI editor SSH host: dev-box.example"));
+  assert.throws(() => runCfg(["gui", "editor-host", "ssh://dev-box"], home), ValidationError);
+  assert.equal(runCfg(["gui", "editor-host", "--clear"], home).code, 0);
+  assert.equal(readGuiConfig(home).editorSshHost, null);
+  assert.deepEqual(readGuiConfig(home), { port: 8123, allowHosts: [], autostart: false, editorSshHost: null });
 
   for (const bad of ["80", "70000", "abc", "1.5", "-1"]) assert.throws(() => runCfg(["gui", "port", bad], home), ValidationError, bad);
   for (const bad of ["http://x.example", "x.example:443", "*.ts.net", "a b", "x.example/path", "-x.example", ""]) assert.throws(() => runCfg(["gui", "allow-host", bad], home), ValidationError, bad);

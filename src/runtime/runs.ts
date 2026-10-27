@@ -13,7 +13,7 @@ import { BillingBlockedError, ProviderUnavailableError } from "./errors.js";
 import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import type { TokenScope } from "./tokens.js";
 
-export type StopKind = "stop_run" | "cancel" | "reassign" | "terminate" | "shutdown";
+export type StopKind = "stop_run" | "cancel" | "reassign" | "change_request" | "terminate" | "shutdown";
 
 export interface ActiveRun {
   run: Run;

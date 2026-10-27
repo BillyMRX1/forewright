@@ -18,7 +18,8 @@ import type { TokenRecord } from "./tokens.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { engineRoleProblem } from "./engine-roles.js";
 import { MEMORY_CAP_BYTES, writeMemory } from "./memory.js";
-import { KICKOFF_DOC_CAP, KICKOFF_KEYS, proposeKickoffRevision, readKickoffDoc, writeKickoffDoc } from "./kickoff.js";
+import { KICKOFF_ALL_KEYS, KICKOFF_DOC_CAP, WIREFRAME_MAX, isPackKey, proposeKickoffRevision, readKickoffDoc, setKickoffUi, writeKickoffDoc, writeKickoffWireframe } from "./kickoff.js";
+import { SVG_CAP_BYTES } from "./svg-sanitize.js";
 
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -59,6 +60,13 @@ function str(args: Args, key: string, opts: { max?: number; optional?: boolean }
   if (v.length > max) throw new ValidationError(`"${key}" is too long (${v.length} characters, limit ${max}).`, { key });
   if (!opts.optional && v.trim() === "") throw new ValidationError(`"${key}" cannot be empty.`, { key });
   return v;
+}
+
+/** A kickoff document key: a catalog key or wireframe:<name>. */
+function packKey(args: Args): string {
+  const key = str(args, "key", { max: 100 }).trim();
+  if (!isPackKey(key)) throw new ValidationError(`Unknown kickoff document "${key}". Keys: ${KICKOFF_ALL_KEYS.join(", ")}, or wireframe:<name>.`, { key });
+  return key;
 }
 
 function optStr(args: Args, key: string, max?: number): string | undefined {
@@ -205,7 +213,7 @@ const TOOLS: ToolDef[] = [
       requirement_keys: { type: "array", items: { type: "string" } },
       depends_on: { type: "array", items: { type: "string" } },
       assignee: { type: "string" },
-      kickoff_docs: { type: "array", items: { type: "string", enum: KICKOFF_KEYS }, description: "Kickoff documents the worker needs (approved versions are shown to it)" },
+      kickoff_docs: { type: "array", items: { type: "string", enum: KICKOFF_ALL_KEYS }, description: "Kickoff documents the worker needs (approved versions are shown to it)" },
     },
     required: ["title", "requirement_keys"],
     roles: ["cto"],
@@ -241,7 +249,7 @@ const TOOLS: ToolDef[] = [
       description: { type: "string" },
       acceptance: { type: "string" },
       verify_commands: { type: "array", items: { type: "string" } },
-      kickoff_docs: { type: "array", items: { type: "string", enum: KICKOFF_KEYS }, description: "Replaces the kickoff documents the worker is shown; changing only this does not make evidence stale" },
+      kickoff_docs: { type: "array", items: { type: "string", enum: KICKOFF_ALL_KEYS }, description: "Replaces the kickoff documents the worker is shown; changing only this does not make evidence stale" },
     },
     required: ["task"],
     roles: ["cto"],
@@ -384,8 +392,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "write_kickoff_doc",
-    description: `Write one pending document of the kickoff pack (Markdown, at most ${KICKOFF_DOC_CAP} characters). Keys: ${KICKOFF_KEYS.join(", ")}. Write pending documents in order, one call each. A written document cannot be rewritten here.`,
-    properties: { key: { type: "string", enum: KICKOFF_KEYS }, body: { type: "string", description: "The whole document in Markdown" } },
+    description: `Write one pending document of the kickoff pack (Markdown, at most ${KICKOFF_DOC_CAP} characters; tokens is a JSON object). Keys: ${KICKOFF_ALL_KEYS.join(", ")}. Write pending documents in order, one call each. A written document cannot be rewritten here.`,
+    properties: { key: { type: "string", enum: KICKOFF_ALL_KEYS }, body: { type: "string", description: "The whole document in Markdown (for tokens, the JSON text)" } },
     required: ["key", "body"],
     roles: ["cto"],
     action: "write_kickoff_doc",
@@ -393,16 +401,48 @@ const TOOLS: ToolDef[] = [
     run: (ctx, a) => {
       const { store } = ctx.rt;
       if (!store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
-      const key = oneOf(a, "key", KICKOFF_KEYS)!;
+      const key = oneOf(a, "key", KICKOFF_ALL_KEYS)!;
       const r = writeKickoffDoc(store, key, str(a, "body", { max: KICKOFF_DOC_CAP * 2 }), `agent:${ctx.agent.id}`);
       return { key, version: r.doc.version, written: r.docs.filter((d) => d.status === "written").map((d) => d.key), pending: r.docs.filter((d) => d.status === "pending").map((d) => d.key), status: r.pack.status };
     },
   },
   {
+    name: "set_kickoff_ui",
+    description:
+      "Decide once whether the project has a user interface, with a one-line reason. has_ui true adds three pending documents after the others: design-spec (Markdown), tokens (a JSON object) and wireframes (a Markdown index of the screens you draw with write_kickoff_wireframe). has_ui false records the reason; the pack then says \"No UI documents: <reason>\". A second call is refused.",
+    properties: { has_ui: { type: "boolean" }, reason: { type: "string", description: "One line: why the project has or has no UI" } },
+    required: ["has_ui", "reason"],
+    roles: ["cto"],
+    action: "write_kickoff_doc",
+    mutating: true,
+    run: (ctx, a) => {
+      const { store } = ctx.rt;
+      if (!store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
+      if (typeof a["has_ui"] !== "boolean") throw new ValidationError('"has_ui" must be true or false.', { key: "has_ui" });
+      const r = setKickoffUi(store, ctx.actor, a["has_ui"], str(a, "reason", { max: 1000 }));
+      return { ui: r.pack.ui, reason: r.pack.uiReason, pending: r.docs.filter((d) => d.status === "pending").map((d) => d.key), status: r.pack.status };
+    },
+  },
+  {
+    name: "write_kickoff_wireframe",
+    description: `Draw one screen of the kickoff wireframes as a static SVG (at most ${SVG_CAP_BYTES / 1024} KB, at most ${WIREFRAME_MAX} screens), before you write the wireframes index. Allowed: svg, g, rect, circle, ellipse, line, polyline, polygon, path, text, tspan, title, desc, defs, use (href only to a local #id), with geometry and fill, stroke, opacity, font and transform attributes. Everything else (script, style, images, links, url() values) is removed. A written wireframe cannot be rewritten here.`,
+    properties: { name: { type: "string", description: "Lowercase letters, digits and hyphens, like home or sign-in" }, svg: { type: "string", description: "The whole SVG document" } },
+    required: ["name", "svg"],
+    roles: ["cto"],
+    action: "write_kickoff_doc",
+    mutating: true,
+    run: (ctx, a) => {
+      const { store } = ctx.rt;
+      if (!store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
+      const r = writeKickoffWireframe(store, str(a, "name", { max: 60 }).trim(), str(a, "svg", { max: SVG_CAP_BYTES * 2 }), `agent:${ctx.agent.id}`);
+      return { key: r.doc.key, version: r.doc.version, wireframes: r.count, limit: WIREFRAME_MAX };
+    },
+  },
+  {
     name: "propose_kickoff_revision",
-    description: `Propose a new full text for a WRITTEN kickoff document (Markdown, at most ${KICKOFF_DOC_CAP} characters). Nothing changes on disk until Billy approves it in the Inbox, where he sees the difference and the tasks that read the document. Give a short summary of what changes and why. Keys: ${KICKOFF_KEYS.join(", ")}.`,
+    description: `Propose a new full text for a WRITTEN kickoff document (Markdown, at most ${KICKOFF_DOC_CAP} characters; tokens is JSON, a wireframe is SVG). Nothing changes on disk until Billy approves it in the Inbox, where he sees the difference and the tasks that read the document. Give a short summary of what changes and why. Keys: ${KICKOFF_ALL_KEYS.join(", ")}, or wireframe:<name>.`,
     properties: {
-      key: { type: "string", enum: KICKOFF_KEYS },
+      key: { type: "string", description: `One of ${KICKOFF_ALL_KEYS.join(", ")}, or wireframe:<name>` },
       body: { type: "string", description: "The whole revised document in Markdown" },
       summary: { type: "string", description: "What changes and why, in a sentence or two" },
     },
@@ -412,21 +452,21 @@ const TOOLS: ToolDef[] = [
     mutating: true,
     run: (ctx, a) => {
       if (!ctx.rt.store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
-      const r = proposeKickoffRevision(ctx.rt, ctx.agent.id, { key: oneOf(a, "key", KICKOFF_KEYS)!, body: str(a, "body", { max: KICKOFF_DOC_CAP * 2 }), summary: str(a, "summary", { max: 1000 }) });
+      const r = proposeKickoffRevision(ctx.rt, ctx.agent.id, { key: packKey(a), body: str(a, "body", { max: Math.max(KICKOFF_DOC_CAP, SVG_CAP_BYTES) * 2 }), summary: str(a, "summary", { max: 1000 }) });
       return { ...r, note: "Billy decides in the Inbox. Nothing on disk changes until he approves." };
     },
   },
   {
     name: "read_kickoff_doc",
-    description: "Read the current text of a written kickoff pack document, Billy's edits included.",
-    properties: { key: { type: "string", enum: KICKOFF_KEYS } },
+    description: "Read the current text of a written kickoff pack document, Billy's edits included. A wireframe is wireframe:<name>.",
+    properties: { key: { type: "string", description: `One of ${KICKOFF_ALL_KEYS.join(", ")}, or wireframe:<name>` } },
     required: ["key"],
     roles: ["cto"],
     action: "read_state",
     mutating: false,
     run: (ctx, a) => {
       if (!ctx.rt.store.getKickoffPack()) throw new ToolError("There is no kickoff pack. Offer one to Billy; he starts it with /kickoff.");
-      return readKickoffDoc(ctx.rt.projectId, oneOf(a, "key", KICKOFF_KEYS)!);
+      return readKickoffDoc(ctx.rt.projectId, packKey(a));
     },
   },
   {

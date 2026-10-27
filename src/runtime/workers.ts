@@ -38,13 +38,13 @@ export function nameOfSender(rt: ProjectRuntime): (kind: Message["senderKind"], 
 }
 
 /** Feedback goes to the assignee's task thread, then the task returns to ready as a repair loop. */
-export function sendBackForRepair(rt: ProjectRuntime, taskId: string, key: string, body: string, headline: string): void {
+export function sendBackForRepair(rt: ProjectRuntime, taskId: string, key: string, body: string, headline: string, opts: { countsAsRepair?: boolean } = {}): void {
   const { store } = rt;
   const t0 = store.getTask(taskId);
   if (t0.assigneeAgentId) {
     store.postMessage({ channel: "task", taskId, sender: { kind: "system" }, body, recipients: [t0.assigneeAgentId], dedupeKey: `feedback:${key}` });
   }
-  const t = store.requeueForRepair(taskId, { kind: "system" });
+  const t = store.requeueForRepair(taskId, { kind: "system" }, opts.countsAsRepair ?? true);
   if (t.repairLoops > store.getSettings().maxRepairLoops) {
     store.setBlocked(t.id, "failed_verification", `Repair limit reached: ${headline}`);
     rt.notifyCto(`repairs-exhausted:${t.id}:${t.repairLoops}`, `${t.shortId} "${t.title}" was sent back ${t.repairLoops} times and is now blocked: ${headline}`);

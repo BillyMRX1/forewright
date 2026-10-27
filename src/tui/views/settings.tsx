@@ -4,75 +4,27 @@ import { InputBox, SafeText, ScrollLines, type DLine, type Seg } from "../compon
 import { useClaim, useCtx, useHintScope, useKeys, useLoad } from "../context.js";
 import { oneLine, wrapText } from "../format.js";
 import { abbreviatePath } from "../path-format.js";
-import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, type FallbackEntry } from "../../core/store-types.js";
+import { type FallbackEntry } from "../../core/store-types.js";
 import type { ProviderStatus } from "../../runtime/protocol.js";
 import { LIVE_ENGINES, type EngineId } from "../../core/types.js";
 import { borderStyle, palette, sym } from "../theme.js";
 import { engineLabel } from "../toasts.js";
+import { BACKUP_HELP, FALLBACK_TITLE, GROUPS, LOCAL_NOTICE, MODES, REPOSITORY_HELP, SETTING_ITEMS, fallbackWords, itemLabel, providerHealthWord, type FallbackList, type Group, type SettingItem } from "../settings-model.js";
 
-export const LOCAL_NOTICE = "Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex) by their CLIs.";
+export { GROUPS, LOCAL_NOTICE, fallbackWords };
 
-type Item =
-  | { kind: "cto-engine" }
-  | { kind: "cto-model" }
-  | { kind: "setup" }
-  | { kind: "initial-commit" }
-  | { kind: "plan-only" }
-  | { kind: "authority"; name: keyof typeof DEFAULT_AUTHORITY }
-  | { kind: "limit"; name: keyof typeof DEFAULT_LIMITS }
-  | { kind: "fallback"; list: FallbackList };
-
-type FallbackList = "cto" | "workers";
-const FALLBACK_LISTS: FallbackList[] = ["cto", "workers"];
-const FALLBACK_TITLE: Record<FallbackList, string> = { cto: "CTO", workers: "Workers (work and review runs)" };
-
-const AUTH_NAMES = Object.keys(DEFAULT_AUTHORITY) as Array<keyof typeof DEFAULT_AUTHORITY>;
-const LIMIT_NAMES = Object.keys(DEFAULT_LIMITS) as Array<keyof typeof DEFAULT_LIMITS>;
-
-export const GROUPS = ["Engines", "Backups", "Control", "Limits"] as const;
-type Group = (typeof GROUPS)[number];
+type Item = SettingItem | { kind: "setup" } | { kind: "initial-commit" };
 
 /** Every item with the group it lives in, in the order the cursor visits them. */
-const ITEMS: Array<{ group: Group; item: Item }> = [
-  { group: "Engines", item: { kind: "cto-engine" } },
-  { group: "Engines", item: { kind: "cto-model" } },
-  { group: "Engines", item: { kind: "setup" } },
-  ...FALLBACK_LISTS.map((list) => ({ group: "Backups" as const, item: { kind: "fallback" as const, list } })),
-  ...AUTH_NAMES.map((name) => ({ group: "Control" as const, item: { kind: "authority" as const, name } })),
-  { group: "Control", item: { kind: "plan-only" } },
-  ...LIMIT_NAMES.map((name) => ({ group: "Limits" as const, item: { kind: "limit" as const, name } })),
-];
-const MODES = ["ask", "auto", "deny"] as const;
+const ITEMS: Array<{ group: Group; item: Item }> = [...SETTING_ITEMS.slice(0, 2), { group: "Engines", item: { kind: "setup" } }, ...SETTING_ITEMS.slice(2)];
 
 const NOT_SUPPORTED = "Not supported";
 
-const LABELS: Record<string, string> = {
-  autoLocalEdits: "Edit files in agent workspaces without asking (off: asks in the Inbox per task)",
-  autoChecks: "Run checks without asking (off: asks in the Inbox per task)",
-  autoIntegrateToForewrightBranch: "Merge finished work into the Forewright branch without asking (off: asks in the Inbox per task)",
-  mergeToUserBranch: "Merge into your own branch",
-  publish: "Publish (push, release)",
-  destructive: "Destructive actions",
-  spendLimitUsd: "Spend limit in USD (0 = no API spend)",
-  allowApiBilling: "Allow API billing for agents (off: runs that bill an API key are refused)",
-  maxConcurrentWorkers: "Concurrent workers",
-  maxTurnsPerRun: "Turns per run",
-  runTimeoutMs: "Run timeout (ms)",
-  maxRetriesPerTask: "Retries per task",
-  maxRepairLoops: "Repair loops",
-  maxCtoWakeupsPerHour: "CTO wakeups per hour",
-  maxMessagesPerThreadPerHour: "Messages per thread per hour",
-  contextRotatePercent: "Start a fresh session after this % of the context window",
-};
-
 /** Health of a provider as a short colored word. */
 export function providerHealth(p: ProviderStatus): { text: string; color: string } {
-  const h = p.health;
-  if (h.isTestDouble) return { text: "test double", color: palette.attention };
-  if (h.binaryPath === null) return { text: "missing", color: palette.error };
-  if (h.authenticated === true) return { text: "ready", color: palette.done };
-  if (h.authenticated === false) return { text: "login needed", color: palette.error };
-  return { text: "unknown", color: palette.attention };
+  const text = providerHealthWord(p);
+  const color = text === "ready" ? palette.done : text === "missing" || text === "login needed" ? palette.error : palette.attention;
+  return { text, color };
 }
 
 export function providerLines(p: ProviderStatus, width: number): DLine[] {
@@ -102,11 +54,6 @@ export function providerLines(p: ProviderStatus, width: number): DLine[] {
   for (const n of c.notes) for (const l of wrapText(`  note: ${n}`, width)) lines.push({ text: l, dim: true });
   lines.push({ text: `  quota: ${p.quotaUntil === null ? "no wait recorded" : p.quotaUntil === "unknown" ? "unknown" : `waiting until ${p.quotaUntil}`}`, dim: true });
   return lines;
-}
-
-/** "codex, copilot" in order, or what an empty list means. */
-export function fallbackWords(list: FallbackEntry[]): string {
-  return list.length === 0 ? "none (waits for the reset)" : list.map((e, i) => `${i + 1}. ${e.engine}${e.model ? ` (${e.model})` : ""}`).join("  ");
 }
 
 /** One short line for an engine: its health in words and what the tool reports. */
@@ -314,7 +261,7 @@ export function SettingsView() {
   let selLine = 0;
   const heading = (t: string) => lines.push({ text: t.toUpperCase(), bold: true, dim: true });
   const itemsOfGroup = items.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
-  const labelOf = (it: Item) => (it.kind === "cto-engine" ? "CTO engine" : it.kind === "cto-model" ? "CTO model" : it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "plan-only" ? "Plan only: tasks wait until you turn this off" : it.kind === "fallback" ? `${FALLBACK_TITLE[it.list]} backup order` : LABELS[it.name]!);
+  const labelOf = (it: Item) => (it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : itemLabel(it));
   const labelW = Math.min(Math.max(...itemsOfGroup.map((x) => [...labelOf(x.item)].length)), Math.max(12, Math.floor(inner * 0.6)));
   const pushItem = (it: Item, i: number) => {
     const name = labelOf(it);
@@ -332,7 +279,7 @@ export function SettingsView() {
   if (group === "Engines") {
     if (noCommits) {
       heading("Repository");
-      for (const l of wrapText("This repository has no commits yet. Agents branch from a commit, so tasks wait until one exists. This makes an empty commit with your git identity.", inner)) lines.push({ text: l, dim: true });
+      for (const l of wrapText(REPOSITORY_HELP, inner)) lines.push({ text: l, dim: true });
       pushItem(items[0]!.item, 0);
       lines.push({ text: "" });
     }
@@ -349,7 +296,7 @@ export function SettingsView() {
     heading("CTO");
   } else if (group === "Backups") {
     heading("When a usage limit is reached");
-    for (const l of wrapText("Off by default. When an agent's own engine hits its limit, the first usable engine in its list takes over, and the agent goes back to its own engine as soon as the limit resets. Only engines you list are ever used.", inner)) lines.push({ text: l, dim: true });
+    for (const l of wrapText(BACKUP_HELP, inner)) lines.push({ text: l, dim: true });
     lines.push({ text: "" });
   } else if (group === "Control") {
     heading("Authority");

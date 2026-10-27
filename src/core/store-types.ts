@@ -102,6 +102,10 @@ export interface KickoffPack {
   status: "generating" | "ready";
   /** Bumped every time a document changes version, so an approval names exactly what it covered. */
   revision: number;
+  /** Whether the pack has UI documents: decided once by the CTO, null before. */
+  ui: "yes" | "no" | null;
+  /** The CTO's one-line reason for the UI decision, or null before it decided. */
+  uiReason: string | null;
   startedBy: string;
   createdAt: string;
   updatedAt: string;
