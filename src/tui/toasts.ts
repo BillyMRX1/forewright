@@ -50,7 +50,7 @@ export function removeToast(queue: Toast[], id: number): Toast[] {
 
 // ---------------------------------------------------------------- engine fallback notices
 
-const ENGINE_LABEL: Record<string, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity", opencode: "OpenCode", copilot: "Copilot", fake: "Test double" };
+const ENGINE_LABEL: Record<string, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity", opencode: "OpenCode", copilot: "Copilot", hearthwork: "Hearthwork", fake: "Test double" };
 
 export const engineLabel = (engine: string): string => ENGINE_LABEL[engine] ?? engine;
 

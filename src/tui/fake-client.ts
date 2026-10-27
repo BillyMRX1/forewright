@@ -2,7 +2,8 @@
 
 import { ClientError, type ClientApi, type ConnectionState, type Subscription } from "./client.js";
 import type { EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
-import type { Agent, Authority, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
+import type { BudgetScopeStatus } from "../core/budgets.js";
+import type { Agent, Authority, BudgetSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
 import { DEFAULT_PRICES, summarizeUsage, type UsageRow } from "../core/usage.js";
@@ -161,6 +162,7 @@ export function baseData() {
     usage: null,
     retryAfter: null,
     leaseGeneration: null,
+    execution: null,
     createdAt: NOW,
   };
   const providers: ProviderStatus[] = [
@@ -231,6 +233,12 @@ export class FakeClient implements ClientApi {
   fallback: { cto: FallbackEntry[]; workers: FallbackEntry[] } = { cto: [], workers: [] };
   /** Engines the CTO may hire on (empty = any). Changed by settings.set. */
   workersEngines: EngineId[] = [];
+  /** Budgets as state.settings reports them. Changed by settings.set (budgets.project, budgets.agent.<id>). */
+  budgets: BudgetSettings = { project: {}, agents: {} };
+  /** Holds the runtime status reports. */
+  budgetHolds: RuntimeStatus["budgetHolds"] = [];
+  /** What state.budgets returns. */
+  budgetScopes: BudgetScopeStatus[] = [];
   /** Setup bookkeeping, as state.settings reports it. Changed by settings.set. */
   setup: { completedAt: string | null; skippedAt: string | null } = { completedAt: null, skippedAt: null };
   authority: Authority = { ...DEFAULT_AUTHORITY };
@@ -270,11 +278,11 @@ export class FakeClient implements ClientApi {
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
 
   settings(): Settings {
-    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly };
+    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly, budgets: this.budgets };
   }
 
   runtime(): RuntimeStatus {
-    return { paused: this.paused, planOnly: this.planOnly, activeRuns: this.noRuns ? [] : [{ runId: this.data.run.id, kind: "work", agentId: "a2", taskId: "t2", startedAt: NOW }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
+    return { paused: this.paused, planOnly: this.planOnly, activeRuns: this.noRuns ? [] : [{ runId: this.data.run.id, kind: "work", agentId: "a2", taskId: "t2", startedAt: NOW }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1, budgetHolds: this.budgetHolds };
   }
 
   callsTo(method: string): FakeCall[] {
@@ -343,6 +351,8 @@ export class FakeClient implements ClientApi {
         }
         case "state.usage":
           return summarizeUsage(this.usageRows, { now: new Date(), days: typeof p["days"] === "number" ? p["days"] : 7, prices: DEFAULT_PRICES });
+        case "state.budgets":
+          return { scopes: this.budgetScopes };
         case "state.events":
           return { events: this.events.filter((e) => e.seq > (p["sinceSeq"] as number)).slice(0, typeof p["limit"] === "number" ? p["limit"] : 200) };
         case "state.channels":
@@ -446,6 +456,11 @@ export class FakeClient implements ClientApi {
           if (p["key"] === "setup.completedAt") this.setup = { ...this.setup, completedAt: p["value"] as string };
           if (p["key"] === "setup.skippedAt") this.setup = { ...this.setup, skippedAt: p["value"] as string };
           if (p["key"] === "planOnly") this.planOnly = p["value"] === true;
+          if (p["key"] === "budgets.project") this.budgets = { ...this.budgets, project: p["value"] as BudgetSettings["project"] };
+          if (typeof p["key"] === "string" && p["key"].startsWith("budgets.agent.")) {
+            const { [p["key"].slice("budgets.agent.".length)]: _old, ...rest } = this.budgets.agents;
+            this.budgets = { ...this.budgets, agents: { ...rest, ...(Object.keys((p["value"] as object) ?? {}).length > 0 ? { [p["key"].slice("budgets.agent.".length)]: p["value"] as BudgetSettings["project"] } : {}) } };
+          }
           if (p["key"] === "ctoEngine") this.ctoEngine = p["value"] as string;
           if (p["key"] === "ctoModel") this.ctoModel = p["value"] as string | null;
           if (typeof p["key"] === "string" && p["key"].startsWith("authority.")) this.authority = { ...this.authority, [p["key"].slice("authority.".length)]: p["value"] };

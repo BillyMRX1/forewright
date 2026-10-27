@@ -6,7 +6,7 @@ import { tmpDir } from "./test-helpers.js";
 
 test("createAdapters includes the fake adapter only when asked", () => {
   const dir = tmpDir();
-  assert.deepEqual([...createAdapters({ forewrightHome: dir }).keys()].sort(), ["antigravity", "claude", "codex", "copilot", "opencode"]);
+  assert.deepEqual([...createAdapters({ forewrightHome: dir }).keys()].sort(), ["antigravity", "claude", "codex", "copilot", "hearthwork", "opencode"]);
   const all = createAdapters({ forewrightHome: dir, includeFake: true });
   assert.equal(all.get("fake")?.isTestDouble, true);
   assert.equal(all.get("claude")?.isTestDouble, false);

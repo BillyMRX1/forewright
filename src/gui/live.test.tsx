@@ -101,7 +101,7 @@ test("deriveNeeds is empty for a quiet project", () => {
   assert.equal(needs.blockedCount, 0);
 });
 
-const idle: RuntimeStatus = { paused: false, planOnly: false, activeRuns: [], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
+const idle: RuntimeStatus = { paused: false, planOnly: false, activeRuns: [], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1, budgetHolds: [] };
 
 test("sidebar badges show counts, a dot for a busy CTO, and nothing when quiet", () => {
   assert.deepEqual(sidebarBadges(0, 0, idle), {});

@@ -1,4 +1,4 @@
-import type { AgentLifecycle, AgentRole, BlockReason, EngineId, PermissionProfile, RunState, TaskState } from "./types.js";
+import type { AgentLifecycle, AgentRole, BlockReason, EngineId, PermissionProfile, RunExecution, RunState, TaskState } from "./types.js";
 import type { Actor, Authority } from "./policy.js";
 
 export type { Actor, Authority };
@@ -77,6 +77,8 @@ export interface Run {
   retryAfter: string | null;
   /** The agent lease generation this run started under; null for rows from before agent leases. */
   leaseGeneration: number | null;
+  /** How the run executed, for engines that report it (local model engines); null otherwise. */
+  execution: RunExecution | null;
   createdAt: string;
 }
 
@@ -304,7 +306,51 @@ export const SETUP_KEYS = ["setup.completedAt", "setup.skippedAt"] as const;
 /** While true, no work run starts: Billy and the CTO plan, tasks may be created, and nothing is implemented. */
 export const PLAN_ONLY_KEY = "planOnly";
 
-export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean };
+/**
+ * Token budgets (issue #26). Every field is a positive whole number and a missing field means no limit.
+ * Tokens are input plus output tokens of finished runs in the window (cached input does not count); premium is
+ * Copilot premium requests. Daily is the current local day, weekly the local week that starts on Monday.
+ */
+export interface BudgetLimits {
+  dailyTokens?: number;
+  weeklyTokens?: number;
+  dailyPremium?: number;
+  weeklyPremium?: number;
+}
+
+export const BUDGET_LIMIT_KEYS = ["dailyTokens", "weeklyTokens", "dailyPremium", "weeklyPremium"] as const;
+export type BudgetLimitKey = (typeof BUDGET_LIMIT_KEYS)[number];
+
+export interface BudgetSettings {
+  project: BudgetLimits;
+  /** Only agents that have at least one limit appear here. */
+  agents: Record<string, BudgetLimits>;
+}
+
+/** Setting keys: `budgets.project` and `budgets.agent.<agentId>`; both hold a BudgetLimits object. */
+export const BUDGET_PROJECT_KEY = "budgets.project";
+export const BUDGET_AGENT_PREFIX = "budgets.agent.";
+
+export type BudgetScope = "project" | "agent";
+export type BudgetHoldStatus = "held" | "continued" | "ended";
+
+/** A scope that reached 100% of a limit in one window. Holds stop new runs; they never touch the project pause flag. */
+export interface BudgetHold {
+  id: string;
+  scope: BudgetScope;
+  /** The agent id for an agent scope, the project id for the project scope. */
+  scopeId: string;
+  /** "daily:YYYY-MM-DD" (the day) or "weekly:YYYY-MM-DD" (the Monday of that week), local time. */
+  window: string;
+  status: BudgetHoldStatus;
+  /** Plain words: which limits were reached and by how much. */
+  reason: string;
+  decisionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean; budgets: BudgetSettings };
 
 export const DEFAULT_LIMITS: Limits = {
   maxConcurrentWorkers: 2,

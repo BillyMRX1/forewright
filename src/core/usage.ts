@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Db } from "./db.js";
+import { localDay } from "./usage-format.js";
 import { LIVE_ENGINES, type EngineId, type RunUsage } from "./types.js";
 
 // ---------------------------------------------------------------- price table
@@ -184,12 +185,6 @@ function add(t: UsageTotals, u: RunUsage, cost: CostEstimate): void {
   else if ((u.inputTokens ?? 0) + (u.outputTokens ?? 0) + (u.cachedInputTokens ?? 0) > 0) t.unpricedRuns += 1;
 }
 
-/** The local calendar day of an instant, as YYYY-MM-DD. */
-export function localDay(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
 /** Local midnight at the start of the window "today and the N-1 days before". */
 export function windowStart(now: Date, days: number): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() - (Math.max(1, days) - 1));
@@ -239,6 +234,7 @@ export function summarizeUsage(rows: UsageRow[], opts: { now: Date; days: number
       const used = byEngine.find((g) => g.key === "copilot")?.premiumRequests ?? 0;
       return { engine, reported: true, premiumRequestsUsed: used, note: `${used} premium request${used === 1 ? "" : "s"} used by Forewright runs; the amount left is ${NOT_REPORTED}` };
     }
+    if (engine === "hearthwork") return { engine, reported: false, note: "runs on your own local model: no subscription and nothing billed" };
     return { engine, reported: false, note: NOT_REPORTED };
   });
 
@@ -246,7 +242,7 @@ export function summarizeUsage(rows: UsageRow[], opts: { now: Date; days: number
 }
 
 // Wording lives in usage-format.ts (no node imports, so the web app can use it); re-exported here for existing callers.
-export { compactTokens, costText, tokensText } from "./usage-format.js";
+export { compactTokens, costText, localDay, tokensText } from "./usage-format.js";
 
 // ---------------------------------------------------------------- reading rows
 

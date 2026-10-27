@@ -6,6 +6,7 @@ import { truncate } from "../core/safety.js";
 import type { Agent, Run, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { BillingBlockedError } from "./errors.js";
+import { blockingHold } from "./budgets.js";
 import { gitTry } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { memoryPromptSection } from "./memory.js";
@@ -54,6 +55,7 @@ function pickReviewer(rt: ProjectRuntime, t: Task): { agent: Agent; res: Runnabl
         a.id !== t.assigneeAgentId &&
         a.lifecycle !== "paused" &&
         !rt.agentBusy(a.id) &&
+        !blockingHold(rt, a.id) &&
         reviewFailures(rt, t, a.id) < MAX_REVIEW_FAILURES,
     );
   // Reviewers whose own engine is waiting for a usage limit may run on a fallback engine Billy listed.

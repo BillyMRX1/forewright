@@ -58,7 +58,7 @@ describe("attention model", () => {
 
   it("working: an active run, or a working lifecycle", () => {
     const a = member({ id: "a2", name: "Bo", role: "backend" });
-    const runtime = { paused: false, planOnly: false, activeRuns: [{ runId: "r1", kind: "work" as const, agentId: "a2", taskId: null, startedAt: null }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
+    const runtime = { paused: false, planOnly: false, activeRuns: [{ runId: "r1", kind: "work" as const, agentId: "a2", taskId: null, startedAt: null }], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1, budgetHolds: [] };
     assert.equal(statusOf(input({ agents: [a], runtime }), "a2"), "working");
     assert.equal(statusOf(input({ agents: [member({ id: "a3", name: "Cy", role: "testing", lifecycle: "working" })] }), "a3"), "working");
   });

@@ -9,6 +9,7 @@ import { NOT_GIT_MARKER } from "./project-runtime.js";
 import { dispatchReviews } from "./review.js";
 import { integrateNext } from "./integration.js";
 import { dispatchWork } from "./workers.js";
+import { evaluateBudgets } from "./budgets.js";
 import { nudgeKickoff } from "./kickoff.js";
 import { reconcileLeases } from "./recovery.js";
 import { hasCommits, isGitRepo } from "./git.js";
@@ -85,6 +86,7 @@ export class Scheduler {
     if (paused) return;
     store.refreshReadiness();
     rt.clearExpiredQuota();
+    evaluateBudgets(rt);
     this.gateEnvironment(reason);
     integrateNext(rt);
     dispatchReviews(rt);

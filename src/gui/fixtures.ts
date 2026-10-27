@@ -90,7 +90,7 @@ export const prd: RequirementDoc = {
   requirements: [{ key: "R1", text: "Add a todo" }],
 };
 
-export const idleRuntime: RuntimeStatus = { paused: false, planOnly: false, activeRuns: [], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1 };
+export const idleRuntime: RuntimeStatus = { paused: false, planOnly: false, activeRuns: [], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1, budgetHolds: [] };
 
 const zero: UsageTotals = { runs: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, premiumRequests: 0, estimatedCostUsd: null, unpricedRuns: 0 };
 

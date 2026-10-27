@@ -4,6 +4,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import type { ForewrightEvent, Task } from "../../core/store-types.js";
+import { budgetLineText, type BudgetScopeStatus } from "../../core/budgets.js";
 import type { UsageSummary } from "../../core/usage.js";
 import { compactTokens, costText } from "../../core/usage-format.js";
 import type { RuntimeStatus } from "../../runtime/protocol.js";
@@ -73,6 +74,8 @@ export interface HomeData {
   snapshot: Snapshot;
   needRows: NeedRow[];
   usage: UsageSummary | null;
+  /** Spend against each budget limit that is set; absent or empty when no budget is set. */
+  budgets?: BudgetScopeStatus[] | null;
   /** Recent events, oldest first as the service returns them. */
   events: ForewrightEvent[] | null;
   /** The last problem when loading, shown above the cards; the cards keep their last data. */
@@ -273,6 +276,22 @@ export function HomeView({ data, now, actions }: { data: HomeData; now: number; 
               <strong>Total:</strong> {usageTotalText(data.usage)}
             </p>
           ) : null}
+          {data.budgets && data.budgets.length > 0 ? (
+            <div className="budgets" role="group" aria-label="Budgets">
+              {data.budgets.flatMap((s) =>
+                s.lines.map((l) => (
+                  <div key={`${s.id}:${l.limitKey}`} className={l.percent >= 100 ? "budget-row budget-over" : "budget-row"}>
+                    <span>{s.name}</span>
+                    <progress max={100} value={Math.min(l.percent, 100)} aria-label={`${s.name}: ${budgetLineText(l)}`} />
+                    <span className="muted">
+                      {budgetLineText(l)}
+                      {s.hold && l.used >= l.limit ? " (held)" : ""}
+                    </span>
+                  </div>
+                )),
+              )}
+            </div>
+          ) : null}
           <p className="muted">Cost is an estimate, not a bill.</p>
         </Card>
 
@@ -322,6 +341,7 @@ export function Home(): ReactNode {
   useInterval(() => setNow(Date.now()), 5000);
 
   const usage = useLive(() => rpc.call("state.usage", { projectId, days: 7 }), { events: isUsageEvent });
+  const budgets = useLive(() => rpc.call("state.budgets", { projectId }).then((r) => r.scopes), { events: (t) => isUsageEvent(t) || t.startsWith("budget.") || t === "setting.changed" });
   const events = useLive(() => rpc.call("state.events", { projectId, sinceSeq: Math.max(0, rpc.latestSeq - 60), limit: 60 }).then((r) => r.events), { events: anyEvent });
 
   const snap = needs.snapshot;
@@ -341,7 +361,7 @@ export function Home(): ReactNode {
   return (
     <>
       <HomeView
-        data={{ name, runtime, snapshot: snap, needRows: needs.rows, usage: usage.data, events: events.data, error }}
+        data={{ name, runtime, snapshot: snap, needRows: needs.rows, usage: usage.data, budgets: budgets.data, events: events.data, error }}
         now={now}
         actions={{ go, openPicker, readPrd: () => setReading(true), openRun: (runId, label) => setViewRun({ runId, label }), stopRun: setStopRunId }}
       />

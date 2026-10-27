@@ -54,8 +54,8 @@ export interface HarnessOptions {
   clock?: Clock;
   home?: string;
   watchdogMs?: number;
-  /** More doubles registered under other engine ids (for example claude and codex) to test fallback. */
-  extraAdapters?: FakeAdapter[];
+  /** More adapters registered under other engine ids: doubles for claude and codex to test fallback, or a real adapter on a fake CLI. */
+  extraAdapters?: ProviderAdapter[];
   /** Engine of a new project's CTO (default "fake"). */
   defaultCtoEngine?: EngineId;
 }

@@ -13,6 +13,7 @@ import { redactSecrets } from "../core/safety.js";
 import { type Agent, type Decision, type MessageSender, type Run, type Task, Store } from "../core/store.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { EventBus } from "./bus.js";
+import { activeHolds, BUDGET_ACTION, onBudgetDecision } from "./budgets.js";
 import { purposeFor, resolveFor } from "./fallback.js";
 import { CtoDriver } from "./cto.js";
 import { isGateDecision } from "./gates.js";
@@ -121,6 +122,7 @@ export class ProjectRuntime {
     return {
       paused: this.store.getProject().paused,
       planOnly: this.store.getSettings().planOnly,
+      budgetHolds: activeHolds(this),
       activeRuns: [...this.active.values()].map((a) => ({
         runId: a.run.id,
         kind: a.kind,
@@ -333,6 +335,7 @@ export class ProjectRuntime {
       if (decision.kind === "git_init" && approved) this.initGit(decision);
       if (decision.kind === "merge" && approved) this.executeMerge(decision.id);
       if ((decision.boundAction as { action?: string } | null)?.action === "kickoff_revise") resolveKickoffProposal(this, decision, approved);
+      if ((decision.boundAction as { action?: string } | null)?.action === BUDGET_ACTION) onBudgetDecision(this, decision, approved);
     } catch (err) {
       if (err instanceof ForewrightError) {
         this.store.recordEvent(`${decision.kind}.refused`, "decision", decision.id, { kind: "system" }, { code: err.code, message: err.message });

@@ -6,7 +6,7 @@ import { Box, Text } from "ink";
 import { ListRow, Row, Rule, SafeText, SectionLabel, TextInput, type DLine, type Seg } from "../components.js";
 import { needTarget, useClaim, useCtx, useHintScope, useKeys, useLoad } from "../context.js";
 import { TASK_STATE_LABEL, VIEW, clip, fit, oneLine, progressBar, windowed } from "../format.js";
-import { homeBudget, latestLines, needRows, usageLines, workerRows, type WorkerRow } from "../home-model.js";
+import { budgetRows, homeBudget, latestLines, needRows, usageLines, workerRows, type WorkerRow } from "../home-model.js";
 import { STATUS_LABEL, palette, statusColor, statusGlyph, sym, taskGlyph, type DisplayStatus } from "../theme.js";
 import { TASK_STATES } from "../../core/types.js";
 import type { Task } from "../../core/store-types.js";
@@ -41,6 +41,7 @@ export function HomeView() {
   const prd = useLoad(() => api.call("state.prd", { projectId }));
   const events = useLoad(() => api.call("state.events", { projectId, sinceSeq: Math.max(0, ctx.latestSeq() - 60), limit: 60 }));
   const usage = useLoad(() => api.call("state.usage", { projectId, days: 7 }));
+  const budgets = useLoad(() => api.call("state.budgets", { projectId }));
   const [sel, setSel] = useState(0);
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
@@ -81,7 +82,8 @@ export function HomeView() {
 
   // ---------------------------------------------------------------- the dashboard
   const usageLn = usage.data ? usageLines(usage.data) : [];
-  const budget = homeBudget(h, needs.length, workers.length, usageLn.length);
+  const budgetLn = budgets.data ? budgetRows(budgets.data.scopes) : [];
+  const budget = homeBudget(h, needs.length, workers.length, usageLn.length + budgetLn.length);
   const focused = ctx.focus === "main" && !filtering;
   const avail = Math.max(10, w - 2);
   const needsStart = windowed(needs.length, at < needs.length ? at : 0, budget.needsShown).start;
@@ -211,7 +213,10 @@ export function HomeView() {
         <>
           <Rule width={w} />
           <SectionLabel title="USAGE" note="estimates, not a bill" width={w} />
-          {usageLn.slice(0, budget.usageRows).map((u) => {
+          {budgetLn.slice(0, budget.usageRows).map((b, i) => (
+            <Row key={`b${i}`} line={{ text: `  ${b.who} ${b.bar} ${b.text}`, segs: [{ text: `  ${fit(clip(b.who, 9), 9)}` }, { text: `${b.bar} `, ...(b.percent >= 100 ? { color: palette.attention } : { dim: true }) }, { text: clip(`${b.text}${b.held ? "  HELD" : ""}`, Math.max(4, w - 24)), ...(b.percent >= 100 ? { color: palette.attention } : {}) }] }} width={w} />
+          ))}
+          {usageLn.slice(0, Math.max(0, budget.usageRows - budgetLn.length)).map((u) => {
             const head = fit(u.engine, 9);
             const text = `  ${head}today ${u.today}   7 days ${u.week}`;
             return <Row key={u.engine} line={{ text, segs: [{ text: `  ${head}` }, { text: clip(`today ${u.today}   7 days ${u.week}`, Math.max(4, w - 13)), dim: true }] }} width={w} />;

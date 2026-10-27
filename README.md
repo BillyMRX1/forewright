@@ -177,6 +177,17 @@ Inside your project only the `.forewright/project.json` marker is written. Task 
 
 Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex, Google for Antigravity, GitHub for Copilot, and whichever provider an OpenCode model belongs to) by their CLIs. `forewright` sends your project data nowhere else.
 
+## Local worker: Hearthwork
+
+[Hearthwork](https://github.com/BillyMRX1/hearthwork) serves a coding model on your own hardware. Forewright can give implementation tasks to it as a worker, while the CTO and reviewers stay on a cloud engine. Forewright still owns the task worktree, the checks, the review and the integration, so a finished Hearthwork task is never accepted on its word alone.
+
+1. Install Hearthwork 0.11.0 or newer (`uv tool install hearthwork`), run `hearthwork` once to choose a model, and install Codex or OpenCode for it to drive.
+2. Run `forewright doctor`. The Hearthwork row shows the version and a `local:` line with the model, context, busy slots, runtime and agent. "No Hearthwork host is running" means no model is loaded yet: run `hearthwork start`.
+3. In Settings, add `hearthwork` to the engines the CTO may hire on. It is never used by default: until you add it by name, the CTO cannot hire on it, and setup never ticks it.
+4. Optional: choose the agent in the Forewright config file (`config.json` in the data folder) with `"hearthwork": {"agent": "opencode"}`. By default Codex is used when installed, else OpenCode.
+
+How a run works: Forewright starts `hearthwork task --json --agent <agent> --cwd <task worktree> --timeout <seconds> -` with an argument list (no shell) and sends the task on stdin. Codex runs in its workspace-write sandbox; OpenCode may edit files and run only a short list of development commands (git, package scripts, tests). Read-only and coordinator permissions are refused, so Hearthwork cannot review or be the CTO. Its agents cannot call Forewright's tools: Forewright commits what is left in the worktree, then runs the checks and the independent review as for any worker. A run that changes nothing is sent back, not submitted. Stopping a run or reaching its time limit ends Hearthwork and the agent it started (which runs in its own process group). No API key or Forewright credential is passed, and the agent gets a private config home without your login, so it cannot fall back to a billed cloud model. Each run records the model Hearthwork served, the host, the agent, its run time and Hearthwork's own load or wait time; `forewright report` groups runs by that model.
+
 ## Subscription and API billing
 
 Agents run under your signed-in subscriptions (or, for OpenCode, free models and OAuth logins only). Environment variables such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `CODEX_API_KEY` are stripped from agent environments, so there is never a silent switch to pay-per-token billing. OpenCode models that would bill an API key are refused. Copilot runs are capped with `--max-ai-credits` and use your plan's premium requests. When a provider reports a usage limit, the affected work waits visibly until the reset by default. If you chose backup tools in the setup (or in Settings), the work moves to the first usable backup in your order, only to engines you listed, and goes back to its own engine as soon as the limit resets.

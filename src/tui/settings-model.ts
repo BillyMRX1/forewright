@@ -1,7 +1,7 @@
 // The pure part of the Settings view, shared by the terminal UI and the web app so their items, labels and
 // help text cannot drift apart: which settings exist, their groups and order, and what each one says it does.
 
-import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, type FallbackEntry } from "../core/store-types.js";
+import { BUDGET_AGENT_PREFIX, BUDGET_LIMIT_KEYS, BUDGET_PROJECT_KEY, DEFAULT_AUTHORITY, DEFAULT_LIMITS, type BudgetLimitKey, type BudgetLimits, type FallbackEntry } from "../core/store-types.js";
 import type { ProviderStatus } from "../runtime/protocol.js";
 
 export const LOCAL_NOTICE = "Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex) by their CLIs.";
@@ -15,7 +15,7 @@ export type LimitName = keyof typeof DEFAULT_LIMITS;
 export const AUTH_NAMES = Object.keys(DEFAULT_AUTHORITY) as AuthorityName[];
 export const LIMIT_NAMES = Object.keys(DEFAULT_LIMITS) as LimitName[];
 
-export const GROUPS = ["Engines", "Backups", "Control", "Limits"] as const;
+export const GROUPS = ["Engines", "Backups", "Control", "Limits", "Budgets"] as const;
 export type Group = (typeof GROUPS)[number];
 
 /** A setting both UIs show, as the terminal UI's cursor visits them. */
@@ -36,6 +36,52 @@ export const SETTING_ITEMS: ReadonlyArray<{ group: Group; item: SettingItem }> =
   { group: "Control", item: { kind: "plan-only" } },
   ...LIMIT_NAMES.map((name) => ({ group: "Limits" as const, item: { kind: "limit" as const, name } })),
 ];
+
+// ---------------------------------------------------------------- token budgets (issue #26)
+
+/** One budget field: a limit of the project, or of one agent. Not part of SETTING_ITEMS because the agent items depend on the team. */
+export interface BudgetItem {
+  kind: "budget";
+  /** The agent id, or null for the project. */
+  agentId: string | null;
+  /** The agent name (or the project name) shown in the label. */
+  who: string;
+  limit: BudgetLimitKey;
+}
+
+export const BUDGET_LIMIT_LABEL: Record<BudgetLimitKey, string> = {
+  dailyTokens: "tokens per day",
+  weeklyTokens: "tokens per week",
+  dailyPremium: "premium requests per day",
+  weeklyPremium: "premium requests per week",
+};
+
+export const BUDGET_HELP =
+  "Off by default; leave a field empty for no limit. Tokens are input plus output tokens of finished runs (cached input does not count); premium requests are Copilot's. A day is the local calendar day, a week starts on Monday. At 80% a warning goes to the CTO channel. At 100% no new run starts for that agent (or for the whole project): a run already going finishes, and you are asked in the Inbox whether to continue until the window ends. A hold is not a pause.";
+
+/** The budget fields in order: the project's four, then each agent's four. */
+export function budgetItems(project: string, agents: Array<{ id: string; name: string }>): BudgetItem[] {
+  const scopes: Array<{ agentId: string | null; who: string }> = [{ agentId: null, who: project }, ...agents.map((a) => ({ agentId: a.id, who: a.name }))];
+  return scopes.flatMap((s) => BUDGET_LIMIT_KEYS.map((limit) => ({ kind: "budget" as const, agentId: s.agentId, who: s.who, limit })));
+}
+
+export const budgetKey = (it: BudgetItem): string => (it.agentId === null ? BUDGET_PROJECT_KEY : `${BUDGET_AGENT_PREFIX}${it.agentId}`);
+export const budgetLabel = (it: BudgetItem): string => `${it.agentId === null ? "Project" : it.who}: ${BUDGET_LIMIT_LABEL[it.limit]}`;
+
+/** The limits object to save after one field changed; `n` null removes the field. */
+export function withLimit(current: BudgetLimits | undefined, limit: BudgetLimitKey, n: number | null): BudgetLimits {
+  const next: BudgetLimits = { ...(current ?? {}) };
+  if (n === null) delete next[limit];
+  else next[limit] = n;
+  return next;
+}
+
+/** What a budget field edit means: empty (or "none") clears it, a positive whole number sets it. Null when the text is neither. */
+export function parseBudgetInput(raw: string): { value: number | null } | null {
+  const t = raw.trim().toLowerCase();
+  if (t === "" || t === "none") return { value: null };
+  return /^[1-9]\d*$/.test(t) && Number.isSafeInteger(Number(t)) ? { value: Number(t) } : null;
+}
 
 /** The `settings.set` key an item writes. */
 export function settingKey(it: SettingItem): string {

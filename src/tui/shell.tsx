@@ -25,6 +25,7 @@ export function TopBar({
   conn,
   paused,
   planOnly = false,
+  budgetHeld = false,
   title,
   menuHint,
   need,
@@ -36,6 +37,8 @@ export function TopBar({
   paused: boolean;
   /** Plan-only mode: no work starts until Billy turns it off. */
   planOnly?: boolean;
+  /** A token budget is reached: no new runs start for some agent or the whole project (not the pause flag). */
+  budgetHeld?: boolean;
   /** Name of the open sidebar entry. */
   title: string;
   /** True when the sidebar is not on screen, so the bar says how to reach it. */
@@ -50,6 +53,7 @@ export function TopBar({
   const connSeg = (short: boolean): Seg => ({ text: short ? connDot : connText, color: CONN_COLOR[conn] });
   const marks: Seg[] = [
     ...(planOnly ? [{ text: " PLAN ONLY ", color: palette.attention, bold: true }, { text: " " }] : []),
+    ...(budgetHeld ? [{ text: " BUDGET HELD ", color: palette.attention, bold: true }, { text: " " }] : []),
     ...(paused ? [{ text: " PAUSED ", color: palette.attention, bold: true }, { text: " " }] : []),
   ];
   const rightVariants: Seg[][] = [

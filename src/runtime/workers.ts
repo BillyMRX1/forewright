@@ -9,6 +9,7 @@ import type { Agent, Message, Run, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { describeCheck, runCheck } from "./checks.js";
 import { BillingBlockedError, GitError, ProviderUnavailableError, WorkspaceError } from "./errors.js";
+import { blockingHold } from "./budgets.js";
 import { approvalGate } from "./gates.js";
 import { git, gitTry, isDirty, revParse } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
@@ -80,6 +81,7 @@ export function dispatchWork(rt: ProjectRuntime): void {
     if (t.blockReason !== null || t.assigneeAgentId === null) continue;
     const agent = store.getAgent(t.assigneeAgentId);
     if (agent.retiredAt || agent.lifecycle === "paused" || rt.agentBusy(agent.id)) continue;
+    if (blockingHold(rt, agent.id)) continue; // a token budget is reached: held until the window resets or Billy lets it continue
     const res = resolveFor(rt, agent, "work");
     if (res.wait) continue;
     if (!localEditsApproved(rt, t, agent)) continue;

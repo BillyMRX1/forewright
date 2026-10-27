@@ -7,9 +7,10 @@ import type { ReactNode } from "react";
 import type { FallbackEntry, Limits } from "../../core/store-types.js";
 import { LIVE_ENGINES } from "../../core/types.js";
 import type { EngineId } from "../../core/types.js";
+import { localStatusWords } from "../../core/local-format.js";
 import { engineRoleProblem } from "../../runtime/engine-roles.js";
 import type { ProviderStatus, Result } from "../../runtime/protocol.js";
-import { BACKUP_HELP, FALLBACK_TITLE, LABELS, LOCAL_NOTICE, MODES, PLAN_ONLY_LABEL, REPOSITORY_HELP, SETTING_ITEMS, authorityControl, itemLabel, providerHealthWord, settingKey } from "../../tui/settings-model.js";
+import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, LABELS, LOCAL_NOTICE, MODES, PLAN_ONLY_LABEL, REPOSITORY_HELP, SETTING_ITEMS, authorityControl, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, settingKey, withLimit } from "../../tui/settings-model.js";
 import type { AuthorityName, FallbackList, Group, LimitName, Mode } from "../../tui/settings-model.js";
 import { engineLabel } from "../../tui/toasts.js";
 import { isAgentEvent, useLive, useProject } from "../live.js";
@@ -206,6 +207,41 @@ export function NumberField({ label, value, onCommit, inputKey }: { label: strin
   );
 }
 
+/** A budget limit: empty means no limit, otherwise a whole number above 0. Saved on Enter or when you leave the box. */
+function BudgetField({ label, value, inputKey, onCommit }: { label: string; value: number | undefined; inputKey: string; onCommit: (n: number | null) => Promise<boolean> }) {
+  const shown = value === undefined ? "" : String(value);
+  const [text, setText] = useState(shown);
+  const [local, setLocal] = useState<string | undefined>(undefined);
+  useEffect(() => setText(shown), [shown]);
+  const commit = () => {
+    if (text.trim() === shown) return setLocal(undefined);
+    const r = parseBudgetInput(text);
+    if (r === null) {
+      setLocal("Enter a whole number above 0, or leave it empty for no limit.");
+      return setText(shown);
+    }
+    setLocal(undefined);
+    void onCommit(r.value).then((ok) => ok || setText(shown));
+  };
+  return (
+    <>
+      <input
+        type="text"
+        inputMode="numeric"
+        className="set-number"
+        aria-label={label}
+        placeholder="no limit"
+        data-input-key={inputKey}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), commit())}
+      />
+      <Err text={local} />
+    </>
+  );
+}
+
 function Row({ settingKey: key, label, help, children, error }: { settingKey: string; label: string; help?: string; children: ReactNode; error?: string | undefined }) {
   return (
     <div className="set-row" data-setting-key={key}>
@@ -241,6 +277,12 @@ function EngineCard({ p }: { p: ProviderStatus }) {
         <dd>{h.authenticated === true ? "yes" : h.authenticated === false ? "NOT logged in" : "unknown"}{h.authMethod ? ` (${h.authMethod})` : ""}</dd>
         <dt>Models ({h.modelsSource})</dt>
         <dd>{h.models.length > 0 ? h.models.join(", ") : "none listed"}</dd>
+        {h.local ? (
+          <>
+            <dt>Local model</dt>
+            <dd>{localStatusWords(h.local)}</dd>
+          </>
+        ) : null}
         <dt>Usage limit</dt>
         <dd className={p.quotaUntil === null ? "muted" : "set-attention"}>{quotaWords(p)}</dd>
       </dl>
@@ -490,6 +532,15 @@ export function SettingsView({ data, errors, actions }: SettingsViewProps) {
         </>
       ))}
       {section("Limits", items("Limits"))}
+      {section("Budgets", budgetItems("Project", data.agents ?? []).map((it) => {
+        const key = budgetKey(it);
+        const current = it.agentId === null ? settings.budgets.project : settings.budgets.agents[it.agentId];
+        return (
+          <Row key={`${key}:${it.limit}`} settingKey={`${key}:${it.limit}`} label={budgetLabel(it)} error={errors[key]}>
+            <BudgetField label={budgetLabel(it)} inputKey={`${key}:${it.limit}`} value={current?.[it.limit]} onCommit={(n) => actions.save(key, withLimit(current, it.limit, n))} />
+          </Row>
+        );
+      }), <p className="muted">{BUDGET_HELP}</p>)}
       {pendingCommit ? (
         <ConfirmDialog
           title="Create initial commit"

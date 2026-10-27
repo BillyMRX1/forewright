@@ -7,6 +7,7 @@ import { ValidationError } from "../core/errors.js";
 import { readRegistry } from "../core/identity.js";
 import { forewrightHome, logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
+import { budgetStatus } from "./budgets.js";
 import { loadPrices, readUsageRows, summarizeUsage, windowStart } from "../core/usage.js";
 import type { Message, MessageChannel } from "../core/store.js";
 import type { EngineId, PermissionProfile } from "../core/types.js";
@@ -183,6 +184,7 @@ export class ClientApi {
           ctoModel: cto.model,
           hasCommits: hasCommits(rt.root),
           projectChecks: rt.store.getSetting<string[]>("projectChecks") ?? [],
+          agents: rt.store.listAgents().map((a) => ({ id: a.id, name: a.name })),
           fallbackStatus: { cto: fallbackStatus(rt, "cto", settings.fallback.cto), workers: fallbackStatus(rt, "workers", settings.fallback.workers) },
         };
       },
@@ -197,6 +199,7 @@ export class ClientApi {
         const rows = readUsageRows(rt.store.db, windowStart(now, days).toISOString()).filter((r) => r.projectId === rt.projectId);
         return summarizeUsage(rows, { now, days, prices: loadPrices(forewrightHome()) });
       },
+      "state.budgets": async (p) => ({ scopes: budgetStatus(await this.rt(p)) }),
       "evidence.diff": async (p) => this.diff(await this.rt(p), reqStr(p, "taskId", 200)),
       "tasks.checkpoints": async (p) => taskCheckpoints(await this.rt(p), reqStr(p, "taskId", 200)),
       "tasks.undoTo": async (p) => {
