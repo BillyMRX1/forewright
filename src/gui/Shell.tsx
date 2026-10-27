@@ -13,6 +13,8 @@ import { NeedsProvider, ProjectContext, sidebarBadges, useNeeds, useProject } fr
 import type { Badge, Focus, ProjectContextValue } from "./live.js";
 import { Cto } from "./views/Cto.js";
 import { Home } from "./views/Home.js";
+import { Tasks } from "./views/Tasks.js";
+import { Inbox } from "./views/Inbox.js";
 
 export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "settings";
 
@@ -28,9 +30,9 @@ export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> =
 export const HINTS: Record<ViewId, string[]> = {
   cto: ["Enter send", "Shift+Enter new line", "/ commands", "Tab complete command", "Esc close dialogs"],
   home: ["Click a row under Needs you to open it", "Esc close dialogs"],
-  tasks: ["Use the terminal UI for this view for now"],
+  tasks: ["Arrow keys move between tasks", "Enter opens a task", "Esc back to the list", "Esc close dialogs"],
   team: ["Use the terminal UI for this view for now"],
-  inbox: ["Use the terminal UI for this view for now"],
+  inbox: ["Arrow keys move through the list", "Enter opens an item", "Esc goes back", "Esc close dialogs"],
   settings: ["Use the terminal UI for this view for now"],
 };
 
@@ -343,6 +345,10 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     body = <Cto key={project.projectId} />;
   } else if (view === "home" && project) {
     body = <Home key={project.projectId} />;
+  } else if (view === "tasks" && project) {
+    body = <Tasks key={project.projectId} />;
+  } else if (view === "inbox" && project) {
+    body = <Inbox key={project.projectId} />;
   } else {
     body = <ComingSoon title={current.label} text={current.soon} />;
   }
