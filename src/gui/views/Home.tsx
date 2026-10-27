@@ -16,6 +16,8 @@ import type { DisplayStatus } from "../../tui/theme.js";
 import { anyEvent, isUsageEvent, useLive, useNeeds, useProject } from "../live.js";
 import type { Snapshot } from "../live.js";
 import { PrdReader } from "../prd.js";
+import { StopRunDialog } from "../runcontrols.js";
+import { RunLogModal } from "../runlog.js";
 import type { ViewId } from "../Shell.js";
 import { relTime, useInterval } from "../ui.js";
 
@@ -81,6 +83,9 @@ export interface HomeActions {
   go: (view: ViewId, focusId?: string) => void;
   openPicker: () => void;
   readPrd: () => void;
+  /** Open a run's output, and stop a run; the Running now rows show these buttons only when given. */
+  openRun?: (runId: string, label: string) => void;
+  stopRun?: (runId: string) => void;
 }
 
 function Card({ title, className, children }: { title: string; className?: string; children: ReactNode }) {
@@ -184,6 +189,16 @@ export function HomeView({ data, now, actions }: { data: HomeData; now: number; 
                       {t ? `: ${t.shortId} ${oneLine(t.title)}` : ""}
                     </span>
                     <span className="muted row-meta">{elapsed(r.startedAt, false, now)}</span>
+                    {actions.openRun ? (
+                      <button type="button" className="btn btn-quiet" onClick={() => actions.openRun?.(r.runId, `${names.get(r.agentId) ?? "An agent"} ${r.kind}${t ? `, ${t.shortId}` : ""}`)} aria-label={`Open the output of ${names.get(r.agentId) ?? "an agent"} ${r.kind}`}>
+                        Output
+                      </button>
+                    ) : null}
+                    {actions.stopRun ? (
+                      <button type="button" className="btn btn-quiet btn-danger" onClick={() => actions.stopRun?.(r.runId)} aria-label={`Stop the run of ${names.get(r.agentId) ?? "an agent"} ${r.kind}`}>
+                        Stop run
+                      </button>
+                    ) : null}
                   </li>
                 );
               })}
@@ -302,6 +317,8 @@ export function Home(): ReactNode {
   const needs = useNeeds();
   const [now, setNow] = useState(() => Date.now());
   const [reading, setReading] = useState(false);
+  const [viewRun, setViewRun] = useState<{ runId: string; label: string } | null>(null);
+  const [stopRunId, setStopRunId] = useState<string | null>(null);
   useInterval(() => setNow(Date.now()), 5000);
 
   const usage = useLive(() => rpc.call("state.usage", { projectId, days: 7 }), { events: isUsageEvent });
@@ -326,8 +343,10 @@ export function Home(): ReactNode {
       <HomeView
         data={{ name, runtime, snapshot: snap, needRows: needs.rows, usage: usage.data, events: events.data, error }}
         now={now}
-        actions={{ go, openPicker, readPrd: () => setReading(true) }}
+        actions={{ go, openPicker, readPrd: () => setReading(true), openRun: (runId, label) => setViewRun({ runId, label }), stopRun: setStopRunId }}
       />
+      {viewRun ? <RunLogModal runId={viewRun.runId} title={`Run output, ${viewRun.label}`} onClose={() => setViewRun(null)} /> : null}
+      {stopRunId ? <StopRunDialog runId={stopRunId} onClose={() => setStopRunId(null)} /> : null}
       {reading && prdDoc ? <PrdReader doc={prdDoc} onClose={() => setReading(false)} onApprove={null} /> : null}
     </>
   );
