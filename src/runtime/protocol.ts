@@ -57,9 +57,20 @@ export interface RuntimeStatus {
   connectedClients: number;
 }
 
+/** Shown wherever a kickoff wireframe or the design specification is shown (TUI, GUI, export README). */
+export const STATIC_MOCKUP_LABEL = "Static mockup, not runtime evidence";
+
+export type KickoffDocState = KickoffDoc & { edited: boolean; missing: boolean; proposal: { id: string; summary: string; decisionId: string | null; createdAt: string } | null };
+
 export interface KickoffState {
   pack: KickoffPack | null;
-  docs: Array<KickoffDoc & { edited: boolean; missing: boolean; proposal: { id: string; summary: string; decisionId: string | null; createdAt: string } | null }>;
+  /** The documents, wireframes left out. */
+  docs: KickoffDocState[];
+  /** The wireframe screens (documents with the key `wireframe:<name>`). */
+  wireframes: Array<KickoffDocState & { name: string }>;
+  /** Whether the pack has UI documents ("yes" or "no" once the CTO decided), and its one-line reason. */
+  ui: "yes" | "no" | null;
+  uiReason: string | null;
   dir: string | null;
   /** The latest approval of the pack, or null when Billy never approved it. */
   approval: { revision: number; approvedAt: string } | null;
@@ -134,9 +145,11 @@ export interface Methods {
   "kickoff.doc": { params: { projectId: string; key: string }; result: { key: string; text: string } };
   /** The open revision proposal of a document, or null when it has none. */
   "kickoff.proposal": { params: { projectId: string; key: string }; result: KickoffProposalState | null };
+  /** A wireframe's SVG, passed through the sanitizer on every read (Billy's edits included), for an <img> preview. */
+  "kickoff.wireframe": { params: { projectId: string; name: string }; result: { name: string; svg: string } };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
-  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
+  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; /** Commands run as checks after every task, besides the task's own. */ projectChecks?: string[]; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
   "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
   /** Tokens and estimated cost of this project's runs over the last `days` local days (default 7). */
   "state.usage": { params: { projectId: string; days?: number }; result: UsageSummary };
@@ -175,11 +188,15 @@ export interface Methods {
   "agents.memory": { params: { projectId: string; agentId: string }; result: { text: string; bytes: number; limit: number } };
   "agents.clearMemory": { params: { projectId: string; agentId: string }; result: { ok: true } };
   "tasks.reassign": { params: { projectId: string; taskId: string; agentId: string; note: string }; result: { task: Task } };
+  /** Billy asks for a change on a task's file or diff hunk. It goes to the assignee as feedback and the task gets a new revision through the normal gates. Refused while a run works, and for a finished task. */
+  "tasks.requestChange": { params: { projectId: string; taskId: string; file?: string; hunk?: string; note: string }; result: { task: Task } };
   "tasks.outcome": { params: { projectId: string; taskId: string; fixMinutes?: number }; result: { ok: true } };
   "drafts.save": { params: { projectId: string; view: string; key: string; body: string }; result: { ok: true } };
   "drafts.get": { params: { projectId: string; view: string; key: string }; result: { body: string | null } };
 
   /** Starts the local web bridge for the GUI (or returns the running one). `note` says when a different port was asked of a running bridge. */
+  /** The GUI settings the web app needs to read: the SSH host name for "Open in editor" on a remote server, or null. */
+  "gui.settings": { params: Record<string, never>; result: { editorSshHost: string | null } };
   "gui.start": { params: { port?: number }; result: { url: string; port: number; host: "127.0.0.1"; note?: string } };
 
   // execution controls (distinct behaviors, see docs/architecture.md)

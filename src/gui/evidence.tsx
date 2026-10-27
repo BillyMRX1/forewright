@@ -13,6 +13,9 @@ import { isPrdEvent, isTaskEvent, useLive, useProject } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { plainError } from "./Picker.js";
 import { activeRunFor } from "./tasks-model.js";
+import { ChangeRequestDialog, changeRequestBlockReason, hunkText, useEditorHost } from "./changes.js";
+import type { ChangeTarget, DiffTools } from "./changes.js";
+import { editorLink } from "./changes.js";
 import { ConfirmDialog, relTime } from "./ui.js";
 
 // ---------------------------------------------------------------- unified diff parser
@@ -619,7 +622,7 @@ function HunkTable({ hunk, tok, unified }: { hunk: DiffHunk; tok: { old: Token[]
   );
 }
 
-export function DiffFileView({ file, unified, initiallyOpen }: { file: DiffFile; unified: boolean; initiallyOpen?: boolean }) {
+export function DiffFileView({ file, unified, initiallyOpen, tools }: { file: DiffFile; unified: boolean; initiallyOpen?: boolean; tools?: DiffTools }) {
   const [open, setOpen] = useState(initiallyOpen ?? !startsCollapsed(file));
   const bodyId = useId();
   const tok = useMemo(() => (open ? highlightFile(file) : null), [file, open]);
@@ -627,6 +630,7 @@ export function DiffFileView({ file, unified, initiallyOpen }: { file: DiffFile;
   const rows = rowCount(file);
   return (
     <section className="dfile" aria-label={`File ${file.path}`}>
+      <div className="dfile-row">
       <button type="button" className="dfile-head" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((v) => !v)}>
         <span className="dfile-caret" aria-hidden="true">
           {open ? "v" : ">"}
@@ -637,6 +641,8 @@ export function DiffFileView({ file, unified, initiallyOpen }: { file: DiffFile;
           <span className="dcount-add">+{file.added}</span> <span className="dcount-del">-{file.removed}</span>
         </span>
       </button>
+      {tools ? <FileActions file={file} tools={tools} /> : null}
+      </div>
       {open ? (
         <div id={bodyId} className="dfile-body">
           {file.binary ? <p className="muted dnote">Binary file, not shown.</p> : null}
@@ -645,7 +651,21 @@ export function DiffFileView({ file, unified, initiallyOpen }: { file: DiffFile;
           {rows > HIGHLIGHT_MAX_LINES ? <p className="muted dnote">Shown without highlighting because the file is large.</p> : null}
           {file.hunks.map((h, i) => (
             <div key={i} className="dhunk">
-              <div className="dhunk-head mono">{h.header}</div>
+              <div className="dhunk-head mono">
+                <span className="dhunk-title">{h.header}</span>
+                {tools && !file.binary ? (
+                  <button
+                    type="button"
+                    className="btn btn-quiet dhunk-ask"
+                    disabled={tools.requestReason !== null}
+                    title={tools.requestReason ?? undefined}
+                    aria-label={`Request a change on this part of ${file.path}, ${h.header}`}
+                    onClick={() => tools.onRequest({ file: file.path, hunk: hunkText(h) })}
+                  >
+                    Request a change on this hunk
+                  </button>
+                ) : null}
+              </div>
               <HunkTable hunk={h} tok={tok?.[i] ?? null} unified={unified} />
             </div>
           ))}
@@ -656,6 +676,29 @@ export function DiffFileView({ file, unified, initiallyOpen }: { file: DiffFile;
   );
 }
 
+function FileActions({ file, tools }: { file: DiffFile; tools: DiffTools }) {
+  const href = file.status === "deleted" ? null : tools.editorHref(file.path);
+  return (
+    <span className="dfile-actions">
+      {href ? (
+        <a className="btn btn-quiet" href={href} aria-label={`Open ${file.path} in the editor`}>
+          Open in editor
+        </a>
+      ) : null}
+      <button
+        type="button"
+        className="btn btn-quiet"
+        disabled={tools.requestReason !== null}
+        title={tools.requestReason ?? undefined}
+        aria-label={`Request a change on ${file.path}`}
+        onClick={() => tools.onRequest({ file: file.path, hunk: null })}
+      >
+        Request a change
+      </button>
+    </span>
+  );
+}
+
 export interface DiffData {
   base: string | null;
   head: string | null;
@@ -663,7 +706,7 @@ export interface DiffData {
   truncated: boolean;
 }
 
-export function DiffView({ diff, unified, narrow, onUnified }: { diff: DiffData; unified: boolean; narrow: boolean; onUnified: (v: boolean) => void }) {
+export function DiffView({ diff, unified, narrow, onUnified, tools }: { diff: DiffData; unified: boolean; narrow: boolean; onUnified: (v: boolean) => void; tools?: DiffTools }) {
   const parsed = useMemo(() => parseUnifiedDiff(diff.diff, diff.truncated), [diff.diff, diff.truncated]);
   if (parsed.files.length === 0) return <p className="muted">No changes recorded.</p>;
   const added = parsed.files.reduce((n, f) => n + f.added, 0);
@@ -691,8 +734,9 @@ export function DiffView({ diff, unified, narrow, onUnified }: { diff: DiffData;
           </span>
         )}
       </div>
+      {tools?.requestReason ? <p className="muted dview-reason">Requests for changes are off: {tools.requestReason}</p> : null}
       {parsed.files.map((f, i) => (
-        <DiffFileView key={`${i}:${f.path}`} file={f} unified={oneCol} />
+        <DiffFileView key={`${i}:${f.path}`} file={f} unified={oneCol} tools={tools} />
       ))}
       {parsed.truncated ? <p className="chip chip-attention">The diff is truncated.</p> : null}
     </div>
@@ -873,6 +917,30 @@ function useNarrow(): boolean {
   return narrow;
 }
 
+/** The diff with "Request a change" and "Open in editor", and the dialog the request opens. Used by the Changes and Evidence tabs. */
+export function ChangeDiff({ task, diff, unified, narrow, onUnified, onSent }: { task: Task; diff: DiffData; unified: boolean; narrow: boolean; onUnified: (v: boolean) => void; onSent?: () => void }) {
+  const editor = useEditorHost();
+  const [target, setTarget] = useState<ChangeTarget | null>(null);
+  const tools: DiffTools = {
+    requestReason: changeRequestBlockReason(task),
+    onRequest: setTarget,
+    editorHref: (file) => (editor.ready ? editorLink(task.worktreePath, file, editor.host) : null),
+  };
+  return (
+    <>
+      <DiffView diff={diff} unified={unified} narrow={narrow} onUnified={onUnified} tools={tools} />
+      {target ? <ChangeRequestDialog task={task} target={target} onClose={() => setTarget(null)} onSent={() => onSent?.()} /> : null}
+    </>
+  );
+}
+
+/** The Changes tab of the task detail: the same diff as in the Evidence tab, loaded by the task view. */
+export function ChangesTab({ task, diff }: { task: Task; diff: DiffData }) {
+  const narrow = useNarrow();
+  const [unified, setUnified] = useState(false);
+  return <ChangeDiff task={task} diff={diff} unified={unified} narrow={narrow} onUnified={setUnified} />;
+}
+
 export function EvidenceTab({ task }: { task: Task }) {
   const { rpc, projectId, runtime, notify } = useProject();
   const taskId = task.id;
@@ -931,7 +999,7 @@ export function EvidenceTab({ task }: { task: Task }) {
             Could not load the changes: {diff.error}
           </p>
         ) : null}
-        {df ? <DiffView diff={df} unified={unified} narrow={narrow} onUnified={setUnified} /> : <p className="muted">Loading the changes.</p>}
+        {df ? <ChangeDiff task={task} diff={df} unified={unified} narrow={narrow} onUnified={setUnified} onSent={() => { evidence.reload(); diff.reload(); cps.reload(); }} /> : <p className="muted">Loading the changes.</p>}
       </section>
 
       <section aria-label="Checkpoints">

@@ -16,9 +16,11 @@ import { Home } from "./views/Home.js";
 import { Tasks } from "./views/Tasks.js";
 import { Inbox } from "./views/Inbox.js";
 import { Team } from "./views/Team.js";
+import { Settings } from "./views/Settings.js";
+import { Kickoff } from "./views/Kickoff.js";
 import { RunControls } from "./runcontrols.js";
 
-export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "settings";
+export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "kickoff" | "settings";
 
 export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> = [
   { id: "home", label: "Home", soon: "An overview of the project: what needs you, what is running and what is done." },
@@ -26,6 +28,7 @@ export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> =
   { id: "tasks", label: "Tasks", soon: "The task board, with each task's state, owner and evidence." },
   { id: "team", label: "Team", soon: "Your agents, what each one is doing, and their engines." },
   { id: "inbox", label: "Inbox", soon: "Decisions that wait for you, such as approvals and questions." },
+  { id: "kickoff", label: "Kickoff", soon: "" },
   { id: "settings", label: "Settings", soon: "Engines, limits and project settings." },
 ];
 
@@ -35,7 +38,8 @@ export const HINTS: Record<ViewId, string[]> = {
   tasks: ["Arrow keys move between tasks", "Enter opens a task", "Esc back to the list", "Esc close dialogs"],
   team: ["Tab moves between cards and buttons", "Space or Enter opens Memory notes", "Esc close dialogs"],
   inbox: ["Arrow keys move through the list", "Enter opens an item", "Esc goes back", "Esc close dialogs"],
-  settings: ["Use the terminal UI for this view for now"],
+  settings: ["Changes save as you make them", "Enter saves a number or model", "Esc close dialogs"],
+  kickoff: ["Arrow keys move through the documents", "Enter opens a document", "Click a wireframe to see it large", "Esc goes back", "Esc close dialogs"],
 };
 
 const LAST_PROJECT = "forewright.lastProject";
@@ -357,6 +361,10 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     body = <Team key={project.projectId} />;
   } else if (view === "inbox" && project) {
     body = <Inbox key={project.projectId} />;
+  } else if (view === "settings" && project) {
+    body = <Settings key={project.projectId} />;
+  } else if (view === "kickoff" && project) {
+    body = <Kickoff key={project.projectId} />;
   } else {
     body = <ComingSoon title={current.label} text={current.soon} />;
   }

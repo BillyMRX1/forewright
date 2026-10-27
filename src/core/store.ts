@@ -1816,6 +1816,8 @@ export class Store {
       scale: r["scale"] as KickoffScale,
       status: r["status"] as KickoffPack["status"],
       revision: r["revision"] as number,
+      ui: (r["ui"] as KickoffPack["ui"] | undefined) ?? null,
+      uiReason: (r["ui_reason"] as string | null | undefined) ?? null,
       startedBy: r["started_by"] as string,
       createdAt: r["created_at"] as string,
       updatedAt: r["updated_at"] as string,
@@ -1875,11 +1877,77 @@ export class Store {
         this.postMessageTx({
           channel: "cto",
           sender: { kind: "system" },
-          body: `Kickoff pack ready: ${found.docs.length} documents. Read them with /kickoff.`,
+          body: `Kickoff pack ready: ${kickoffReadyCount(found.docs)}. Read them with /kickoff.`,
           recipients: [],
           dedupeKey: `kickoff-ready:${found.pack.createdAt}`,
         });
       }
+      return this.getKickoffPack()!.docs.find((d) => d.key === input.key)!;
+    });
+  }
+
+  /**
+   * The CTO decides once whether the pack has UI documents. With a UI, `docs` are added as pending documents after
+   * the existing ones; a pack that was ready goes back to generating and gets a new revision, so an earlier approval
+   * no longer covers it. Without one, only the reason is recorded. A second decision is refused.
+   */
+  setKickoffUi(input: { hasUi: boolean; reason: string; docs: Array<{ key: string; title: string; path: string }>; by: Actor }): { pack: KickoffPack; docs: KickoffDoc[] } {
+    if (input.by.kind !== "agent") throw new PolicyDeniedError("Only the CTO decides whether the kickoff pack has UI documents.", { hasUi: input.hasUi });
+    return tx(this.db, () => {
+      const found = this.getKickoffPack();
+      if (!found) throw new NotFoundError("Kickoff pack");
+      if (found.pack.ui !== null) {
+        throw new ValidationError(`The UI decision is already recorded (${found.pack.ui === "yes" ? "the project has a UI" : `no UI documents: ${found.pack.uiReason ?? ""}`}). It is made once.`, { ui: found.pack.ui });
+      }
+      const now = this.nowIso();
+      this.run("UPDATE kickoff_pack SET ui = ?, ui_reason = ?, updated_at = ? WHERE project_id = ?", input.hasUi ? "yes" : "no", input.reason, now, this.projectId);
+      if (input.hasUi) {
+        const next = found.docs.reduce((m, d) => Math.max(m, d.position), -1) + 1;
+        input.docs.forEach((d, i) => {
+          if (found.docs.some((x) => x.key === d.key)) return;
+          this.run("INSERT INTO kickoff_doc (project_id, key, title, position, status, version, path, updated_at) VALUES (?,?,?,?,?,?,?,?)", this.projectId, d.key, d.title, next + i, "pending", 0, d.path, now);
+        });
+        if (found.pack.status === "ready") this.run("UPDATE kickoff_pack SET status = 'generating', revision = revision + 1, updated_at = ? WHERE project_id = ?", now, this.projectId);
+      }
+      this.appendEvent("kickoff.ui_decided", "kickoff", this.projectId, actorLabel(input.by), { ui: input.hasUi ? "yes" : "no", reason: input.reason, docs: input.hasUi ? input.docs.map((d) => d.key) : [] });
+      return this.getKickoffPack()!;
+    });
+  }
+
+  /**
+   * Records a wireframe Forewright wrote (`wireframe:<name>`): a written document at version 1 and a new pack
+   * revision. Only while the pack has a UI and its wireframes index is still pending, at most `max` of them,
+   * and never a second time for the same name (a written wireframe changes through a revision).
+   */
+  recordKickoffWireframe(input: { key: string; title: string; path: string; sha256: string; author: string; max: number }): KickoffDoc {
+    return tx(this.db, () => {
+      const found = this.getKickoffPack();
+      if (!found) throw new NotFoundError("Kickoff pack");
+      if (found.pack.ui !== "yes") throw new ValidationError("Decide first that the project has a UI (set_kickoff_ui), then write its wireframes.", { ui: found.pack.ui });
+      const index = found.docs.find((d) => d.key === "wireframes");
+      if (!index || index.status !== "pending") throw new ValidationError("The wireframes index is already written, so no new screen can be added. A written wireframe changes through a revision, which Billy asks for.", { key: input.key });
+      if (found.docs.some((d) => d.key === input.key)) {
+        throw new ValidationError(`The wireframe ${input.key.slice("wireframe:".length)} is already written. Written wireframes are changed through a revision, which Billy asks for.`, { key: input.key });
+      }
+      const count = found.docs.filter((d) => d.key.startsWith("wireframe:")).length;
+      if (count >= input.max) throw new ValidationError(`The pack already has ${count} wireframes, the most it may hold. Keep to the screens that matter.`, { count, max: input.max });
+      const now = this.nowIso();
+      const position = found.docs.reduce((m, d) => Math.max(m, d.position), -1) + 1;
+      this.run(
+        "INSERT INTO kickoff_doc (project_id, key, title, position, status, version, path, sha256, author, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        this.projectId,
+        input.key,
+        input.title,
+        position,
+        "written",
+        1,
+        input.path,
+        input.sha256,
+        input.author,
+        now,
+      );
+      this.run("UPDATE kickoff_pack SET revision = revision + 1, updated_at = ? WHERE project_id = ?", now, this.projectId);
+      this.appendEvent("kickoff.doc_written", "kickoff", this.projectId, input.author, { key: input.key, version: 1 });
       return this.getKickoffPack()!.docs.find((d) => d.key === input.key)!;
     });
   }
@@ -2198,17 +2266,18 @@ export class Store {
 
   // ------------------------------------------------------------ runtime support
 
-  /** Working or review task goes back to ready for another attempt; counts as a repair loop. */
-  requeueForRepair(taskId: string, actor: Actor): Task {
+  /** Working or review task goes back to ready for another attempt; counts as a repair loop unless `countsAsRepair` is false (a change Billy asked for). */
+  requeueForRepair(taskId: string, actor: Actor, countsAsRepair = true): Task {
     return tx(this.db, () => {
       const t = this.getTask(taskId);
       if (t.state !== "working" && t.state !== "review") throw new InvalidTransitionError(t.state, "ready", { taskId: t.id });
       this.run(
-        "UPDATE task SET state = 'ready', repair_loops = repair_loops + 1, lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+        "UPDATE task SET state = 'ready', repair_loops = repair_loops + ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+        countsAsRepair ? 1 : 0,
         this.nowIso(),
         t.id,
       );
-      this.appendEvent("task.transitioned", "task", t.id, actorLabel(actor), { from: t.state, to: "ready", reason: "repair", repairLoops: t.repairLoops + 1 });
+      this.appendEvent("task.transitioned", "task", t.id, actorLabel(actor), { from: t.state, to: "ready", reason: countsAsRepair ? "repair" : "change_request", repairLoops: t.repairLoops + (countsAsRepair ? 1 : 0) });
       this.freeAgentFor(t.id);
       return this.getTask(t.id);
     });
@@ -2467,6 +2536,13 @@ export class Store {
     const all = this.listDecisions();
     return { open: all.filter((d) => d.status === "open"), recent: all.filter((d) => d.status !== "open").slice(-20).reverse() };
   }
+}
+
+/** "7 documents", or "10 documents and 4 wireframes": wireframes (`wireframe:<name>` rows) are counted apart. */
+function kickoffReadyCount(docs: KickoffDoc[]): string {
+  const wireframes = docs.filter((d) => d.key.startsWith("wireframe:")).length;
+  const n = docs.length - wireframes;
+  return `${n} documents${wireframes > 0 ? ` and ${wireframes} ${wireframes === 1 ? "wireframe" : "wireframes"}` : ""}`;
 }
 
 /** The worker engine list: known live engines, each at most once. Empty is allowed and means "any usable engine". */

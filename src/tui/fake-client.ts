@@ -196,8 +196,11 @@ export function fakeKickoff(scale: "small" | "full"): KickoffState {
   ];
   const keys = scale === "small" ? all.filter(([k]) => ["brief", "requirements", "test-strategy"].includes(k)) : all;
   return {
-    pack: { scale, status: "generating", revision: 0, startedBy: "human", createdAt: NOW, updatedAt: NOW },
+    pack: { scale, status: "generating", revision: 0, ui: null, uiReason: null, startedBy: "human", createdAt: NOW, updatedAt: NOW },
     docs: keys.map(([key, title], position) => ({ key, title, position, status: "pending", version: 0, path: `${key}.md`, sha256: null, author: null, updatedAt: NOW, edited: false, missing: false, proposal: null })),
+    wireframes: [],
+    ui: null,
+    uiReason: null,
     dir: "/Users/billy/.local/share/forewright/projects/p1/kickoff",
     approval: null,
     approvedCurrent: false,
@@ -217,7 +220,7 @@ export class FakeClient implements ClientApi {
   /** Plan-only mode, as state.settings and the runtime report it. Changed by settings.set. */
   planOnly = false;
   /** The kickoff pack as state.kickoff returns it (none by default). kickoff.start creates one. */
-  kickoff: KickoffState = { pack: null, docs: [], dir: null, approval: null, approvedCurrent: false };
+  kickoff: KickoffState = { pack: null, docs: [], wireframes: [], ui: null, uiReason: null, dir: null, approval: null, approvedCurrent: false };
   /** Open revision proposals as kickoff.proposal returns them, keyed by document key. */
   kickoffProposals: Record<string, KickoffProposalState> = {};
   /** Files kickoff.export reports as already existing with different content; refused unless overwrite is true. */

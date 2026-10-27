@@ -11,7 +11,7 @@ import { TASK_STATE_LABEL, duration, oneLine, plainBlockReason, plainRunState, s
 import { taskGlyph } from "../../tui/theme.js";
 import { isAgentEvent, isRunEvent, isTaskEvent, useLive, useProject } from "../live.js";
 import { Markdown } from "../markdown.js";
-import { EvidenceTab } from "../evidence.js";
+import { ChangesTab, EvidenceTab } from "../evidence.js";
 import { plainError } from "../Picker.js";
 import { RunLog, RunLogModal } from "../runlog.js";
 import {
@@ -236,6 +236,8 @@ export interface TaskDetailViewProps {
   onOpenRun?: (runId: string) => void;
   diff: DiffData | null;
   diffError: string | null;
+  /** Renders the diff with change requests and "Open in editor" (the connected app). Without it the plain diff shows. */
+  changes?: (diff: DiffData) => ReactNode;
   onOpenTask: (id: string) => void;
   onBack: () => void;
 }
@@ -320,7 +322,7 @@ export function TaskDetailView(p: TaskDetailViewProps) {
               Could not load the changes: {p.diffError}
             </p>
           ) : (
-            <DiffBox diff={p.diff} />
+            p.changes && p.diff ? p.changes(p.diff) : <DiffBox diff={p.diff} />
           )
         ) : (
           <>
@@ -720,6 +722,7 @@ export function Tasks() {
               onOpenRun={setViewRun}
               diff={diffData}
               diffError={diff.error}
+              changes={(df) => <ChangesTab task={d.task} diff={df} />}
               onOpenTask={open}
               onBack={() => setDetailOpen(false)}
             />

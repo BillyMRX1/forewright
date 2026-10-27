@@ -21,9 +21,10 @@ import { engineRoleProblem } from "./engine-roles.js";
 import { fallbackStatus } from "./fallback.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { MEMORY_CAP_BYTES, clearMemory, readMemory } from "./memory.js";
-import { KICKOFF_SCALES, approveKickoffPack, exportKickoff, keepOwnerEdit, kickoffProposalView, kickoffView, nudgeKickoff, readKickoffDoc, startKickoffPack } from "./kickoff.js";
+import { KICKOFF_SCALES, approveKickoffPack, exportKickoff, keepOwnerEdit, kickoffProposalView, kickoffView, nudgeKickoff, readKickoffDoc, readKickoffWireframe, startKickoffPack } from "./kickoff.js";
 import type { KickoffScale } from "../core/store.js";
-import { validateGuiPort } from "../core/gui-config.js";
+import { readGuiConfig, validateGuiPort } from "../core/gui-config.js";
+import { NOTE_MAX, requestChange } from "./change-request.js";
 import { taskCheckpoints, undoTaskTo } from "./checkpoints.js";
 
 type P = Record<string, unknown>;
@@ -164,6 +165,7 @@ export class ClientApi {
         return { key, text: readKickoffDoc(rt.projectId, key) };
       },
       "kickoff.proposal": async (p) => kickoffProposalView(await this.rt(p), reqStr(p, "key", 100)),
+      "kickoff.wireframe": async (p) => readKickoffWireframe((await this.rt(p)).projectId, reqStr(p, "name", 100)),
       "state.adrs": async (p) => ({ adrs: (await this.rt(p)).store.listAdrs() }),
       "state.evidence": async (p) => {
         const rt = await this.rt(p);
@@ -180,6 +182,7 @@ export class ClientApi {
           ctoEngine: cto.engine,
           ctoModel: cto.model,
           hasCommits: hasCommits(rt.root),
+          projectChecks: rt.store.getSetting<string[]>("projectChecks") ?? [],
           fallbackStatus: { cto: fallbackStatus(rt, "cto", settings.fallback.cto), workers: fallbackStatus(rt, "workers", settings.fallback.workers) },
         };
       },
@@ -356,6 +359,12 @@ export class ClientApi {
         rt.scheduler.wake("reassign");
         return { task: rt.store.getTask(t.id) };
       },
+      "tasks.requestChange": async (p) => {
+        const rt = await this.rt(p);
+        const file = optStr(p, "file");
+        const hunk = optStr(p, "hunk");
+        return { task: await requestChange(rt, { taskId: reqStr(p, "taskId", 200), ...(file !== undefined ? { file } : {}), ...(hunk !== undefined ? { hunk } : {}), note: reqStr(p, "note", NOTE_MAX) }) };
+      },
       "tasks.outcome": async (p) => {
         const rt = await this.rt(p);
         rt.store.recordTaskOutcome(reqStr(p, "taskId", 200), typeof p["fixMinutes"] === "number" ? { fixMinutes: p["fixMinutes"] } : {});
@@ -374,6 +383,7 @@ export class ClientApi {
       "control.cancelTask": async (p) => ({ task: await (await this.rt(p)).cancelTask(reqStr(p, "taskId", 200)) }),
       "control.terminateTeam": async (p) => (await this.rt(p)).terminateTeam(),
 
+      "gui.settings": () => ({ editorSshHost: readGuiConfig().editorSshHost }),
       "gui.start": (p) => {
         const port = p["port"];
         return d.startGui(port === undefined || port === null ? undefined : validateGuiPort(port));

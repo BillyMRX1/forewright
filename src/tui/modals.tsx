@@ -10,6 +10,7 @@ import { helpLines } from "./keys.js";
 import { markdownLines } from "./markdown.js";
 import { borderStyle, palette, statusGlyph, sym } from "./theme.js";
 import type { RequirementDoc } from "../core/store-types.js";
+import { STATIC_MOCKUP_LABEL } from "../runtime/protocol.js";
 import type { KickoffProposalState, KickoffState } from "../runtime/protocol.js";
 import { ClientError } from "./client.js";
 
@@ -108,8 +109,9 @@ export function kickoffMarker(d: KickoffDocRow): { text: string; color: string }
 /** The list of documents: one row each with its state and version. */
 export function kickoffListLines(state: KickoffState, sel: number, width: number): DLine[] {
   const lines: DLine[] = [];
-  const titleW = Math.min(30, Math.max(...state.docs.map((d) => [...d.title].length)));
-  state.docs.forEach((d, i) => {
+  const rows = [...state.docs, ...state.wireframes];
+  const titleW = Math.min(30, Math.max(...rows.map((d) => [...d.title].length)));
+  rows.forEach((d, i) => {
     const m = kickoffMarker(d);
     const version = d.version > 0 ? `v${d.version}` : "";
     const glyph = statusGlyph(d.status === "pending" ? "idle" : d.missing ? "blocked" : d.edited ? "needs_you" : "done");
@@ -118,6 +120,8 @@ export function kickoffListLines(state: KickoffState, sel: number, width: number
     else lines.push({ text, segs: [{ text: `  ${glyph} ${d.title.padEnd(titleW)}  ` }, { text: m.text, color: m.color }, { text: version ? `  ${version}` : "", dim: true }] });
   });
   lines.push({ text: "" });
+  const ui = kickoffUiLine(state);
+  if (ui) for (const l of wrapText(ui, width)) lines.push({ text: l, dim: true });
   if (state.pack?.status === "ready") {
     const a = state.approval;
     const words = state.approvedCurrent ? `Revision ${state.pack.revision} is approved.` : a ? `Revision ${state.pack.revision}. It changed since you approved revision ${a.revision}.` : `Revision ${state.pack.revision}. You have not approved the pack yet.`;
@@ -129,6 +133,16 @@ export function kickoffListLines(state: KickoffState, sel: number, width: number
   if (state.dir) for (const l of wrapText(`Files: ${abbreviatePath(state.dir, Math.max(20, width - 7))} (open them in your editor; nothing is in your repository)`, width)) lines.push({ text: l, dim: true });
   return lines;
 }
+
+/** The UI decision in words: "Has a UI: <reason>", "No UI documents: <reason>", or null before the CTO decided. */
+export function kickoffUiLine(state: Pick<KickoffState, "ui" | "uiReason">): string | null {
+  if (state.ui === "yes") return `Has a UI: ${state.uiReason ?? ""}. Wireframes and the design specification are a ${STATIC_MOCKUP_LABEL.toLowerCase()}.`;
+  if (state.ui === "no") return `No UI documents: ${state.uiReason ?? ""}`;
+  return null;
+}
+
+/** Wireframes and the design specification are marked wherever they are shown. */
+export const isStaticMockup = (key: string): boolean => key === "design-spec" || key.startsWith("wireframe:");
 
 /** What the open document shows when its proposed revision is on: why, the tasks it touches, and the changes. */
 export function proposalLines(p: KickoffProposalState, width: number): DLine[] {
@@ -166,7 +180,7 @@ export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onSco
   const [showProposal, setShowProposal] = useState(false);
   const [ask, setAsk] = useState<{ text: string; onYes: () => void } | null>(null);
   const pack = data?.pack ?? null;
-  const docs = data?.docs ?? [];
+  const docs = data ? [...data.docs, ...data.wireframes] : [];
   const scope = ask ? "confirm" : open !== null ? "kickoff.doc" : pack ? "kickoff" : "kickoff.empty";
   useEffect(() => onScope(scope), [scope, onScope]);
   const openDoc = open !== null ? docs.find((d) => d.key === open) : undefined;
@@ -311,7 +325,10 @@ export function KickoffViewer({ onClose, onScope }: { onClose: () => void; onSco
   else if (!data) body = <SafeText dimColor>Loading...</SafeText>;
   else if (openDoc) {
     const m = kickoffMarker(openDoc);
-    const head: DLine[] = [{ text: `${openDoc.title}  ${m.text}${openDoc.version > 0 ? `  v${openDoc.version}` : ""}`, bold: true }, { text: "" }];
+    const head: DLine[] = [{ text: `${openDoc.title}  ${m.text}${openDoc.version > 0 ? `  v${openDoc.version}` : ""}`, bold: true }];
+    if (isStaticMockup(openDoc.key)) head.push({ text: STATIC_MOCKUP_LABEL, color: palette.attention });
+    if (openDoc.key.startsWith("wireframe:")) for (const l of wrapText("The SVG source is below. Open Kickoff in the web app (forewright gui) to see the picture.", w)) head.push({ text: l, dim: true });
+    head.push({ text: "" });
     if (showProposal && proposal) body = <ScrollLines lines={[...head, ...proposalLines(proposal, w)]} height={Math.max(1, h - 1)} width={w} arrows resetKey={`${openDoc.key}:proposal`} />;
     else {
       if (openDoc.proposal) {

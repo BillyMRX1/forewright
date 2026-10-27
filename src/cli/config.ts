@@ -4,7 +4,7 @@ import {
   clearCaFile, clearProxy, maskProxyUrl, networkConfigPath, readNetworkConfig, setCaFile, setProxy, type NetworkConfig,
 } from "../core/network.js";
 import { forewrightHome } from "../core/paths.js";
-import { addGuiAllowHost, clearGuiAllowHosts, readGuiConfig, setGuiAutostart, setGuiPort, type GuiConfig } from "../core/gui-config.js";
+import { addGuiAllowHost, clearGuiAllowHosts, readGuiConfig, setGuiAutostart, setGuiEditorHost, setGuiPort, type GuiConfig } from "../core/gui-config.js";
 
 export const CONFIG_HELP = `forewright config: proxy and certificate settings for a company network, and GUI settings.
 
@@ -19,6 +19,8 @@ Usage:
   forewright config gui allow-host <name>   also answer to this host name, e.g. a Tailscale Serve name
   forewright config gui allow-host --clear  answer to 127.0.0.1 and localhost only
   forewright config gui autostart on|off    start the GUI whenever the service starts
+  forewright config gui editor-host <name>  SSH host name for "Open in editor" when the GUI runs on a remote server
+  forewright config gui editor-host --clear open files in an editor on the browser's own machine
 
 Variables already set in the environment (HTTPS_PROXY, NO_PROXY, NODE_EXTRA_CA_CERTS, ...) win over these settings.
 Check the result with: forewright doctor
@@ -38,6 +40,7 @@ export function describeGui(cfg: GuiConfig): string {
   const lines = [`GUI port: ${cfg.port}`];
   lines.push(`GUI extra host names: ${cfg.allowHosts.length > 0 ? cfg.allowHosts.join(", ") : "none (127.0.0.1 and localhost only)"}`);
   lines.push(`GUI starts with the service: ${cfg.autostart ? "on" : "off"}`);
+  lines.push(`GUI editor SSH host: ${cfg.editorSshHost ?? "none (open files in an editor on this machine)"}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -99,7 +102,12 @@ export function runConfig(args: string[], io: { out: (s: string) => void; err: (
       if (vals.length !== 1 || (vals[0] !== "on" && vals[0] !== "off")) return usage("forewright config gui autostart needs on or off.");
       return saved(setGuiAutostart(vals[0] === "on", home));
     }
-    return usage(key === undefined ? "forewright config gui needs a setting: port, allow-host or autostart." : `Unknown GUI setting "${key}".`);
+    if (key === "editor-host") {
+      if (vals.length === 1 && vals[0] === "--clear") return saved(setGuiEditorHost(null, home));
+      if (vals.length !== 1 || (vals[0] as string).startsWith("--")) return usage("forewright config gui editor-host needs one host name, or --clear.");
+      return saved(setGuiEditorHost(vals[0] as string, home));
+    }
+    return usage(key === undefined ? "forewright config gui needs a setting: port, allow-host, autostart or editor-host." : `Unknown GUI setting "${key}".`);
   }
   return usage(`Unknown config setting "${what}".`);
 }

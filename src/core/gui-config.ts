@@ -11,6 +11,8 @@ export interface GuiConfig {
   /** Host names accepted besides 127.0.0.1, localhost and ::1. Lowercase. */
   allowHosts: string[];
   autostart: boolean;
+  /** The SSH host name VS Code uses to reach this machine ("Open in editor" from a browser elsewhere), or null for a local editor. */
+  editorSshHost: string | null;
 }
 
 /** A port for the bridge: a whole number from 1024 to 65535 (lower ports need administrator rights). */
@@ -38,7 +40,7 @@ export function validateAllowHost(value: string): string {
 export function readGuiConfig(home: string = forewrightHome()): GuiConfig {
   const file = networkConfigPath(home);
   const raw = readConfigFile(home)["gui"];
-  const cfg: GuiConfig = { port: GUI_DEFAULT_PORT, allowHosts: [], autostart: false };
+  const cfg: GuiConfig = { port: GUI_DEFAULT_PORT, allowHosts: [], autostart: false, editorSshHost: null };
   if (raw === undefined) return cfg;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new ValidationError(`"gui" in ${file} must be an object.`, { file });
   const g = raw as Record<string, unknown>;
@@ -52,6 +54,10 @@ export function readGuiConfig(home: string = forewrightHome()): GuiConfig {
       if (typeof g["autostart"] !== "boolean") throw new ValidationError(`"gui.autostart" must be true or false.`);
       cfg.autostart = g["autostart"];
     }
+    if (g["editorSshHost"] !== undefined) {
+      if (typeof g["editorSshHost"] !== "string") throw new ValidationError(`"gui.editorSshHost" must be a host name.`);
+      cfg.editorSshHost = validateAllowHost(g["editorSshHost"]);
+    }
   } catch (err) {
     if (err instanceof ValidationError) throw new ValidationError(`${err.message} (in ${file})`, { file });
     throw err;
@@ -64,6 +70,7 @@ function write(cfg: GuiConfig, home: string): GuiConfig {
   if (cfg.port !== GUI_DEFAULT_PORT) section["port"] = cfg.port;
   if (cfg.allowHosts.length > 0) section["allowHosts"] = cfg.allowHosts;
   if (cfg.autostart) section["autostart"] = true;
+  if (cfg.editorSshHost !== null) section["editorSshHost"] = cfg.editorSshHost;
   writeConfigSection("gui", Object.keys(section).length > 0 ? section : undefined, home);
   return cfg;
 }
@@ -84,4 +91,9 @@ export function clearGuiAllowHosts(home: string = forewrightHome()): GuiConfig {
 
 export function setGuiAutostart(on: boolean, home: string = forewrightHome()): GuiConfig {
   return write({ ...readGuiConfig(home), autostart: on }, home);
+}
+
+/** The SSH host name for "Open in editor" links; null (--clear) opens the file in an editor on the same machine as the browser. */
+export function setGuiEditorHost(name: string | null, home: string = forewrightHome()): GuiConfig {
+  return write({ ...readGuiConfig(home), editorSshHost: name === null ? null : validateAllowHost(name) }, home);
 }
