@@ -1,7 +1,7 @@
 // Pure logic of the first-run setup wizard: what each tool row says, what is recommended, what the
 // choices turn into. No React and no network, so every rule here is covered by plain tests.
 
-import type { EngineId } from "../core/types.js";
+import { LOCAL_ENGINES, type EngineId } from "../core/types.js";
 import type { Settings } from "../core/store-types.js";
 import type { ProviderStatus } from "../runtime/protocol.js";
 import { engineRoleProblem } from "../runtime/engine-roles.js";
@@ -17,6 +17,7 @@ export const ENGINE_LABEL: Record<EngineId, string> = {
   claude: "Claude Code",
   codex: "Codex",
   copilot: "Copilot",
+  hearthwork: "Hearthwork",
   antigravity: "Antigravity",
   opencode: "OpenCode",
   fake: "Test double",
@@ -63,7 +64,8 @@ function signInWords(p: ProviderStatus, state: ToolState): string {
 
 /** One row per real engine (test doubles are left out), in the recommended order. */
 export function toolRows(providers: ProviderStatus[]): ToolRow[] {
-  const real = providers.filter((p) => !p.health.isTestDouble && p.health.engine !== "fake");
+  // Local model engines (Hearthwork) are never offered here: setup picks defaults, and those are opted into in Settings.
+  const real = providers.filter((p) => !p.health.isTestDouble && p.health.engine !== "fake" && !LOCAL_ENGINES.includes(p.health.engine));
   const rank = (e: EngineId) => {
     const i = RECOMMENDED_ORDER.indexOf(e);
     return i < 0 ? RECOMMENDED_ORDER.length : i;

@@ -14,9 +14,9 @@ test("fresh migrate is idempotent and creates the expected tables", () => {
   migrate(db);
   migrate(db);
   assert.deepEqual(versions(db), MIGRATIONS.map((m) => m.version));
-  assert.equal(versions(db).at(-1), 8, "the kickoff UI migration is the latest");
+  assert.equal(versions(db).at(-1), 11, "the route decisions migration is the latest");
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name);
-  for (const t of ["project", "requirement_doc", "requirement", "adr", "agent", "task", "task_dependency", "task_requirement", "run", "message", "message_delivery", "decision", "artifact", "verification", "event", "action_receipt", "setting", "draft", "checkpoint", "agent_token", "kickoff_pack", "kickoff_doc", "kickoff_approval", "kickoff_proposal"]) {
+  for (const t of ["project", "requirement_doc", "requirement", "adr", "agent", "task", "task_dependency", "task_requirement", "run", "message", "message_delivery", "decision", "artifact", "verification", "event", "action_receipt", "setting", "draft", "checkpoint", "agent_token", "kickoff_pack", "kickoff_doc", "kickoff_approval", "kickoff_proposal", "budget_hold", "route_decision"]) {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }
   assert.equal((db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode, "wal");

@@ -138,3 +138,80 @@ export function linkKind(link: string, target: string): "symlink" | "hardlink" {
   if (!st.isFile() || st.ino !== real.ino || st.dev !== real.dev) throw new Error(`${link} is neither a symlink nor a hard link of ${target}`);
   return "hardlink";
 }
+
+// ---------------------------------------------------------------- fake Hearthwork
+
+export type FakeHearthworkMode = "ok" | "nochange" | "error" | "offline" | "malformed" | "sleep" | "children" | "hw-timeout" | "shared";
+
+export interface FakeHearthwork {
+  dir: string;
+  bin: string;
+  /** argv of the last `task` call, one per line. */
+  argvFile: string;
+  envFile: string;
+  stdinFile: string;
+  /** The working directory the fake was started in. */
+  cwdFile: string;
+  /** pid of the detached grandchild started in "children" mode. */
+  childPidFile: string;
+}
+
+/**
+ * A fake `hearthwork` CLI with the shapes of Hearthwork 0.11.0: `--version`, `status --json` (`status` null means
+ * no host: {"host": null} and exit 1) and `task --json ... -`, which reads the task from stdin and prints one
+ * indented JSON report. "ok" writes `file` into --cwd (and commits it when `commit` is set); "children" starts a
+ * grandchild in a new session, as Hearthwork starts its agent, then waits.
+ */
+export function fakeHearthwork(opts: { mode?: FakeHearthworkMode; status?: Record<string, unknown> | null; model?: string; file?: string; commit?: boolean } = {}): FakeHearthwork {
+  const dir = tmpDir("forewright-hearthwork-");
+  const f = { argvFile: path.join(dir, "task.argv"), envFile: path.join(dir, "task.env"), stdinFile: path.join(dir, "task.stdin"), cwdFile: path.join(dir, "task.cwd"), childPidFile: path.join(dir, "child.pid") };
+  const status = opts.status === undefined ? { model: opts.model ?? "qwen-test", context: 65536, slots: 2, active: 0, queued: 0, ready: true, state: "ready", settings: { server: "/data/bin/cuda-b5000/llama-server" } } : opts.status;
+  const body = `const fs = require("fs");
+const path = require("path");
+const cp = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("hearthwork 0.11.0  (data: /tmp/hw)"); return; }
+if (args[0] === "status") {
+  const s = ${JSON.stringify(status)};
+  console.log(JSON.stringify(s === null ? { host: null } : s, null, 2));
+  process.exitCode = s === null ? 1 : 0;
+  return;
+}
+fs.writeFileSync(${JSON.stringify(f.argvFile)}, args.map((a) => a + "\\n").join(""));
+fs.writeFileSync(${JSON.stringify(f.envFile)}, Object.entries(process.env).map(([k, v]) => k + "=" + v).join("\\n") + "\\n");
+fs.writeFileSync(${JSON.stringify(f.cwdFile)}, process.cwd());
+fs.writeFileSync(${JSON.stringify(f.stdinFile)}, fs.readFileSync(0, "utf8"));
+const cwd = args[args.indexOf("--cwd") + 1];
+const agent = args[args.indexOf("--agent") + 1];
+const mode = ${JSON.stringify(opts.mode ?? "ok")};
+const report = (over) => ({ agent, model: ${JSON.stringify(opts.model ?? "qwen-test")}, host: "local", cwd, duration_seconds: 1.5, status: "ok", exit_code: 0, error: null, created: [], modified: [], deleted: [], files_capped: false, message: "", ...over });
+const print = (r, code) => { process.stdout.write(JSON.stringify(r, null, 2) + "\\n"); process.exitCode = code; };
+process.stderr.write("hearthwork task: " + agent + " with qwen-test (local) in " + cwd + "\\n");
+if (mode === "ok" || mode === "shared") {
+  const file = ${JSON.stringify(opts.file ?? "hello.txt")};
+  fs.writeFileSync(path.join(cwd, file), "hello\\n");
+  if (${opts.commit === true}) {
+    cp.execFileSync("git", ["add", "-A"], { cwd });
+    cp.execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "Add " + file], { cwd });
+  }
+  print(report({ created: [{ path: file, size: 6 }], message: "Wrote " + file + " and checked it exists.", ...(mode === "shared" ? { sharedFolder: true } : {}) }), 0);
+} else if (mode === "nochange") {
+  print(report({ message: "Nothing needed changing." }), 0);
+} else if (mode === "error") {
+  print(report({ status: "error", exit_code: 1, error: "Codex exited with 1: the model refused the request" }), 1);
+} else if (mode === "hw-timeout") {
+  print(report({ status: "timeout", exit_code: -9, error: "timed out after 5 s; the agent was killed" }), 124);
+} else if (mode === "offline") {
+  process.stderr.write("No model is running and there are no models yet. Download one first: hearthwork model <link>.\\n");
+  process.exitCode = 1;
+} else if (mode === "malformed") {
+  process.stdout.write("this is not a report\\n");
+} else if (mode === "sleep") {
+  setTimeout(() => {}, 30000);
+} else if (mode === "children") {
+  const child = cp.spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: true, stdio: "ignore" });
+  fs.writeFileSync(${JSON.stringify(f.childPidFile)}, String(child.pid));
+  setTimeout(() => {}, 30000);
+}`;
+  return { dir, bin: writeNodeBin(dir, "hearthwork", body), ...f };
+}

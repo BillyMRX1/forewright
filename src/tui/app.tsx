@@ -880,7 +880,7 @@ export function App(props: AppProps) {
   return (
     <Ctx.Provider value={ctx}>
       <Box flexDirection="column" width={cols} height={rows}>
-        <TopBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} planOnly={runtime?.planOnly === true} title={titleName} menuHint={!showSide} need={needs.length} />
+        <TopBar width={cols} project={props.projectName} branch={branch} conn={conn} paused={paused} planOnly={runtime?.planOnly === true} budgetHeld={(runtime?.budgetHolds.length ?? 0) > 0} title={titleName} menuHint={!showSide} need={needs.length} />
         <Rule width={cols} />
         <Box height={bodyHeight} width={cols} flexShrink={0}>
           {showSide || sidebarOnly ? <Sidebar entries={entries} selectedKey={selectedKey} focused={focus === "sidebar" && !overlay} width={sideW} height={bodyHeight} attention={attention} /> : null}

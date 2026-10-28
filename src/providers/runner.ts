@@ -1,5 +1,5 @@
 import type { NormalizedEvent, RunHandle, RunOutcome, RunRequest, OwnedProcess } from "../core/types.js";
-import { LineSplitter, spawnOwned, terminateGroup, type StartTimeRead } from "./process.js";
+import { defaultTreeBackend, LineSplitter, spawnOwned, terminateGroup, type StartTimeRead, type TreeBackend } from "./process.js";
 import { TerminationError } from "./errors.js";
 import { redact, safeRaw, truncate } from "./redact.js";
 import { CONTEXT_OVERFLOW_ERROR, looksLikeContextOverflow } from "./overflow.js";
@@ -51,6 +51,8 @@ export interface RunPlan {
   graceMs?: number;
   /** Test seam: replaces the OS start-time reader used to identify the child. */
   readStartTime?: (pid: number) => Promise<StartTimeRead>;
+  /** How the tree is observed and ended; the platform default (POSIX group, Windows taskkill /T) when left out. */
+  treeBackend?: TreeBackend;
 }
 
 export function emptyOutcome(req: Pick<RunRequest, "runId" | "generation">): RunOutcome {
@@ -71,6 +73,7 @@ export function emptyOutcome(req: Pick<RunRequest, "runId" | "generation">): Run
 
 export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: RunPlan): RunHandle {
   const grace = plan.graceMs ?? 5000;
+  const backend = plan.treeBackend ?? defaultTreeBackend();
   let cancelled = false;
   let cancelReason: string | null = null;
   let timedOut = false;
@@ -89,7 +92,7 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
     async cancel(reason, graceMs = grace) {
       cancelled = true;
       cancelReason ??= reason;
-      if (owned) await terminateGroup(owned, graceMs);
+      if (owned) await terminateGroup(owned, graceMs, backend);
     },
     done: undefined as unknown as Promise<RunOutcome>,
   };
@@ -112,7 +115,7 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
     owned = spawned.owned;
     handle.process = spawned.owned;
     markSpawned(spawned.owned);
-    if (cancelled) await terminateGroup(spawned.owned, grace);
+    if (cancelled) await terminateGroup(spawned.owned, grace, backend);
 
     const out = new LineSplitter();
     const err = new LineSplitter();
@@ -127,7 +130,7 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
 
     const timer = setTimeout(() => {
       timedOut = true;
-      void terminateGroup(spawned.owned, grace).catch(() => {
+      void terminateGroup(spawned.owned, grace, backend).catch(() => {
         // surfaced below: the leftover-group check after exit reports a survivor
       });
     }, plan.timeoutMs);
@@ -139,7 +142,7 @@ export function runPlan(req: Pick<RunRequest, "runId" | "generation">, plan: Run
 
     let leftoverProblem: string | null = null;
     try {
-      await terminateGroup(spawned.owned, 500); // reap background grandchildren
+      await terminateGroup(spawned.owned, 500, backend); // reap background grandchildren
     } catch (e) {
       if (e instanceof TerminationError) leftoverProblem = e.message;
       else throw e;

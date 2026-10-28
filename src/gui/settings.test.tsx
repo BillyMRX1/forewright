@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
+import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
 import type { Settings } from "../core/store-types.js";
 import type { ProviderCapabilities, ProviderHealth } from "../core/types.js";
 import type { Result } from "../runtime/protocol.js";
@@ -36,7 +36,7 @@ const providers = [provider("claude"), provider("codex"), provider("antigravity"
 
 function data(over: Partial<Result<"state.settings">> = {}, settings: Partial<Settings> = {}): Result<"state.settings"> {
   return {
-    settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: { cto: [], workers: [] }, workers: { engines: [] }, setup: { completedAt: null, skippedAt: null }, planOnly: false, ...settings },
+    settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: { cto: [], workers: [] }, workers: { engines: [] }, setup: { completedAt: null, skippedAt: null }, planOnly: false, budgets: { project: {}, agents: {} }, routing: { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } }, ...settings },
     providers,
     ctoEngine: "claude",
     ctoModel: null,
@@ -60,7 +60,7 @@ const actions: SettingsActions = {
 };
 const render = (d = data(), errors: Record<string, string | undefined> = {}) => renderToStaticMarkup(<SettingsView data={d} errors={errors} actions={actions} />);
 
-const keysIn = (html: string): string[] => [...html.matchAll(/data-setting-key="([^"]+)"/g)].map((m) => m[1]!);
+const keysIn = (html: string): string[] => [...html.matchAll(/data-setting-key="([^"]+)"/g)].map((m) => m[1]!).filter((k) => !k.startsWith("budgets.") && !k.startsWith("routing."));
 
 test("the web view offers exactly the setting keys of the terminal view, plus the web-only extras", () => {
   const terminal = SETTING_ITEMS.map((x) => settingKey(x.item));
@@ -246,4 +246,29 @@ test("the usage limit and local-execution notices are shown", () => {
 
 test("no UI text uses an em or en dash", () => {
   assert.doesNotMatch(render(data({ hasCommits: false })), /[–—]/);
+});
+
+test("the Budgets section has the project's four limits and each agent's, shows saved values and says what the limits mean", () => {
+  const d = data({ agents: [{ id: "a1", name: "Wren" }] }, { budgets: { project: { dailyTokens: 5000 }, agents: { a1: { weeklyPremium: 20 } } } });
+  const html = render(d);
+  assert.match(html, /Project: tokens per day/);
+  assert.match(html, /Wren: premium requests per week/);
+  assert.equal([...html.matchAll(/data-setting-key="budgets\./g)].length, 8, "four fields for the project, four for Wren");
+  assert.match(html, /aria-label="Project: tokens per day"[^>]*value="5000"/);
+  assert.match(html, /aria-label="Wren: premium requests per week"[^>]*value="20"/);
+  assert.match(html, /aria-label="Wren: tokens per day"[^>]*placeholder="no limit"/);
+  assert.match(html, /cached input does not count/);
+  assert.match(html, /A hold is not a pause\./);
+});
+
+test("the Routing section is off by default, shows every routing field, the pins, and what routing does", () => {
+  const html = render();
+  assert.ok(html.indexOf('id="set-g-Budgets"') < html.indexOf('id="set-g-Routing"'), "Routing comes after Budgets, as in the terminal");
+  for (const key of ["routing.mode", "routing.localFirst", "routing.explore", "routing.localRetries", "routing.pin.project"]) assert.ok(html.includes(`data-setting-key="${key}"`), key);
+  assert.match(html, /aria-checked="true" class="set-seg-opt set-seg-on">Off</);
+  assert.match(html, /Only your worker engines and the agent&#x27;s own engine are used, never one that bills an API key/);
+  const pinned = render(data({}, { routing: { mode: "auto", localFirst: true, explore: 5, localRetries: 3, pins: { project: { engine: "hearthwork" }, roles: { frontend: { engine: "codex", model: "gpt-5" } }, tasks: {} } } }));
+  assert.match(pinned, /aria-checked="true" class="set-seg-opt set-seg-on">Auto</);
+  assert.match(pinned, /aria-label="Project pin: engine or engine\/model \(empty for none\)"[^>]*value="hearthwork"/);
+  assert.match(pinned, /Role frontend: codex\/gpt-5/);
 });

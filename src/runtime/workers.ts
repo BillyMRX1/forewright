@@ -9,6 +9,7 @@ import type { Agent, Message, Run, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { describeCheck, runCheck } from "./checks.js";
 import { BillingBlockedError, GitError, ProviderUnavailableError, WorkspaceError } from "./errors.js";
+import { blockingHold } from "./budgets.js";
 import { approvalGate } from "./gates.js";
 import { git, gitTry, isDirty, revParse } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
@@ -19,6 +20,7 @@ import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } fro
 import { memoryPromptSection } from "./memory.js";
 import { kickoffPromptSection } from "./kickoff.js";
 import { overflowedRun, sessionIsFull } from "./overflow.js";
+import { blockForRouting, noteWorkFailure, recordRoute, routeWork } from "./routing.js";
 
 export const taskPort = (shortId: string): number => 41000 + Number(shortId.slice(2)) * 10;
 
@@ -41,6 +43,9 @@ export function nameOfSender(rt: ProjectRuntime): (kind: Message["senderKind"], 
 export function sendBackForRepair(rt: ProjectRuntime, taskId: string, key: string, body: string, headline: string, opts: { countsAsRepair?: boolean } = {}): void {
   const { store } = rt;
   const t0 = store.getTask(taskId);
+  // Routing on: a failed attempt on a local engine counts toward its escalation (nothing happens with routing off).
+  // Billy's own change requests do not count: they are not a failure of the work.
+  if (opts.countsAsRepair ?? true) noteWorkFailure(rt, taskId, headline, () => (t0.worktreePath && rt.workspace.worktreeExists(t0.worktreePath) ? workspaceDiffStat(t0.worktreePath) : ""));
   if (t0.assigneeAgentId) {
     store.postMessage({ channel: "task", taskId, sender: { kind: "system" }, body, recipients: [t0.assigneeAgentId], dedupeKey: `feedback:${key}` });
   }
@@ -80,7 +85,13 @@ export function dispatchWork(rt: ProjectRuntime): void {
     if (t.blockReason !== null || t.assigneeAgentId === null) continue;
     const agent = store.getAgent(t.assigneeAgentId);
     if (agent.retiredAt || agent.lifecycle === "paused" || rt.agentBusy(agent.id)) continue;
-    const res = resolveFor(rt, agent, "work");
+    if (blockingHold(rt, agent.id)) continue; // a token budget is reached: held until the window resets or Billy lets it continue
+    // Routing off: exactly the usage-limit fallback. Routing on: the routed engine, a wait, or a plain block.
+    const res = routeWork(rt, t, agent);
+    if ("block" in res) {
+      blockForRouting(rt, t, res.block);
+      continue;
+    }
     if (res.wait) continue;
     if (!localEditsApproved(rt, t, agent)) continue;
     try {
@@ -160,6 +171,7 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
     noteEngineChoice(rt, primary, "work", res);
     const run = store.createRun({ taskId: task.id, agentId: agent.id, generation, leaseGeneration, kind: "work", engine: agent.engine, ...(agent.model ? { model: agent.model } : {}), cwd: ws.worktreePath });
     runId = run.id;
+    if (res.route) recordRoute(rt, task.id, run.id, "work", res.route);
 
     const doc = store.currentApprovedDoc();
     const requirements = (doc?.requirements ?? []).filter((r) => current.requirementKeys.includes(r.key));
@@ -296,6 +308,8 @@ async function handleWorkOutcome(rt: ProjectRuntime, a: ActiveRun, outcome: RunO
       return;
     }
     default:
+      // Routing on: a local run that failed, timed out or overflowed counts toward its escalation.
+      noteWorkFailure(rt, taskId, outcome.contextOverflow ? "the conversation overflowed the model's context window" : (outcome.error ?? `the run ended ${outcome.state}`), () => (task.worktreePath && rt.workspace.worktreeExists(task.worktreePath) ? workspaceDiffStat(task.worktreePath) : ""));
       if (outcome.contextOverflow) {
         handleWorkOverflow(rt, a, task);
         return;

@@ -6,9 +6,11 @@ import { truncate } from "../core/safety.js";
 import type { Agent, Run, Task } from "../core/store.js";
 import type { RunOutcome } from "../core/types.js";
 import { BillingBlockedError } from "./errors.js";
+import { blockingHold } from "./budgets.js";
 import { gitTry } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { memoryPromptSection } from "./memory.js";
+import { chooseReviewer, recordRoute, routingOn } from "./routing.js";
 import { buildReviewPrompt, readInstructionFiles, reviewSystemPrompt } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
@@ -54,6 +56,7 @@ function pickReviewer(rt: ProjectRuntime, t: Task): { agent: Agent; res: Runnabl
         a.id !== t.assigneeAgentId &&
         a.lifecycle !== "paused" &&
         !rt.agentBusy(a.id) &&
+        !blockingHold(rt, a.id) &&
         reviewFailures(rt, t, a.id) < MAX_REVIEW_FAILURES,
     );
   // Reviewers whose own engine is waiting for a usage limit may run on a fallback engine Billy listed.
@@ -64,6 +67,8 @@ function pickReviewer(rt: ProjectRuntime, t: Task): { agent: Agent; res: Runnabl
     if (!rt.deps.adapters.has(res.engine)) continue;
     usable.push({ agent: a, res });
   }
+  // Routing on: prefer a reviewer whose engine and inference model differ from the author's (never skips the review).
+  if (routingOn(rt)) return chooseReviewer(rt, t, usable);
   return usable.find((c) => c.agent.role === "review") ?? usable[0] ?? null;
 }
 
@@ -112,6 +117,7 @@ function startReview(rt: ProjectRuntime, t: Task, primary: Agent, res: RunnableR
     releaseLease(rt, reviewer.id, leaseGeneration);
     throw err;
   }
+  if (res.route) recordRoute(rt, t.id, run.id, "review", res.route);
   const raw = gitTry(wt, ["diff", `${INTEGRATION_BRANCH}...${candidate}`]).stdout;
   const truncated = raw.length > DIFF_CAP;
   const doc = store.currentApprovedDoc();

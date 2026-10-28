@@ -113,7 +113,7 @@ test("the shell: sidebar views, coming-soon panel, status badges, hint bar limit
   assert.match(renderToStaticMarkup(<ComingSoon title="Tasks" text="The board." />), /Coming soon\. Use the terminal UI for this for now\./);
   for (const hints of Object.values(HINTS)) assert.ok(hints.length <= 6);
   assert.equal((renderToStaticMarkup(<HintBar hints={["a", "b", "c", "d", "e", "f", "g"]} />).match(/<span/g) ?? []).length, 6);
-  const runtime = { paused: true, planOnly: true, activeRuns: [], maxConcurrentWorkers: 2, ctoBusy: true, connectedClients: 1 };
+  const runtime = { paused: true, planOnly: true, activeRuns: [], maxConcurrentWorkers: 2, ctoBusy: true, connectedClients: 1, budgetHolds: [] };
   const bar = renderToStaticMarkup(<TopBar project={{ projectId: "p", root: "/r", name: "demo" }} conn="reconnecting" runtime={runtime} theme="dark" onMenu={noop} onProject={noop} onTheme={noop} />);
   assert.match(bar, /PAUSED/);
   assert.match(bar, /PLAN ONLY/);
@@ -131,4 +131,13 @@ test("relative time", () => {
   assert.equal(relTime("2025-12-30T00:00:00.000Z", now), "3 d ago");
   assert.equal(relTime("2025-01-01T00:00:00.000Z", now), "2025-01-01");
   assert.equal(relTime("nonsense", now), "");
+});
+
+test("the top bar shows BUDGET HELD while a token budget holds new runs", () => {
+  const held = { scope: "agent" as const, scopeId: "a1", name: "Wren", window: "daily:2026-01-01", reason: "1100 of 1000 tokens today", since: "2026-01-01T00:00:00.000Z" };
+  const runtime = { paused: false, planOnly: false, activeRuns: [], maxConcurrentWorkers: 2, ctoBusy: false, connectedClients: 1, budgetHolds: [held] };
+  const render = (r: typeof runtime) => renderToStaticMarkup(<TopBar project={{ projectId: "p", root: "/r", name: "demo" }} conn="open" runtime={r} theme="dark" onMenu={noop} onProject={noop} onTheme={noop} />);
+  assert.match(render(runtime), /BUDGET HELD/);
+  assert.doesNotMatch(render(runtime), /PAUSED/, "a hold is not the pause flag");
+  assert.doesNotMatch(render({ ...runtime, budgetHolds: [] }), /BUDGET HELD/);
 });

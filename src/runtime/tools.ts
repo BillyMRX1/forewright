@@ -7,7 +7,7 @@ import { ForewrightError, NotFoundError, PolicyDeniedError, ValidationError } fr
 import { type ActionContext, type ActionName, type Actor, authorize } from "../core/policy.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import { type Agent, type DecisionKind, type DecisionOption, canonicalJson } from "../core/store.js";
-import { LIVE_ENGINES, type AgentRole, type EngineId, type PermissionProfile } from "../core/types.js";
+import { LIVE_ENGINES, LOCAL_ENGINES, type AgentRole, type EngineId, type PermissionProfile } from "../core/types.js";
 import { ToolError } from "./errors.js";
 import { gitTry, hasCommits, isGitRepo } from "./git.js";
 import { unusableReason } from "./health.js";
@@ -315,6 +315,10 @@ const TOOLS: ToolDef[] = [
       const allowed = rt.store.getSettings().workers.engines;
       if (allowed.length > 0 && !allowed.includes(engine)) {
         throw new ToolError(`Billy did not allow ${engine} for agents in this project. Allowed engines: ${allowed.join(", ")}. Hire on one of those.`);
+      }
+      // A local model worker is never part of "any engine": Billy names it in the project's worker engines first.
+      if (LOCAL_ENGINES.includes(engine) && !allowed.includes(engine)) {
+        throw new ToolError(`${engine} runs on Billy's local model and is used only when he allows it for this project (Settings, engines the CTO may hire on). Hire on another engine.`);
       }
       if (adapter.isTestDouble && !rt.deps.testMode) throw new ToolError("Test doubles cannot be hired outside test mode.");
       const roleProblem = engineRoleProblem(adapter, role);

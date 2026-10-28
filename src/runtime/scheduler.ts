@@ -9,6 +9,8 @@ import { NOT_GIT_MARKER } from "./project-runtime.js";
 import { dispatchReviews } from "./review.js";
 import { integrateNext } from "./integration.js";
 import { dispatchWork } from "./workers.js";
+import { evaluateBudgets } from "./budgets.js";
+import { liftRoutingBlocks, localWaitPending } from "./routing.js";
 import { nudgeKickoff } from "./kickoff.js";
 import { reconcileLeases } from "./recovery.js";
 import { hasCommits, isGitRepo } from "./git.js";
@@ -85,7 +87,11 @@ export class Scheduler {
     if (paused) return;
     store.refreshReadiness();
     rt.clearExpiredQuota();
+    evaluateBudgets(rt);
     this.gateEnvironment(reason);
+    liftRoutingBlocks(rt);
+    // A task waiting for a local engine: probe again on the slow watchdog beat, so a model that came up is seen.
+    if (reason.includes("watchdog") && localWaitPending(rt)) void rt.deps.health.refresh().then(() => this.wake("health"));
     integrateNext(rt);
     dispatchReviews(rt);
     // Plan-only mode holds back new work only; reviews and integration of finished work go on, and so does the CTO.

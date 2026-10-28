@@ -9,6 +9,7 @@ import { unusableReason } from "./health.js";
 import { buildCtoPrompt, buildEngineSwitchNotice, buildResetSummary, buildStateDigest, ctoSystemPrompt, formatMessage, readInstructionFiles } from "./prompts.js";
 import type { ProjectRuntime } from "./project-runtime.js";
 import { billingProblem } from "./billing.js";
+import { blockingHold } from "./budgets.js";
 import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { ProviderUnavailableError } from "./errors.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
@@ -23,7 +24,7 @@ const OVERFLOW_ACTION = "cto_context_overflow";
 // Routine progress notices (work finished with checks passing, review verdicts, a task integrated
 // that is not the last one) never start a CTO turn by themselves. They stay pending and are
 // delivered in the next turn that a real trigger starts. Everything else wakes the CTO.
-const ROUTINE_NOTICE_KEY = /^(notice:.+:(work_done|review)|integrated:.+)$/;
+const ROUTINE_NOTICE_KEY = /^(notice:.+:(work_done|review)|integrated:.+|budget-warn:.+)$/;
 
 function isRoutine(m: Message): boolean {
   return m.senderKind === "system" && m.dedupeKey !== null && ROUTINE_NOTICE_KEY.test(m.dedupeKey);
@@ -72,6 +73,7 @@ export class CtoDriver {
     const pending = store.pendingDeliveries(cto.id);
     if (pending.length === 0) return;
     if (pending.every(isRoutine)) return; // routine notices wait for a real trigger
+    if (blockingHold(rt, cto.id)) return; // a token budget is reached: messages wait, Billy was asked in the Inbox
     const now = rt.clock.now().getTime();
     if (this.overflowBlocked()) return; // a fresh session overflowed too: Billy decides first
     if (now < this.cooldownUntil && !this.resetPending) return;

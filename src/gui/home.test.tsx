@@ -115,3 +115,19 @@ test("a refresh error is shown above the cards", () => {
 test("no UI text uses em or en dashes", () => {
   assert.doesNotMatch(render(busy()), /[–—]/);
 });
+
+test("budgets show a bar per limit with the numbers, and a held scope says so", () => {
+  const line = (limitKey: "dailyTokens" | "weeklyTokens", used: number, limit: number) => ({ limitKey, window: limitKey === "dailyTokens" ? ("daily" as const) : ("weekly" as const), windowKey: "k", unit: "tokens" as const, used, limit, percent: Math.floor((used * 100) / limit) });
+  const out = render({
+    ...busy(),
+    budgets: [
+      { scope: "agent", id: "a1", name: "Wren", lines: [line("dailyTokens", 1200, 1000)], hold: { id: "h", window: "daily:2026-01-01", reason: "r", createdAt: "x" } },
+      { scope: "project", id: "p", name: "Todo", lines: [line("weeklyTokens", 400, 1000)], hold: null },
+    ],
+  });
+  assert.match(out, /1200 of 1000 tokens today \(held\)/);
+  assert.match(out, /400 of 1000 tokens this week</);
+  assert.match(out, /<progress max="100" value="100"[^>]*aria-label="Wren: 1200 of 1000 tokens today"/);
+  assert.match(out, /budget-row budget-over/);
+  assert.doesNotMatch(render({ ...busy(), budgets: [] }), /class="budgets"/);
+});

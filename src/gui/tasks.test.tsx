@@ -42,6 +42,7 @@ function run(over: Partial<Run> & Pick<Run, "id">): Run {
     usage: null,
     retryAfter: null,
     leaseGeneration: null,
+    execution: null,
     createdAt: "2026-01-01T00:40:00.000Z",
     ...over,
   };

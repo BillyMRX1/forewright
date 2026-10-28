@@ -20,8 +20,10 @@ import type {
   Settings,
   Task,
   Verification,
+  RouteDecision,
 } from "../core/store-types.js";
 import type { Store } from "../core/store.js";
+import type { BudgetScopeStatus } from "../core/budgets.js";
 import type { UsageSummary } from "../core/usage.js";
 import type { FallbackEntryStatus } from "./fallback.js";
 import type { Checkpoints, UndoResult } from "./checkpoints.js";
@@ -49,6 +51,8 @@ export interface RuntimeStatus {
   paused: boolean;
   /** Plan-only mode: no work run starts until Billy turns it off. */
   planOnly: boolean;
+  /** Token budgets that stop new runs right now (a hold is not the pause flag); empty when none does. */
+  budgetHolds: Array<{ scope: "project" | "agent"; scopeId: string; name: string; window: string; reason: string; since: string }>;
   activeRuns: Array<{ runId: string; kind: Run["kind"]; agentId: string; taskId: string | null; startedAt: string | null }>;
   maxConcurrentWorkers: number;
   ctoBusy: boolean;
@@ -148,11 +152,13 @@ export interface Methods {
   /** A wireframe's SVG, passed through the sanitizer on every read (Billy's edits included), for an <img> preview. */
   "kickoff.wireframe": { params: { projectId: string; name: string }; result: { name: string; svg: string } };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
-  "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[] } };
-  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; /** Commands run as checks after every task, besides the task's own. */ projectChecks?: string[]; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
+  "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[]; /** Engine routing choices for this task, oldest first; empty while routing is off. */ routes?: RouteDecision[] } };
+  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; /** Commands run as checks after every task, besides the task's own. */ projectChecks?: string[]; /** The agents that can have a token budget (not retired), for the Budgets fields. */ agents?: Array<{ id: string; name: string }>; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
   "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
   /** Tokens and estimated cost of this project's runs over the last `days` local days (default 7). */
   "state.usage": { params: { projectId: string; days?: number }; result: UsageSummary };
+  /** Spend against every budget limit that is set, per scope (the project and each agent with a limit). */
+  "state.budgets": { params: { projectId: string }; result: { scopes: BudgetScopeStatus[] } };
   "evidence.diff": { params: { projectId: string; taskId: string }; result: { base: string | null; head: string | null; diff: string; truncated: boolean } };
   /** The task branch's commits since it left the integration branch (newest first, at most 200) and the PRD revisions. */
   "tasks.checkpoints": { params: { projectId: string; taskId: string }; result: Checkpoints };

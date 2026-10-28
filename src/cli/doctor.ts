@@ -6,6 +6,7 @@ import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, s
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { isWindows } from "../core/platform.js";
+import { localStatusWords } from "../core/local-format.js";
 import type { FallbackEntry } from "../core/store-types.js";
 import { LIVE_ENGINES, type EngineId, type ProviderCapabilities, type ProviderHealth } from "../core/types.js";
 import { forewrightHome, socketPath, tokenPath } from "../core/paths.js";
@@ -162,9 +163,10 @@ const DISPLAY_NAME: Record<EngineId, string> = {
   antigravity: "Antigravity",
   opencode: "OpenCode",
   copilot: "Copilot",
+  hearthwork: "Hearthwork",
   fake: "Test double",
 };
-const BINARY: Record<EngineId, string> = { claude: "claude", codex: "codex", antigravity: "agy", opencode: "opencode", copilot: "copilot", fake: "fake" };
+const BINARY: Record<EngineId, string> = { claude: "claude", codex: "codex", antigravity: "agy", opencode: "opencode", copilot: "copilot", hearthwork: "hearthwork", fake: "fake" };
 
 /**
  * What to do on a Linux machine with no display (a server over SSH) when an engine is not signed in. Only what
@@ -371,6 +373,7 @@ export function renderDoctor(input: DoctorInput, opts: RenderOptions): string {
     const h = r.input.health;
     const rest = `${pad(h.version ?? "-", versionW + 2)}${pad(loginWords(h), loginW + 2)}${modelsWords(h)}`;
     out.push(line(mark(r.status), r.name, rest));
+    if (h.local) out.push(st.dim(`${" ".repeat(indent + gw + 1 + 2)}local: ${localStatusWords(h.local)}`));
     if (r.status === "fail") {
       const fixIndent = " ".repeat(indent + gw + 1);
       let fix: string;

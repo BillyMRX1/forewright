@@ -31,8 +31,24 @@ import {
   type Agent,
   type Artifact,
   type Authority,
+  BUDGET_AGENT_PREFIX,
+  BUDGET_LIMIT_KEYS,
+  BUDGET_PROJECT_KEY,
+  type BudgetHold,
+  type BudgetHoldStatus,
+  type BudgetLimits,
+  type BudgetScope,
+  type BudgetSettings,
   DEFAULT_AUTHORITY,
   DEFAULT_LIMITS,
+  DEFAULT_ROUTING,
+  ROUTING_EXPLORE_MAX,
+  ROUTING_PIN_PROJECT_KEY,
+  ROUTING_PIN_ROLE_PREFIX,
+  ROUTING_PIN_TASK_PREFIX,
+  type RouteDecision,
+  type RouteReason,
+  type RoutingSettings,
   type Decision,
   type DecisionKind,
   type FallbackEntry,
@@ -828,6 +844,7 @@ export class Store {
       usage: r["usage"] ? JSON.parse(r["usage"] as string) : null,
       retryAfter: (r["retry_after"] as string | null) ?? null,
       leaseGeneration: (r["lease_generation"] as number | null) ?? null,
+      execution: r["execution"] ? (JSON.parse(r["execution"] as string) as Run["execution"]) : null,
       createdAt: r["created_at"] as string,
     };
   }
@@ -959,7 +976,7 @@ export class Store {
     return tx(this.db, () => {
       this.run(
         `UPDATE run SET state = ?, ended_at = ?, exit_code = ?, signal = ?, error = ?, error_detail = ?, final_text = ?,
-           usage = ?, retry_after = ?, provider_session_id = COALESCE(?, provider_session_id) WHERE id = ?`,
+           usage = ?, retry_after = ?, provider_session_id = COALESCE(?, provider_session_id), execution = ?, model = COALESCE(?, model) WHERE id = ?`,
         outcome.state,
         this.nowIso(),
         outcome.exitCode,
@@ -970,6 +987,9 @@ export class Store {
         outcome.usage ? JSON.stringify(outcome.usage) : null,
         outcome.retryAfter,
         outcome.sessionId,
+        // The model a local engine actually served replaces the requested one (often none) on the run row.
+        outcome.execution ? JSON.stringify(outcome.execution) : null,
+        outcome.execution?.model ?? null,
         runId,
       );
       if (outcome.sessionId) this.recordRunSession(run, outcome.sessionId);
@@ -2160,7 +2180,24 @@ export class Store {
       skippedAt: (stored.get("setup.skippedAt") as string | undefined) ?? null,
     };
     const planOnly = stored.get("planOnly") === true;
-    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly };
+    const budgets: BudgetSettings = { project: (stored.get(BUDGET_PROJECT_KEY) as BudgetLimits | undefined) ?? {}, agents: {} };
+    for (const [k, v] of stored) {
+      if (!k.startsWith(BUDGET_AGENT_PREFIX) || Object.keys(v as object).length === 0) continue;
+      budgets.agents[k.slice(BUDGET_AGENT_PREFIX.length)] = v as BudgetLimits;
+    }
+    const routing: RoutingSettings = {
+      mode: stored.get("routing.mode") === "auto" ? "auto" : DEFAULT_ROUTING.mode,
+      localFirst: stored.get("routing.localFirst") === true,
+      explore: (stored.get("routing.explore") as number | undefined) ?? DEFAULT_ROUTING.explore,
+      localRetries: (stored.get("routing.localRetries") as number | undefined) ?? DEFAULT_ROUTING.localRetries,
+      pins: { project: (stored.get(ROUTING_PIN_PROJECT_KEY) as FallbackEntry | null | undefined) ?? null, roles: {}, tasks: {} },
+    };
+    for (const [k, v] of stored) {
+      if (v === null) continue; // a cleared pin
+      if (k.startsWith(ROUTING_PIN_ROLE_PREFIX)) routing.pins.roles[k.slice(ROUTING_PIN_ROLE_PREFIX.length) as AgentRole] = v as FallbackEntry;
+      else if (k.startsWith(ROUTING_PIN_TASK_PREFIX)) routing.pins.tasks[k.slice(ROUTING_PIN_TASK_PREFIX.length)] = v as FallbackEntry;
+    }
+    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly, budgets, routing };
   }
 
   /** Authority keys are written as `authority.<name>` and only a human may change them. */
@@ -2186,6 +2223,20 @@ export class Store {
       // Which engines the CTO may hire on spends Billy's usage, so only a human writes it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
       value = validateWorkerEngines(key, value);
+    } else if (key === BUDGET_PROJECT_KEY || key.startsWith(BUDGET_AGENT_PREFIX)) {
+      // Budgets decide when runs stop starting, so only a human writes them.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      value = validateBudgetLimits(key, value);
+      if (key.startsWith(BUDGET_AGENT_PREFIX)) {
+        const agentId = key.slice(BUDGET_AGENT_PREFIX.length);
+        if (this.one("SELECT id FROM agent WHERE id = ? AND project_id = ?", agentId, this.projectId) === undefined) {
+          throw new ValidationError(`${key}: there is no agent with that id in this project.`, { key, agentId });
+        }
+      }
+    } else if (key.startsWith("routing.")) {
+      // Routing decides which engines spend Billy's usage, so only a human writes it.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      value = this.validateRoutingSetting(key, value);
     } else if (key === "planOnly") {
       // Plan-only mode holds back every implementation run, so only Billy switches it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
@@ -2215,6 +2266,154 @@ export class Store {
         JSON.stringify(value),
       );
       this.appendEvent("setting.changed", "setting", key, actorLabel(by), { value });
+    });
+  }
+
+  private validateRoutingSetting(key: string, value: unknown): unknown {
+    if (key === "routing.mode") {
+      if (value !== "off" && value !== "auto") throw new ValidationError("routing.mode must be off or auto.", { key, value });
+      return value;
+    }
+    if (key === "routing.localFirst") {
+      if (typeof value !== "boolean") throw new ValidationError("routing.localFirst must be on or off.", { key, value });
+      return value;
+    }
+    if (key === "routing.explore") {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > ROUTING_EXPLORE_MAX) {
+        throw new ValidationError(`routing.explore must be a whole percent from 0 to ${ROUTING_EXPLORE_MAX}.`, { key, value });
+      }
+      return value;
+    }
+    if (key === "routing.localRetries") {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 10) throw new ValidationError("routing.localRetries must be a whole number from 1 to 10.", { key, value });
+      return value;
+    }
+    const isPin = key === ROUTING_PIN_PROJECT_KEY || key.startsWith(ROUTING_PIN_ROLE_PREFIX) || key.startsWith(ROUTING_PIN_TASK_PREFIX);
+    if (!isPin) throw new ValidationError(`Unknown setting "${key}".`, { key });
+    if (key.startsWith(ROUTING_PIN_ROLE_PREFIX)) {
+      const role = key.slice(ROUTING_PIN_ROLE_PREFIX.length);
+      if (!PIN_ROLES.includes(role as AgentRole)) throw new ValidationError(`${key}: "${role}" is not a worker role. Use one of ${PIN_ROLES.join(", ")}.`, { key, role });
+    }
+    if (key.startsWith(ROUTING_PIN_TASK_PREFIX)) {
+      const taskId = key.slice(ROUTING_PIN_TASK_PREFIX.length);
+      if (this.one("SELECT id FROM task WHERE id = ? AND project_id = ?", taskId, this.projectId) === undefined) {
+        throw new ValidationError(`${key}: there is no task with that id in this project.`, { key, taskId });
+      }
+    }
+    if (value === null || value === undefined) return null; // clears the pin
+    return validateFallbackList(key, [value])[0]!;
+  }
+
+  // ------------------------------------------------------------ route decisions
+
+  private routeFrom(r: Row): RouteDecision {
+    return {
+      id: r["id"] as string,
+      taskId: r["task_id"] as string,
+      runId: (r["run_id"] as string | null) ?? null,
+      kind: r["kind"] as RouteDecision["kind"],
+      engine: r["engine"] as EngineId,
+      model: (r["model"] as string | null) ?? null,
+      backend: r["backend"] as string,
+      reason: JSON.parse(r["reason_json"] as string) as RouteReason,
+      explored: r["explored"] === 1,
+      createdAt: r["created_at"] as string,
+    };
+  }
+
+  /** Persists one routing choice with its reason, and records route.chosen in the same transaction. */
+  recordRouteDecision(input: { taskId: string; runId: string | null; kind: RouteDecision["kind"]; engine: EngineId; model: string | null; backend: string; reason: RouteReason; explored: boolean }): RouteDecision {
+    return tx(this.db, () => {
+      const id = newId("rd");
+      this.run(
+        "INSERT INTO route_decision (id, project_id, task_id, run_id, kind, engine, model, backend, reason_json, explored, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        id, this.projectId, input.taskId, input.runId, input.kind, input.engine, input.model, input.backend, JSON.stringify(input.reason), input.explored ? 1 : 0, this.nowIso(),
+      );
+      this.appendEvent("route.chosen", "task", input.taskId, "system", {
+        runId: input.runId, kind: input.kind, engine: input.engine, model: input.model, backend: input.backend, how: input.reason.how, explored: input.explored, summary: input.reason.summary,
+        ...(input.reason.independent !== undefined ? { independent: input.reason.independent } : {}),
+      });
+      return this.routeFrom(this.one("SELECT * FROM route_decision WHERE id = ?", id)!);
+    });
+  }
+
+  listRouteDecisions(taskId?: string): RouteDecision[] {
+    const rows = taskId
+      ? this.all("SELECT * FROM route_decision WHERE project_id = ? AND task_id = ? ORDER BY created_at, rowid", this.projectId, taskId)
+      : this.all("SELECT * FROM route_decision WHERE project_id = ? ORDER BY created_at, rowid", this.projectId);
+    return rows.map((r) => this.routeFrom(r));
+  }
+
+  // ------------------------------------------------------------ budget holds
+
+  private holdFrom(r: Row): BudgetHold {
+    return {
+      id: r["id"] as string,
+      scope: r["scope"] as BudgetScope,
+      scopeId: r["scope_id"] as string,
+      window: r["period"] as string,
+      status: r["status"] as BudgetHoldStatus,
+      reason: r["reason"] as string,
+      decisionId: (r["decision_id"] as string | null) ?? null,
+      createdAt: r["created_at"] as string,
+      updatedAt: r["updated_at"] as string,
+    };
+  }
+
+  listBudgetHolds(opts: { status?: BudgetHoldStatus } = {}): BudgetHold[] {
+    const rows = opts.status
+      ? this.all("SELECT * FROM budget_hold WHERE project_id = ? AND status = ? ORDER BY created_at, id", this.projectId, opts.status)
+      : this.all("SELECT * FROM budget_hold WHERE project_id = ? ORDER BY created_at, id", this.projectId);
+    return rows.map((r) => this.holdFrom(r));
+  }
+
+  getBudgetHold(scope: BudgetScope, scopeId: string, window: string): BudgetHold | null {
+    const r = this.one("SELECT * FROM budget_hold WHERE project_id = ? AND scope = ? AND scope_id = ? AND period = ?", this.projectId, scope, scopeId, window);
+    return r ? this.holdFrom(r) : null;
+  }
+
+  getBudgetHoldByDecision(decisionId: string): BudgetHold | null {
+    const r = this.one("SELECT * FROM budget_hold WHERE project_id = ? AND decision_id = ?", this.projectId, decisionId);
+    return r ? this.holdFrom(r) : null;
+  }
+
+  /**
+   * A scope reached its limit in a window: records the hold and asks Billy once in the Inbox. A hold that ended early
+   * (the limit was raised, then the spend passed it again in the same window) is reopened with a new question.
+   */
+  openBudgetHold(input: { scope: BudgetScope; scopeId: string; window: string; reason: string; decision: Parameters<Store["requestDecision"]>[0] }): BudgetHold {
+    return tx(this.db, () => {
+      const existing = this.getBudgetHold(input.scope, input.scopeId, input.window);
+      if (existing && existing.status !== "ended") return existing;
+      const decision = this.requestDecision(input.decision);
+      const now = this.nowIso();
+      let id: string;
+      if (existing) {
+        id = existing.id;
+        this.run("UPDATE budget_hold SET status = 'held', reason = ?, decision_id = ?, updated_at = ? WHERE id = ?", input.reason, decision.id, now, id);
+      } else {
+        id = newId("bh");
+        this.run(
+          "INSERT INTO budget_hold (id, project_id, scope, scope_id, period, status, reason, decision_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          id, this.projectId, input.scope, input.scopeId, input.window, "held", input.reason, decision.id, now, now,
+        );
+      }
+      this.appendEvent("budget.held", "budget", id, "system", { scope: input.scope, scopeId: input.scopeId, window: input.window, reason: input.reason, decisionId: decision.id });
+      return this.holdFrom(this.one("SELECT * FROM budget_hold WHERE id = ?", id) as Row);
+    });
+  }
+
+  /** Moves a hold to `continued` (Billy's yes) or `ended` (window rolled over, limit raised); an open question of it is withdrawn. */
+  setBudgetHoldStatus(holdId: string, status: "continued" | "ended", why: string, by: Actor): BudgetHold {
+    return tx(this.db, () => {
+      const row = this.one("SELECT * FROM budget_hold WHERE id = ?", holdId);
+      if (!row) throw new NotFoundError("Budget hold", { holdId });
+      const h = this.holdFrom(row);
+      if (h.status !== "held") return h;
+      this.run("UPDATE budget_hold SET status = ?, updated_at = ? WHERE id = ?", status, this.nowIso(), holdId);
+      if (h.decisionId !== null && this.getDecision(h.decisionId).status === "open") this.withdrawDecision(h.decisionId, { kind: "system" });
+      this.appendEvent(status === "continued" ? "budget.continued" : "budget.ended", "budget", holdId, actorLabel(by), { scope: h.scope, scopeId: h.scopeId, window: h.window, why });
+      return this.holdFrom(this.one("SELECT * FROM budget_hold WHERE id = ?", holdId) as Row);
     });
   }
 
@@ -2543,6 +2742,23 @@ function kickoffReadyCount(docs: KickoffDoc[]): string {
   const wireframes = docs.filter((d) => d.key.startsWith("wireframe:")).length;
   const n = docs.length - wireframes;
   return `${n} documents${wireframes > 0 ? ` and ${wireframes} ${wireframes === 1 ? "wireframe" : "wireframes"}` : ""}`;
+}
+
+/** Roles a routing pin may name: every worker role (the CTO does not take work or review runs). */
+const PIN_ROLES: AgentRole[] = ["frontend", "backend", "mobile", "testing", "review", "docs", "integration", "generalist"];
+
+/** A budget is an object of positive whole numbers under the known limit names; an empty object means "no limits". */
+function validateBudgetLimits(key: string, value: unknown): BudgetLimits {
+  if (value === null || value === undefined) return {};
+  if (typeof value !== "object" || Array.isArray(value)) throw new ValidationError(`${key} must be an object of budget limits.`, { key });
+  const out: Record<string, number> = {};
+  for (const [name, n] of Object.entries(value as Record<string, unknown>)) {
+    if (n === undefined || n === null) continue; // a cleared field is simply absent
+    if (!(BUDGET_LIMIT_KEYS as readonly string[]).includes(name)) throw new ValidationError(`Unknown budget limit "${name}" in ${key}. Use ${BUDGET_LIMIT_KEYS.join(", ")}.`, { key, name });
+    if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 1) throw new ValidationError(`${name} in ${key} must be a positive whole number.`, { key, name, value: n });
+    out[name] = n;
+  }
+  return out as BudgetLimits;
 }
 
 /** The worker engine list: known live engines, each at most once. Empty is allowed and means "any usable engine". */

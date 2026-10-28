@@ -1,6 +1,12 @@
 // Usage wording. Pure, with no node imports, so the web app can bundle it.
 import type { UsageTotals } from "./usage.js";
 
+/** The local calendar day of an instant, as YYYY-MM-DD. */
+export function localDay(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 /** "12.3k", "1.2M" or "845": tokens in a few characters. */
 export function compactTokens(n: number): string {
   if (n < 1000) return String(n);

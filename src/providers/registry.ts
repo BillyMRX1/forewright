@@ -4,6 +4,7 @@ import { AntigravityAdapter } from "./antigravity.js";
 import { CodexAdapter } from "./codex.js";
 import { CopilotAdapter } from "./copilot.js";
 import { FakeAdapter } from "./fake.js";
+import { HearthworkAdapter } from "./hearthwork.js";
 import { OpencodeAdapter } from "./opencode.js";
 import { isWindows } from "../core/platform.js";
 import { probeTimeoutMs } from "./probe-util.js";
@@ -27,6 +28,8 @@ export function createAdapters(opts: CreateAdaptersOptions): Map<EngineId, Provi
   adapters.set("antigravity", new AntigravityAdapter({ forewrightHome: opts.forewrightHome, runsDir, allowApiBilling: billing }));
   adapters.set("opencode", new OpencodeAdapter({ forewrightHome: opts.forewrightHome, runsDir, allowApiBilling: billing }));
   adapters.set("copilot", new CopilotAdapter({ forewrightHome: opts.forewrightHome, runsDir, allowApiBilling: billing }));
+  // A local worker: never passed the API billing setting, it gets no keys whatever the project allows.
+  adapters.set("hearthwork", new HearthworkAdapter({ forewrightHome: opts.forewrightHome, runsDir }));
   if (opts.includeFake) adapters.set("fake", new FakeAdapter());
   return adapters;
 }

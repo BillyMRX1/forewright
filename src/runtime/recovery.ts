@@ -1,6 +1,7 @@
 // Restart reconciliation and lease upkeep.
 import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { isOwnedAlive, terminateGroup } from "../providers/process.js";
+import { hearthworkTreeBackend } from "../providers/hearthwork.js";
 import type { OwnedProcess } from "../core/types.js";
 import { LEASE_MS, RENEW_WHEN_LEFT_MS, type ProjectRuntime } from "./project-runtime.js";
 
@@ -36,7 +37,8 @@ export async function reconcileOnOpen(rt: ProjectRuntime): Promise<void> {
       reason = NO_IDENTITY_MESSAGE; // an older row without a start time: never signal on a bare pid
     } else if (proc && (await isOwnedAlive(proc))) {
       // We lost its pipes when the previous daemon died, so its result can never be read.
-      await terminateGroup(proc, 2000);
+      // Hearthwork starts its agent in a session of its own: that tree is traced too, or the agent would go on editing.
+      await terminateGroup(proc, 2000, run.engine === "hearthwork" ? hearthworkTreeBackend() : undefined);
       terminated = true;
     } else if (proc && pidAlive(proc.pid)) {
       reason = NOT_OURS_MESSAGE; // alive but its start time differs: never signal it

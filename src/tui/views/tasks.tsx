@@ -14,6 +14,14 @@ import type { TaskDetail } from "../../runtime/protocol.js";
 import { palette, sym, taskGlyph } from "../theme.js";
 import { engineLabel } from "../toasts.js";
 import { sanitizeTerminal } from "../../core/safety.js";
+import { routingOneLine } from "../../core/routes.js";
+import type { RouteDecision } from "../../core/store-types.js";
+
+/** One dim line with the latest routing choice for the task, when routing made one. */
+function routingLines(routes: RouteDecision[], width: number): DLine[] {
+  const line = routingOneLine(routes);
+  return line === null ? [] : [{ text: clip(sanitizeTerminal(line), width), dim: true }];
+}
 
 type Mode = "list" | "detail" | "pick" | "note";
 
@@ -359,7 +367,7 @@ export function TasksView() {
     let content: ReactNode;
     if (tab === 0) content = <ScrollLines lines={d ? overviewLines(d, w - 2) : [{ text: "Loading...", dim: true }]} height={contentH} width={w} arrows resetKey={`${selected.id}:0`} />;
     else if (tab === 1) content = <RunLogTab runId={d ? runIdFor(ctx.runtime, selected.id, null, d.runs) : null} height={contentH} width={w} />;
-    else if (tab === 2) content = <ScrollLines lines={evidence.data ? checkLines(evidence.data.verifications, evidence.data.artifacts, w - 2) : [{ text: "Loading...", dim: true }]} height={contentH} width={w} arrows resetKey={`${selected.id}:2`} />;
+    else if (tab === 2) content = <ScrollLines lines={evidence.data ? [...routingLines(evidence.data.routes ?? [], w - 2), ...checkLines(evidence.data.verifications, evidence.data.artifacts, w - 2)] : [{ text: "Loading...", dim: true }]} height={contentH} width={w} arrows resetKey={`${selected.id}:2`} />;
     else content = <ScrollLines lines={diff.loaded ? diffTabLines(diff.data) : [{ text: "Loading...", dim: true }]} height={contentH} width={w} arrows resetKey={`${selected.id}:3`} />;
     return (
       <Box flexDirection="column" height={h} width={w}>

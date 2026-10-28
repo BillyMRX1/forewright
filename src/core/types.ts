@@ -34,9 +34,11 @@ export type RunState = (typeof RUN_STATES)[number];
 
 // ---------------------------------------------------------------- agents
 
-export type EngineId = "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "fake";
+export type EngineId = "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "hearthwork" | "fake";
 /** Real engines an agent can be hired on (the fake adapter is for tests only). */
-export const LIVE_ENGINES = ["claude", "codex", "antigravity", "opencode", "copilot"] as const satisfies readonly EngineId[];
+export const LIVE_ENGINES = ["claude", "codex", "antigravity", "opencode", "copilot", "hearthwork"] as const satisfies readonly EngineId[];
+/** Engines that run on a model served by Billy's own hardware: no subscription, never a default, allowed per project only by name. */
+export const LOCAL_ENGINES: readonly EngineId[] = ["hearthwork"];
 export type AgentRole = "cto" | "frontend" | "backend" | "mobile" | "testing" | "review" | "docs" | "integration" | "generalist";
 export type AgentLifecycle = "idle" | "working" | "waiting" | "paused" | "retired";
 
@@ -80,6 +82,46 @@ export interface ProviderHealth {
   minVersion?: string;
   /** True when the CLI is older than minVersion (a warning: the engine may still work for some runs). */
   outdated?: boolean;
+  /** Local model engines only: what the model server reported at probe time. */
+  local?: LocalModelStatus;
+}
+
+/** A local model server's state as its probe saw it (Hearthwork: `hearthwork status --json`). */
+export interface LocalModelStatus {
+  /** The coding agent the engine drives (Hearthwork: codex or opencode), or null when none is installed. */
+  harness: string | null;
+  /** A model host answered the probe. */
+  running: boolean;
+  model: string | null;
+  /** Context window in tokens. */
+  context: number | null;
+  /** Requests the model serves at once. */
+  slots: number | null;
+  active: number | null;
+  queued: number | null;
+  /** The server's own word: ready, loading, switching, recovering, failed, ... */
+  state: string | null;
+  /** The inference runtime build (Hearthwork: the llama.cpp build folder), when known. */
+  runtime: string | null;
+}
+
+/**
+ * How a run actually executed, for engines that report it (a local model engine). The coding agent CLI
+ * (`harness`) is kept apart from the inference model behind it, so two CLIs on one model can be told apart.
+ */
+export interface RunExecution {
+  harness: string | null;
+  model: string | null;
+  /** Where the model ran: "local", or the name of the computer that shares it. */
+  host: string | null;
+  /** Inference runtime as of the engine's last probe; null when not known. */
+  runtime: string | null;
+  /** Time the coding agent itself ran. */
+  agentMs: number | null;
+  /** The engine's own time around the agent: checking or loading the model, starting its host. Wall time minus agentMs. */
+  waitMs: number | null;
+  /** Files the engine saw created, modified and deleted. */
+  files: { created: number; modified: number; deleted: number } | null;
 }
 
 export interface McpServerSpec {
@@ -162,6 +204,8 @@ export interface RunOutcome {
   retryAfter: string | null;
   /** The run failed because the conversation no longer fits the model's context window (state is "failed"). */
   contextOverflow?: boolean;
+  /** How the run executed (local model engines); stored on the run row. */
+  execution?: RunExecution;
 }
 
 export interface OwnedProcess {

@@ -1,5 +1,6 @@
 // Pure model of the Home screen: the needs-you rows, the worker rows, the event wording and the row budget. No React.
 
+import { budgetLineText, type BudgetScopeStatus } from "../core/budgets.js";
 import type { UsageSummary, UsageTotals } from "../core/usage.js";
 import { compactTokens, costText } from "../core/usage-format.js";
 import type { Decision, ForewrightEvent, RequirementDoc, Task } from "../core/store-types.js";
@@ -154,6 +155,30 @@ export function usageLines(s: UsageSummary): UsageLine[] {
     const today = s.todayByEngine.find((g) => g.key === week.key);
     return { engine: engineLabel(week.key), today: today ? usageCell(today) : "none", week: usageCell(week) };
   });
+}
+
+export interface BudgetRow {
+  /** Scope name ("Wren", or the project's name). */
+  who: string;
+  /** "[#######...]" */
+  bar: string;
+  /** "850 of 1000 tokens today" */
+  text: string;
+  percent: number;
+  held: boolean;
+}
+
+const BAR_CELLS = 10;
+
+/** One row per budget limit that is set, fullest first, so the scopes near or over their limit lead. */
+export function budgetRows(scopes: BudgetScopeStatus[]): BudgetRow[] {
+  const rows = scopes.flatMap((s) =>
+    s.lines.map((l) => {
+      const filled = Math.min(BAR_CELLS, Math.round((Math.min(l.percent, 100) * BAR_CELLS) / 100));
+      return { who: s.name, bar: `[${"#".repeat(filled)}${".".repeat(BAR_CELLS - filled)}]`, text: budgetLineText(l), percent: l.percent, held: s.hold !== null && l.used >= l.limit };
+    }),
+  );
+  return rows.sort((a, b) => b.percent - a.percent);
 }
 
 interface NameLookup {

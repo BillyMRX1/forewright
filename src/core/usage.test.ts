@@ -90,7 +90,8 @@ test("usage rows are read from the run table and totalled per agent, project, en
   const copilot = s.subscription.find((e) => e.engine === "copilot");
   assert.deepEqual([copilot?.reported, copilot?.premiumRequestsUsed], [true, 2]);
   assert.match(copilot?.note ?? "", /left is not reported/);
-  for (const e of s.subscription.filter((x) => x.engine !== "copilot")) assert.deepEqual([e.reported, e.note], [false, "not reported"]);
+  for (const e of s.subscription.filter((x) => x.engine !== "copilot" && x.engine !== "hearthwork")) assert.deepEqual([e.reported, e.note], [false, "not reported"]);
+  assert.match(s.subscription.find((e) => e.engine === "hearthwork")?.note ?? "", /local model: no subscription and nothing billed/);
 
   // a 1-day window is just today
   const one = summarizeUsage(rows, { now: NOW, days: 1, prices: DEFAULT_PRICES });

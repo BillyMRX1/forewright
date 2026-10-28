@@ -114,6 +114,7 @@ export function TopBar({
       {controls}
       {runtime?.paused ? <span className="chip chip-attention">PAUSED</span> : null}
       {runtime?.planOnly ? <span className="chip chip-attention">PLAN ONLY</span> : null}
+      {runtime && runtime.budgetHolds.length > 0 ? <span className="chip chip-attention" title={runtime.budgetHolds.map((h) => `${h.name}: ${h.reason}`).join("; ")}>BUDGET HELD</span> : null}
       {runtime?.ctoBusy ? (
         <span className="chip chip-accent" role="status">
           CTO is thinking

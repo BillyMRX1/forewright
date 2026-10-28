@@ -54,8 +54,8 @@ export interface HarnessOptions {
   clock?: Clock;
   home?: string;
   watchdogMs?: number;
-  /** More doubles registered under other engine ids (for example claude and codex) to test fallback. */
-  extraAdapters?: FakeAdapter[];
+  /** More adapters registered under other engine ids: doubles for claude and codex to test fallback, or a real adapter on a fake CLI. */
+  extraAdapters?: ProviderAdapter[];
   /** Engine of a new project's CTO (default "fake"). */
   defaultCtoEngine?: EngineId;
 }
@@ -297,6 +297,11 @@ export async function reapTrackedTrees(): Promise<string[]> {
   }
   trackedDaemons.clear();
   const backend = defaultTreeBackend();
+  // Closing a daemon stops its runs, but a stopped tree can still be on its way out: Windows ends trees
+  // asynchronously and keeps reporting the pid alive for a moment. Give every tree a short grace to exit by
+  // itself; only one still alive after that is a leak (a real leak never exits, so it is still caught).
+  const graceUntil = Date.now() + (process.platform === "win32" ? 5000 : 1000);
+  while (trackedTrees.some((t) => backend.alive(t.proc)) && Date.now() < graceUntil) await sleep(100);
   for (const t of trackedTrees.splice(0)) {
     if (!backend.alive(t.proc)) continue;
     let ended = "ended";

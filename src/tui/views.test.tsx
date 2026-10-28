@@ -903,6 +903,45 @@ describe("Kickoff pack", () => {
     assert.match(h.frame(), /Exported 8 files to docs\/kickoff/);
   });
 
+  it("Budgets: fields for the project and each agent, an empty field means no limit, and a number saves the whole limits object", async () => {
+    const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
+    for (let i = 0; i < 4; i++) await tab(h); // Budgets
+    const f = h.frame();
+    assert.match(f, /TOKEN BUDGETS/);
+    assert.match(f, /cached input does not count/);
+    assert.match(f, /▸ Project: tokens per day\s+no limit/);
+    assert.match(f, /Ada: tokens per day\s+no limit/, "each agent has its own fields");
+    await enter(h);
+    await h.send("5000");
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "budgets.project", value: { dailyTokens: 5000 } });
+    assert.match(h.frame(), /Project: tokens per day\s+5000/);
+    await enter(h);
+    for (let i = 0; i < 4; i++) await h.send("\x7f"); // erase it again
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "budgets.project", value: {} });
+  });
+
+  it("Routing: off by default, enter turns it on, and the project pin takes engine or engine/model", async () => {
+    const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
+    for (let i = 0; i < 5; i++) await tab(h); // Routing
+    const f = h.frame();
+    assert.match(f, /ENGINE ROUTING/);
+    assert.match(f, /▸ Engine routing \(off: every run uses its agent's own engine\)\s+off/);
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "routing.mode", value: "auto" });
+    for (let i = 0; i < 4; i++) await down(h);
+    assert.match(h.frame(), /▸ Project pin: engine or engine\/model \(empty for none\)\s+none/);
+    await enter(h);
+    await h.send("codex/gpt-5");
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "routing.pin.project", value: { engine: "codex", model: "gpt-5" } });
+  });
+
   it("Settings switches plan-only mode, and the top bar shows PLAN ONLY while it is on", async () => {
     const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
     await tab(h);
