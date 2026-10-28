@@ -7,12 +7,13 @@ import type { AgentRole, EngineId, ProviderAdapter } from "../core/types.js";
 import { engineRoleProblem } from "./engine-roles.js";
 import { unusableReason } from "./health.js";
 import type { ProjectRuntime } from "./project-runtime.js";
+import type { RouteRecord } from "./routing.js";
 
 /** What a run is for. Work and review runs share the `workers` list. */
 export type RunPurpose = "cto" | "work" | "review";
 
 export type Resolution =
-  | { wait: false; engine: EngineId; model: string | null; viaFallback: boolean; reason: string }
+  | { wait: false; engine: EngineId; model: string | null; viaFallback: boolean; reason: string; /** Set only by engine routing (routing on): the decision to store once the run exists. */ route?: RouteRecord }
   | { wait: true; until: string | null; reason: string };
 
 export interface ResolveEnv {

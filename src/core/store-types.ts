@@ -350,7 +350,66 @@ export interface BudgetHold {
   updatedAt: string;
 }
 
-export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean; budgets: BudgetSettings };
+/**
+ * Engine routing (issue #25). Off by default: with mode "off" every run uses its agent's engine (and the usage-limit
+ * fallback list) exactly as before. With "auto" a work run may move to another engine of the allowed worker engines,
+ * and a review prefers an engine and model that differ from the author's. Pins are FallbackEntry objects.
+ */
+export interface RoutingSettings {
+  mode: "off" | "auto";
+  /** A healthy local engine wins when its first-pass rate for the task type is not clearly worse. */
+  localFirst: boolean;
+  /** Percent of tasks (0 to 30) that try the second-best candidate, so the numbers stay current. */
+  explore: number;
+  /** Failed local attempts on one task before it is escalated to the CTO and moved to a cloud engine. */
+  localRetries: number;
+  pins: {
+    project: FallbackEntry | null;
+    roles: Partial<Record<AgentRole, FallbackEntry>>;
+    tasks: Record<string, FallbackEntry>;
+  };
+}
+
+/** Setting keys: routing.mode, routing.localFirst, routing.explore, routing.localRetries, routing.pin.project, routing.pin.role.<role>, routing.pin.task.<taskId>. */
+export const ROUTING_PIN_PROJECT_KEY = "routing.pin.project";
+export const ROUTING_PIN_ROLE_PREFIX = "routing.pin.role.";
+export const ROUTING_PIN_TASK_PREFIX = "routing.pin.task.";
+export const ROUTING_SCALAR_KEYS = ["routing.mode", "routing.localFirst", "routing.explore", "routing.localRetries"] as const;
+export const ROUTING_EXPLORE_MAX = 30;
+
+export const DEFAULT_ROUTING: RoutingSettings = { mode: "off", localFirst: false, explore: 10, localRetries: 2, pins: { project: null, roles: {}, tasks: {} } };
+
+/** One engine choice routing made for a run, with its reason (table route_decision). */
+export interface RouteDecision {
+  id: string;
+  taskId: string;
+  runId: string | null;
+  kind: "work" | "review";
+  engine: EngineId;
+  model: string | null;
+  /** "local" for a model on Billy's own hardware, "subscription" for a cloud engine's plan. */
+  backend: string;
+  reason: RouteReason;
+  explored: boolean;
+  createdAt: string;
+}
+
+/** Why a candidate was chosen. Every number comes from recorded rows; missing data is said in words. */
+export interface RouteReason {
+  /** One plain sentence: what was chosen and why. */
+  summary: string;
+  /** How the choice was made. */
+  how: "scored" | "pinned" | "local-first" | "explore" | "kept" | "fallback" | "only-choice" | "escalated" | "review";
+  /** The task type (the assignee's role). */
+  taskType: AgentRole;
+  /** Every candidate looked at, best first, with the factors that went into its score. */
+  candidates: Array<{ engine: EngineId; model: string | null; score: number | null; factors: string[]; excluded?: string }>;
+  /** Review runs: whether the reviewer differs from the author in engine and inference model, and why not when it does not. */
+  independent?: boolean;
+  independence?: string;
+}
+
+export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean; budgets: BudgetSettings; routing: RoutingSettings };
 
 export const DEFAULT_LIMITS: Limits = {
   maxConcurrentWorkers: 2,

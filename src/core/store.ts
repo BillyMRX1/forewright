@@ -41,6 +41,14 @@ import {
   type BudgetSettings,
   DEFAULT_AUTHORITY,
   DEFAULT_LIMITS,
+  DEFAULT_ROUTING,
+  ROUTING_EXPLORE_MAX,
+  ROUTING_PIN_PROJECT_KEY,
+  ROUTING_PIN_ROLE_PREFIX,
+  ROUTING_PIN_TASK_PREFIX,
+  type RouteDecision,
+  type RouteReason,
+  type RoutingSettings,
   type Decision,
   type DecisionKind,
   type FallbackEntry,
@@ -2177,7 +2185,19 @@ export class Store {
       if (!k.startsWith(BUDGET_AGENT_PREFIX) || Object.keys(v as object).length === 0) continue;
       budgets.agents[k.slice(BUDGET_AGENT_PREFIX.length)] = v as BudgetLimits;
     }
-    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly, budgets };
+    const routing: RoutingSettings = {
+      mode: stored.get("routing.mode") === "auto" ? "auto" : DEFAULT_ROUTING.mode,
+      localFirst: stored.get("routing.localFirst") === true,
+      explore: (stored.get("routing.explore") as number | undefined) ?? DEFAULT_ROUTING.explore,
+      localRetries: (stored.get("routing.localRetries") as number | undefined) ?? DEFAULT_ROUTING.localRetries,
+      pins: { project: (stored.get(ROUTING_PIN_PROJECT_KEY) as FallbackEntry | null | undefined) ?? null, roles: {}, tasks: {} },
+    };
+    for (const [k, v] of stored) {
+      if (v === null) continue; // a cleared pin
+      if (k.startsWith(ROUTING_PIN_ROLE_PREFIX)) routing.pins.roles[k.slice(ROUTING_PIN_ROLE_PREFIX.length) as AgentRole] = v as FallbackEntry;
+      else if (k.startsWith(ROUTING_PIN_TASK_PREFIX)) routing.pins.tasks[k.slice(ROUTING_PIN_TASK_PREFIX.length)] = v as FallbackEntry;
+    }
+    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly, budgets, routing };
   }
 
   /** Authority keys are written as `authority.<name>` and only a human may change them. */
@@ -2213,6 +2233,10 @@ export class Store {
           throw new ValidationError(`${key}: there is no agent with that id in this project.`, { key, agentId });
         }
       }
+    } else if (key.startsWith("routing.")) {
+      // Routing decides which engines spend Billy's usage, so only a human writes it.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      value = this.validateRoutingSetting(key, value);
     } else if (key === "planOnly") {
       // Plan-only mode holds back every implementation run, so only Billy switches it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
@@ -2243,6 +2267,81 @@ export class Store {
       );
       this.appendEvent("setting.changed", "setting", key, actorLabel(by), { value });
     });
+  }
+
+  private validateRoutingSetting(key: string, value: unknown): unknown {
+    if (key === "routing.mode") {
+      if (value !== "off" && value !== "auto") throw new ValidationError("routing.mode must be off or auto.", { key, value });
+      return value;
+    }
+    if (key === "routing.localFirst") {
+      if (typeof value !== "boolean") throw new ValidationError("routing.localFirst must be on or off.", { key, value });
+      return value;
+    }
+    if (key === "routing.explore") {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > ROUTING_EXPLORE_MAX) {
+        throw new ValidationError(`routing.explore must be a whole percent from 0 to ${ROUTING_EXPLORE_MAX}.`, { key, value });
+      }
+      return value;
+    }
+    if (key === "routing.localRetries") {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 10) throw new ValidationError("routing.localRetries must be a whole number from 1 to 10.", { key, value });
+      return value;
+    }
+    const isPin = key === ROUTING_PIN_PROJECT_KEY || key.startsWith(ROUTING_PIN_ROLE_PREFIX) || key.startsWith(ROUTING_PIN_TASK_PREFIX);
+    if (!isPin) throw new ValidationError(`Unknown setting "${key}".`, { key });
+    if (key.startsWith(ROUTING_PIN_ROLE_PREFIX)) {
+      const role = key.slice(ROUTING_PIN_ROLE_PREFIX.length);
+      if (!PIN_ROLES.includes(role as AgentRole)) throw new ValidationError(`${key}: "${role}" is not a worker role. Use one of ${PIN_ROLES.join(", ")}.`, { key, role });
+    }
+    if (key.startsWith(ROUTING_PIN_TASK_PREFIX)) {
+      const taskId = key.slice(ROUTING_PIN_TASK_PREFIX.length);
+      if (this.one("SELECT id FROM task WHERE id = ? AND project_id = ?", taskId, this.projectId) === undefined) {
+        throw new ValidationError(`${key}: there is no task with that id in this project.`, { key, taskId });
+      }
+    }
+    if (value === null || value === undefined) return null; // clears the pin
+    return validateFallbackList(key, [value])[0]!;
+  }
+
+  // ------------------------------------------------------------ route decisions
+
+  private routeFrom(r: Row): RouteDecision {
+    return {
+      id: r["id"] as string,
+      taskId: r["task_id"] as string,
+      runId: (r["run_id"] as string | null) ?? null,
+      kind: r["kind"] as RouteDecision["kind"],
+      engine: r["engine"] as EngineId,
+      model: (r["model"] as string | null) ?? null,
+      backend: r["backend"] as string,
+      reason: JSON.parse(r["reason_json"] as string) as RouteReason,
+      explored: r["explored"] === 1,
+      createdAt: r["created_at"] as string,
+    };
+  }
+
+  /** Persists one routing choice with its reason, and records route.chosen in the same transaction. */
+  recordRouteDecision(input: { taskId: string; runId: string | null; kind: RouteDecision["kind"]; engine: EngineId; model: string | null; backend: string; reason: RouteReason; explored: boolean }): RouteDecision {
+    return tx(this.db, () => {
+      const id = newId("rd");
+      this.run(
+        "INSERT INTO route_decision (id, project_id, task_id, run_id, kind, engine, model, backend, reason_json, explored, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        id, this.projectId, input.taskId, input.runId, input.kind, input.engine, input.model, input.backend, JSON.stringify(input.reason), input.explored ? 1 : 0, this.nowIso(),
+      );
+      this.appendEvent("route.chosen", "task", input.taskId, "system", {
+        runId: input.runId, kind: input.kind, engine: input.engine, model: input.model, backend: input.backend, how: input.reason.how, explored: input.explored, summary: input.reason.summary,
+        ...(input.reason.independent !== undefined ? { independent: input.reason.independent } : {}),
+      });
+      return this.routeFrom(this.one("SELECT * FROM route_decision WHERE id = ?", id)!);
+    });
+  }
+
+  listRouteDecisions(taskId?: string): RouteDecision[] {
+    const rows = taskId
+      ? this.all("SELECT * FROM route_decision WHERE project_id = ? AND task_id = ? ORDER BY created_at, rowid", this.projectId, taskId)
+      : this.all("SELECT * FROM route_decision WHERE project_id = ? ORDER BY created_at, rowid", this.projectId);
+    return rows.map((r) => this.routeFrom(r));
   }
 
   // ------------------------------------------------------------ budget holds
@@ -2644,6 +2743,9 @@ function kickoffReadyCount(docs: KickoffDoc[]): string {
   const n = docs.length - wireframes;
   return `${n} documents${wireframes > 0 ? ` and ${wireframes} ${wireframes === 1 ? "wireframe" : "wireframes"}` : ""}`;
 }
+
+/** Roles a routing pin may name: every worker role (the CTO does not take work or review runs). */
+const PIN_ROLES: AgentRole[] = ["frontend", "backend", "mobile", "testing", "review", "docs", "integration", "generalist"];
 
 /** A budget is an object of positive whole numbers under the known limit names; an empty object means "no limits". */
 function validateBudgetLimits(key: string, value: unknown): BudgetLimits {

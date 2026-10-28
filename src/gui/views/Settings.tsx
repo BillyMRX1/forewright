@@ -10,7 +10,7 @@ import type { EngineId } from "../../core/types.js";
 import { localStatusWords } from "../../core/local-format.js";
 import { engineRoleProblem } from "../../runtime/engine-roles.js";
 import type { ProviderStatus, Result } from "../../runtime/protocol.js";
-import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, LABELS, LOCAL_NOTICE, MODES, PLAN_ONLY_LABEL, REPOSITORY_HELP, SETTING_ITEMS, authorityControl, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, settingKey, withLimit } from "../../tui/settings-model.js";
+import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, LABELS, LOCAL_NOTICE, MODES, PLAN_ONLY_LABEL, REPOSITORY_HELP, SETTING_ITEMS, authorityControl, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, settingKey, withLimit, ROUTING_HELP, ROUTING_ITEMS, ROUTING_LABEL, otherPinLines, parsePinInput, pinWords, routingKey } from "../../tui/settings-model.js";
 import type { AuthorityName, FallbackList, Group, LimitName, Mode } from "../../tui/settings-model.js";
 import { engineLabel } from "../../tui/toasts.js";
 import { isAgentEvent, useLive, useProject } from "../live.js";
@@ -242,6 +242,30 @@ function BudgetField({ label, value, inputKey, onCommit }: { label: string; valu
   );
 }
 
+/** The project pin: "engine" or "engine/model", empty for none. Saved on Enter or when you leave the box. */
+function PinField({ label, value, onCommit }: { label: string; value: FallbackEntry | null; onCommit: (v: FallbackEntry | null) => Promise<boolean> }) {
+  const shown = value ? pinWords(value) : "";
+  const [text, setText] = useState(shown);
+  const [local, setLocal] = useState<string | undefined>(undefined);
+  useEffect(() => setText(shown), [shown]);
+  const commit = () => {
+    if (text.trim() === shown) return setLocal(undefined);
+    const r = parsePinInput(text);
+    if (r === null) {
+      setLocal("Enter an engine, or engine/model, or leave it empty for no pin.");
+      return setText(shown);
+    }
+    setLocal(undefined);
+    void onCommit(r.value).then((ok) => ok || setText(shown));
+  };
+  return (
+    <>
+      <input type="text" className="set-number" aria-label={label} placeholder="none" value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), commit())} />
+      <Err text={local} />
+    </>
+  );
+}
+
 function Row({ settingKey: key, label, help, children, error }: { settingKey: string; label: string; help?: string; children: ReactNode; error?: string | undefined }) {
   return (
     <div className="set-row" data-setting-key={key}>
@@ -380,6 +404,8 @@ export interface SettingsViewProps {
   errors: Record<string, string | undefined>;
   actions: SettingsActions;
 }
+
+const ROUTING_MODE_OPTIONS = [{ value: "off", label: "Off" }, { value: "auto", label: "Auto" }];
 
 const MODE_OPTIONS = MODES.map((m) => ({ value: m, label: m[0]!.toUpperCase() + m.slice(1) }));
 
@@ -541,6 +567,28 @@ export function SettingsView({ data, errors, actions }: SettingsViewProps) {
           </Row>
         );
       }), <p className="muted">{BUDGET_HELP}</p>)}
+      {section("Routing", (
+        <>
+          {ROUTING_ITEMS.map((it) => {
+            const key = routingKey(it);
+            const label = ROUTING_LABEL[it.name];
+            const r = settings.routing;
+            return (
+              <Row key={key} settingKey={key} label={label} error={errors[key]}>
+                {it.name === "mode" ? <Segmented label={label} value={r.mode} options={ROUTING_MODE_OPTIONS} onChange={(v) => void actions.save(key, v)} /> : null}
+                {it.name === "localFirst" ? <Switch label={label} on={r.localFirst} onChange={(v) => void actions.save(key, v)} /> : null}
+                {it.name === "explore" || it.name === "localRetries" ? <NumberField label={label} inputKey={key} value={r[it.name]} onCommit={(n) => actions.save(key, n)} /> : null}
+                {it.name === "pinProject" ? <PinField label={label} value={r.pins.project} onCommit={(v) => actions.save(key, v)} /> : null}
+              </Row>
+            );
+          })}
+          {otherPinLines(settings.routing.pins).map((l) => (
+            <p key={l} className="muted">
+              {l}
+            </p>
+          ))}
+        </>
+      ), <p className="muted">{ROUTING_HELP}</p>)}
       {pendingCommit ? (
         <ConfirmDialog
           title="Create initial commit"

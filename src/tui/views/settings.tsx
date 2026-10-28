@@ -10,11 +10,11 @@ import { LIVE_ENGINES, type EngineId } from "../../core/types.js";
 import { localStatusWords } from "../../core/local-format.js";
 import { borderStyle, palette, sym } from "../theme.js";
 import { engineLabel } from "../toasts.js";
-import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, GROUPS, LOCAL_NOTICE, MODES, REPOSITORY_HELP, SETTING_ITEMS, fallbackWords, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, withLimit, type BudgetItem, type FallbackList, type Group, type SettingItem } from "../settings-model.js";
+import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, GROUPS, LOCAL_NOTICE, MODES, REPOSITORY_HELP, SETTING_ITEMS, fallbackWords, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, withLimit, ROUTING_HELP, ROUTING_ITEMS, ROUTING_LABEL, otherPinLines, parsePinInput, pinWords, routingKey, type BudgetItem, type FallbackList, type Group, type RoutingItem, type SettingItem } from "../settings-model.js";
 
 export { GROUPS, LOCAL_NOTICE, fallbackWords };
 
-type Item = SettingItem | BudgetItem | { kind: "setup" } | { kind: "initial-commit" };
+type Item = SettingItem | BudgetItem | RoutingItem | { kind: "setup" } | { kind: "initial-commit" };
 
 /** Every item with the group it lives in, in the order the cursor visits them. */
 const ITEMS: Array<{ group: Group; item: Item }> = [...SETTING_ITEMS.slice(0, 2), { group: "Engines", item: { kind: "setup" } }, ...SETTING_ITEMS.slice(2)];
@@ -89,7 +89,8 @@ export function SettingsView() {
   }, [fromServer]);
   const noCommits = data.data?.hasCommits === false;
   const budgetRows = budgetItems("Project", (team.data?.agents ?? []).filter((a) => !a.retiredAt)).map((item) => ({ group: "Budgets" as const, item: item as Item }));
-  const items = [...(noCommits ? [{ group: "Engines" as const, item: { kind: "initial-commit" } as Item }] : []), ...ITEMS, ...budgetRows];
+  const routingRows = ROUTING_ITEMS.map((item) => ({ group: "Routing" as const, item: item as Item }));
+  const items = [...(noCommits ? [{ group: "Engines" as const, item: { kind: "initial-commit" } as Item }] : []), ...ITEMS, ...budgetRows, ...routingRows];
   // The commit action leads the list while it exists; keep the cursor on the same item when it goes.
   const hadAction = useRef(false);
   useEffect(() => {
@@ -110,6 +111,10 @@ export function SettingsView() {
     if (it.kind === "setup") return "Run setup again";
     if (it.kind === "initial-commit") return "Create initial commit";
     if (it.kind === "plan-only") return s.planOnly;
+    if (it.kind === "routing") {
+      const r = s.routing;
+      return it.name === "mode" ? r.mode : it.name === "localFirst" ? r.localFirst : it.name === "explore" ? r.explore : it.name === "localRetries" ? r.localRetries : pinWords(r.pins.project);
+    }
     if (it.kind === "budget") return (it.agentId === null ? s.budgets.project : s.budgets.agents[it.agentId])?.[it.limit] ?? "no limit";
     if (it.kind === "authority") return s.authority[it.name];
     if (it.kind === "fallback") return fallbackWords(fb[it.list]);
@@ -224,6 +229,16 @@ export function SettingsView() {
       }
       return;
     }
+    if (it.kind === "routing") {
+      const r = data.data.settings.routing;
+      if (it.name === "mode") void set(routingKey(it), r.mode === "off" ? "auto" : "off");
+      else if (it.name === "localFirst") void set(routingKey(it), !r.localFirst);
+      else if (fromEnter) {
+        setText(it.name === "pinProject" ? (r.pins.project ? pinWords(r.pins.project) : "") : String(value(it)));
+        setEditing(true);
+      }
+      return;
+    }
     const v = value(it);
     const key = it.kind === "plan-only" ? "planOnly" : it.kind === "authority" ? `authority.${it.name}` : it.name;
     if (typeof v === "boolean") void set(key, !v);
@@ -246,6 +261,20 @@ export function SettingsView() {
       void set(budgetKey(it), withLimit(current, it.limit, parsed.value));
       return;
     }
+    if (it.kind === "routing") {
+      if (it.name === "pinProject") {
+        const pin = parsePinInput(raw);
+        if (pin === null) return ctx.fail({ plain: "Enter an engine, or engine/model, or leave it empty for no pin.", detail: `"${raw}" is not a known engine` });
+        setEditing(false);
+        void set(routingKey(it), pin.value);
+        return;
+      }
+      const n = Number(raw.trim());
+      if (raw.trim() === "" || !Number.isInteger(n)) return ctx.fail({ plain: "Enter a whole number.", detail: `"${raw}" is not a whole number` });
+      setEditing(false);
+      void set(routingKey(it), n);
+      return;
+    }
     if (it.kind !== "authority" && it.kind !== "limit") return;
     const n = Number(raw.trim());
     if (raw.trim() === "" || !Number.isFinite(n)) return ctx.fail({ plain: "Enter a number.", detail: `"${raw}" is not a number` });
@@ -253,7 +282,7 @@ export function SettingsView() {
     void set(it.kind === "authority" ? `authority.${it.name}` : it.name, n);
   };
 
-  const editLabel = (it: Item | undefined): string => (it?.kind === "limit" || it?.kind === "authority" ? it.name : it?.kind === "budget" ? `${budgetLabel(it)} (empty for no limit)` : "");
+  const editLabel = (it: Item | undefined): string => (it?.kind === "limit" || it?.kind === "authority" ? it.name : it?.kind === "budget" ? `${budgetLabel(it)} (empty for no limit)` : it?.kind === "routing" ? ROUTING_LABEL[it.name] : "");
 
   const group = items[Math.min(sel, items.length - 1)]!.group;
   const moveGroup = (dir: 1 | -1) => {
@@ -284,7 +313,7 @@ export function SettingsView() {
   let selLine = 0;
   const heading = (t: string) => lines.push({ text: t.toUpperCase(), bold: true, dim: true });
   const itemsOfGroup = items.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
-  const labelOf = (it: Item) => (it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "budget" ? budgetLabel(it) : itemLabel(it));
+  const labelOf = (it: Item) => (it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "budget" ? budgetLabel(it) : it.kind === "routing" ? ROUTING_LABEL[it.name] : itemLabel(it));
   const labelW = Math.min(Math.max(...itemsOfGroup.map((x) => [...labelOf(x.item)].length)), Math.max(12, Math.floor(inner * 0.6)));
   const pushItem = (it: Item, i: number) => {
     const name = labelOf(it);
@@ -326,6 +355,11 @@ export function SettingsView() {
   } else if (group === "Budgets") {
     heading("Token budgets");
     for (const l of wrapText(BUDGET_HELP, inner)) lines.push({ text: l, dim: true });
+    lines.push({ text: "" });
+  } else if (group === "Routing") {
+    heading("Engine routing");
+    for (const l of wrapText(ROUTING_HELP, inner)) lines.push({ text: l, dim: true });
+    for (const p of otherPinLines(data.data.settings.routing.pins)) lines.push({ text: `  ${p}`, dim: true });
     lines.push({ text: "" });
   } else heading("Limits");
   for (const x of itemsOfGroup) if (x.item.kind !== "initial-commit") pushItem(x.item, x.i);

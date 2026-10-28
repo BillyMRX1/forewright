@@ -3,8 +3,8 @@
 import { ClientError, type ClientApi, type ConnectionState, type Subscription } from "./client.js";
 import type { EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
 import type { BudgetScopeStatus } from "../core/budgets.js";
-import type { Agent, Authority, BudgetSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
-import { DEFAULT_AUTHORITY, DEFAULT_LIMITS } from "../core/store-types.js";
+import type { Agent, Authority, BudgetSettings, RoutingSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
+import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
 import { DEFAULT_PRICES, summarizeUsage, type UsageRow } from "../core/usage.js";
 
@@ -235,6 +235,8 @@ export class FakeClient implements ClientApi {
   workersEngines: EngineId[] = [];
   /** Budgets as state.settings reports them. Changed by settings.set (budgets.project, budgets.agent.<id>). */
   budgets: BudgetSettings = { project: {}, agents: {} };
+  /** Engine routing as state.settings reports it. Changed by settings.set (routing.*). */
+  routing: RoutingSettings = { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } };
   /** Holds the runtime status reports. */
   budgetHolds: RuntimeStatus["budgetHolds"] = [];
   /** What state.budgets returns. */
@@ -278,7 +280,7 @@ export class FakeClient implements ClientApi {
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
 
   settings(): Settings {
-    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly, budgets: this.budgets };
+    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly, budgets: this.budgets, routing: this.routing };
   }
 
   runtime(): RuntimeStatus {
@@ -461,6 +463,11 @@ export class FakeClient implements ClientApi {
             const { [p["key"].slice("budgets.agent.".length)]: _old, ...rest } = this.budgets.agents;
             this.budgets = { ...this.budgets, agents: { ...rest, ...(Object.keys((p["value"] as object) ?? {}).length > 0 ? { [p["key"].slice("budgets.agent.".length)]: p["value"] as BudgetSettings["project"] } : {}) } };
           }
+          if (p["key"] === "routing.mode") this.routing = { ...this.routing, mode: p["value"] as RoutingSettings["mode"] };
+          if (p["key"] === "routing.localFirst") this.routing = { ...this.routing, localFirst: p["value"] === true };
+          if (p["key"] === "routing.explore") this.routing = { ...this.routing, explore: p["value"] as number };
+          if (p["key"] === "routing.localRetries") this.routing = { ...this.routing, localRetries: p["value"] as number };
+          if (p["key"] === "routing.pin.project") this.routing = { ...this.routing, pins: { ...this.routing.pins, project: (p["value"] as FallbackEntry | null) ?? null } };
           if (p["key"] === "ctoEngine") this.ctoEngine = p["value"] as string;
           if (p["key"] === "ctoModel") this.ctoModel = p["value"] as string | null;
           if (typeof p["key"] === "string" && p["key"].startsWith("authority.")) this.authority = { ...this.authority, [p["key"].slice("authority.".length)]: p["value"] };

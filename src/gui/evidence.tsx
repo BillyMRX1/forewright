@@ -9,6 +9,7 @@ import { sanitizeTerminal } from "../core/safety.js";
 import type { Artifact, Task, Verification } from "../core/store-types.js";
 import type { Checkpoint, Checkpoints } from "../runtime/checkpoints.js";
 import { oneLine } from "../tui/format.js";
+import { routeDecisionLabel } from "../core/routes.js";
 import { isPrdEvent, isTaskEvent, useLive, useProject } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { plainError } from "./Picker.js";
@@ -892,7 +893,7 @@ export function UndoDialog({ task, cp, sha, busy, error, onConfirm, onCancel }: 
 
 // ---------------------------------------------------------------- the connected tab
 
-const isEvidenceEvent = (t: string): boolean => isTaskEvent(t) || t.startsWith("verification.") || t.startsWith("integration.") || t === "run.finished";
+const isEvidenceEvent = (t: string): boolean => isTaskEvent(t) || t === "route.chosen" || t.startsWith("verification.") || t.startsWith("integration.") || t === "run.finished";
 
 function useNarrow(): boolean {
   const query = "(max-width: 759px)";
@@ -991,6 +992,21 @@ export function EvidenceTab({ task }: { task: Task }) {
         ) : null}
         {ev ? <VerificationGroups verifications={ev.verifications} artifacts={ev.artifacts} now={now} /> : <p className="muted">Loading the evidence.</p>}
       </section>
+
+      {ev && (ev.routes ?? []).length > 0 ? (
+        <section aria-label="Routing">
+          <h3>Routing</h3>
+          <ul className="ev-routes">
+            {(ev.routes ?? []).map((d) => (
+              <li key={d.id}>
+                <span>{routeDecisionLabel(d)}</span>
+                <span className="muted">{d.reason.summary}</span>
+                {d.kind === "review" && d.reason.independence ? <span className="muted">{d.reason.independence}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section aria-label="Changes">
         <h3>Changes</h3>

@@ -1,7 +1,8 @@
 // The pure part of the Settings view, shared by the terminal UI and the web app so their items, labels and
 // help text cannot drift apart: which settings exist, their groups and order, and what each one says it does.
 
-import { BUDGET_AGENT_PREFIX, BUDGET_LIMIT_KEYS, BUDGET_PROJECT_KEY, DEFAULT_AUTHORITY, DEFAULT_LIMITS, type BudgetLimitKey, type BudgetLimits, type FallbackEntry } from "../core/store-types.js";
+import { BUDGET_AGENT_PREFIX, BUDGET_LIMIT_KEYS, BUDGET_PROJECT_KEY, DEFAULT_AUTHORITY, DEFAULT_LIMITS, ROUTING_PIN_PROJECT_KEY, type BudgetLimitKey, type BudgetLimits, type FallbackEntry, type RoutingSettings } from "../core/store-types.js";
+import { LIVE_ENGINES, type EngineId } from "../core/types.js";
 import type { ProviderStatus } from "../runtime/protocol.js";
 
 export const LOCAL_NOTICE = "Execution and state are local to this Mac. Prompts, code and context you give agents are sent to the model provider (Anthropic for Claude Code, OpenAI for Codex) by their CLIs.";
@@ -15,7 +16,7 @@ export type LimitName = keyof typeof DEFAULT_LIMITS;
 export const AUTH_NAMES = Object.keys(DEFAULT_AUTHORITY) as AuthorityName[];
 export const LIMIT_NAMES = Object.keys(DEFAULT_LIMITS) as LimitName[];
 
-export const GROUPS = ["Engines", "Backups", "Control", "Limits", "Budgets"] as const;
+export const GROUPS = ["Engines", "Backups", "Control", "Limits", "Budgets", "Routing"] as const;
 export type Group = (typeof GROUPS)[number];
 
 /** A setting both UIs show, as the terminal UI's cursor visits them. */
@@ -81,6 +82,53 @@ export function parseBudgetInput(raw: string): { value: number | null } | null {
   const t = raw.trim().toLowerCase();
   if (t === "" || t === "none") return { value: null };
   return /^[1-9]\d*$/.test(t) && Number.isSafeInteger(Number(t)) ? { value: Number(t) } : null;
+}
+
+// ---------------------------------------------------------------- engine routing (issue #25)
+
+export type RoutingName = "mode" | "localFirst" | "explore" | "localRetries" | "pinProject";
+
+/** One routing field. Role and task pins are listed, not edited, here (settings.set routing.pin.role.<role> or routing.pin.task.<taskId>). */
+export interface RoutingItem {
+  kind: "routing";
+  name: RoutingName;
+}
+
+export const ROUTING_ITEMS: RoutingItem[] = (["mode", "localFirst", "explore", "localRetries", "pinProject"] as const).map((name) => ({ kind: "routing" as const, name }));
+
+export const ROUTING_LABEL: Record<RoutingName, string> = {
+  mode: "Engine routing (off: every run uses its agent's own engine)",
+  localFirst: "Local first: prefer a ready local engine unless it is clearly worse",
+  explore: "Explore: percent of tasks that try the second-best engine (0 to 30)",
+  localRetries: "Failed local attempts before one escalation to the CTO",
+  pinProject: "Project pin: engine or engine/model (empty for none)",
+};
+
+export const routingKey = (it: RoutingItem): string => (it.name === "pinProject" ? ROUTING_PIN_PROJECT_KEY : `routing.${it.name}`);
+
+export const ROUTING_HELP =
+  "Off by default. When on, a work run may move to another of your worker engines, chosen per task type from first-pass rates, recent usage-limit hits and turnaround; the explore percent of tasks try the second best so the numbers stay current. Reviews prefer an engine and model that differ from the author's. Only your worker engines and the agent's own engine are used, never one that bills an API key. A local engine that is offline or busy is waited for up to 10 minutes; then only your workers backup order may take the work, else the task is blocked. Pins win over scores. forewright report shows every choice and why.";
+
+/** "hearthwork" or "codex/gpt-5", or "none". */
+export const pinWords = (e: FallbackEntry | null | undefined): string => (e ? `${e.engine}${e.model ? `/${e.model}` : ""}` : "none");
+
+/** A pin as typed: empty or "none" clears it; "engine" or "engine/model" with a known engine sets it. Null when it is neither. */
+export function parsePinInput(raw: string): { value: FallbackEntry | null } | null {
+  const t = raw.trim();
+  if (t === "" || t.toLowerCase() === "none") return { value: null };
+  const slash = t.indexOf("/");
+  const engine = (slash < 0 ? t : t.slice(0, slash)).toLowerCase();
+  const model = slash < 0 ? "" : t.slice(slash + 1).trim();
+  if (!(LIVE_ENGINES as readonly string[]).includes(engine)) return null;
+  return { value: { engine: engine as EngineId, ...(model !== "" ? { model } : {}) } };
+}
+
+/** Role and task pins in words, for the read-only list under the routing fields. */
+export function otherPinLines(pins: RoutingSettings["pins"], taskName: (id: string) => string = (id) => id): string[] {
+  return [
+    ...Object.entries(pins.roles).map(([role, e]) => `Role ${role}: ${pinWords(e)}`),
+    ...Object.entries(pins.tasks).map(([id, e]) => `Task ${taskName(id)}: ${pinWords(e)}`),
+  ];
 }
 
 /** The `settings.set` key an item writes. */

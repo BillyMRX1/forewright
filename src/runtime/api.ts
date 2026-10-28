@@ -171,7 +171,7 @@ export class ClientApi {
       "state.evidence": async (p) => {
         const rt = await this.rt(p);
         const ev = rt.store.listEvidence(reqStr(p, "taskId", 200));
-        return { task: ev.task, verifications: ev.verifications, artifacts: ev.artifacts, runs: ev.runs };
+        return { task: ev.task, verifications: ev.verifications, artifacts: ev.artifacts, runs: ev.runs, routes: rt.store.listRouteDecisions(ev.task.id) };
       },
       "state.settings": async (p) => {
         const rt = await this.rt(p);

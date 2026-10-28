@@ -2667,3 +2667,16 @@ ol.rows {
 .budget-over progress {
   accent-color: var(--attention, #c77d00);
 }
+
+/* ---- Engine routing: the Routing list in a task's Evidence tab ---- */
+.ev-routes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ev-routes li {
+  display: grid;
+  gap: 2px;
+}
