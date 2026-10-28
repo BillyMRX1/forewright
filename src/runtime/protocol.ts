@@ -42,6 +42,17 @@ export interface AutomationsView {
   rows: AutomationRow[];
 }
 
+/** Agent chat at a glance (issues #13, #37): who is doing what, the daily chat budget, and loops Billy has to settle. */
+export interface ChatStatus {
+  /** Per agent presence, not retired agents only. */
+  presence: Array<{ agentId: string; name: string; role: string; state: "working" | "chatting" | "blocked" | "waiting" | "idle"; detail: string | null }>;
+  /** Tokens used by chat turns today (local day) and the daily limit (0 means no limit). */
+  budget: { usedTokens: number; limitTokens: number };
+  /** Open loop flags: channels where agents were stopped for going back and forth. */
+  loops: Array<{ channel: MessageChannel; taskId: string | null; agentIds: string[]; decisionId: string; since: string }>;
+  limits: { perAgentPerHour: number; perChannelPerHour: number; loopTurns: number };
+}
+
 export const PROTOCOL_VERSION = 1;
 
 /** Error payload in JSON-RPC `error.data`. `plain` is shown to Billy, `detail` behind "e". */
@@ -149,12 +160,20 @@ export interface Methods {
   "state.team": { params: { projectId: string }; result: { agents: TeamMember[] } };
   "state.inbox": { params: { projectId: string }; result: { open: Decision[]; recent: Decision[] } };
   "state.messages": {
-    params: { projectId: string; channel?: MessageChannel; taskId?: string; agentId?: string; limit?: number };
+    /**
+     * threadId: only that thread (the root and its replies), oldest first. Without it, top-level messages only, each
+     * with replyCount and lastReplyAt. channel "direct" with agentId: Billy's direct messages with that agent, or with
+     * peerAgentId too, the direct messages between those two agents.
+     */
+    params: { projectId: string; channel?: MessageChannel; taskId?: string; agentId?: string; peerAgentId?: string; threadId?: string; limit?: number };
     result: { messages: Message[] };
   };
+  /** Presence, the chat token budget, open loop flags and the chat limits of a project. */
+  "state.chat": { params: { projectId: string }; result: ChatStatus };
   "state.channels": {
     params: { projectId: string };
-    result: { channels: Array<{ channel: MessageChannel; taskId: string | null; agentId: string | null; label: string; lastAt: string | null }> };
+    /** A direct pair of two agents has agentId and peerAgentId set and is labeled "Ada and Bo". */
+    result: { channels: Array<{ channel: MessageChannel; taskId: string | null; agentId: string | null; peerAgentId?: string | null; label: string; lastAt: string | null; unread?: never }> };
   };
   "state.prd": { params: { projectId: string; revision?: number }; result: { doc: RequirementDoc | null; approved: RequirementDoc | null; all: Array<Pick<RequirementDoc, "revision" | "status" | "title" | "createdAt">> } };
   /** The kickoff pack manifest with what is on disk (edited or missing files), and the folder that holds the files. */
@@ -166,7 +185,7 @@ export interface Methods {
   /** A wireframe's SVG, passed through the sanitizer on every read (Billy's edits included), for an <img> preview. */
   "kickoff.wireframe": { params: { projectId: string; name: string }; result: { name: string; svg: string } };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
-  "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[]; /** Engine routing choices for this task, oldest first; empty while routing is off. */ routes?: RouteDecision[] } };
+  "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[]; /** Engine routing choices for this task, oldest first; empty while routing is off. */ routes?: RouteDecision[]; /** Messages delivered into this task's runs, with the run that read them. */ deliveredMessages?: Array<{ runId: string; message: Message }> } };
   "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; /** Commands run as checks after every task, besides the task's own. */ projectChecks?: string[]; /** The agents that can have a token budget (not retired), for the Budgets fields. */ agents?: Array<{ id: string; name: string }>; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] }; /** Muted notification types, and whether phone notifications are set up (never the secrets). */ notify?: { mute: NotifyType[]; phone: PhoneStatus } } };
   "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
   /** Tokens and estimated cost of this project's runs over the last `days` local days (default 7). */
@@ -191,8 +210,13 @@ export interface Methods {
   // human actions
   "cto.send": { params: { projectId: string; body: string }; result: { messageId: string } };
   "chat.send": {
-    params: { projectId: string; channel: Exclude<MessageChannel, "cto">; taskId?: string; toAgentIds?: string[]; body: string };
-    result: { messageId: string };
+    /**
+     * threadId replies in that thread (its channel and task must match). Recipients: agents mentioned with @Name always;
+     * project without mentions or toAgentIds: the CTO only (a thread reply: the agents already in the thread); task: its
+     * assignee; direct: toAgentIds. @everyone reaches every agent. woke: agents that get a chat turn or see it at their next turn.
+     */
+    params: { projectId: string; channel: Exclude<MessageChannel, "cto">; taskId?: string; toAgentIds?: string[]; threadId?: string; body: string };
+    result: { messageId: string; woke: string[] };
   };
   "prd.approve": { params: { projectId: string; revision: number }; result: { doc: RequirementDoc; affectedTaskIds: string[] } };
   /** Starts the project's kickoff pack, or asks the CTO again for one that is still being written. Returns state.kickoff. */

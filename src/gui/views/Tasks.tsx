@@ -206,7 +206,7 @@ function verdictChip(v: Verification): ReactNode {
 }
 
 const KIND_LABEL: Record<Verification["kind"], string> = { check: "check", review: "review", integration_check: "integration check" };
-const RUN_KIND_LABEL: Record<Run["kind"], string> = { work: "work", review: "review", cto: "CTO", integration_check: "integration check" };
+const RUN_KIND_LABEL: Record<Run["kind"], string> = { work: "work", review: "review", cto: "CTO", integration_check: "integration check", chat: "chat" };
 
 export function DiffBox({ diff }: { diff: DiffData | null }) {
   if (diff === null) return <p className="muted">Loading the changes.</p>;

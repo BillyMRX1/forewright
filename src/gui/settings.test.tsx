@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DEFAULT_AUTHORITY, DEFAULT_AUTOMATION, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
+import { DEFAULT_AUTHORITY, DEFAULT_AUTOMATION, DEFAULT_CHAT, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
 import type { Settings } from "../core/store-types.js";
 import type { ProviderCapabilities, ProviderHealth } from "../core/types.js";
 import type { Result } from "../runtime/protocol.js";
@@ -36,7 +36,7 @@ const providers = [provider("claude"), provider("codex"), provider("antigravity"
 
 function data(over: Partial<Result<"state.settings">> = {}, settings: Partial<Settings> = {}): Result<"state.settings"> {
   return {
-    settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: { cto: [], workers: [] }, workers: { engines: [] }, setup: { completedAt: null, skippedAt: null }, planOnly: false, budgets: { project: {}, agents: {} }, routing: { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } }, automation: { ...DEFAULT_AUTOMATION }, ...settings },
+    settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: { cto: [], workers: [] }, workers: { engines: [] }, setup: { completedAt: null, skippedAt: null }, planOnly: false, budgets: { project: {}, agents: {} }, routing: { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } }, automation: { ...DEFAULT_AUTOMATION }, chat: { ...DEFAULT_CHAT }, ...settings },
     providers,
     ctoEngine: "claude",
     ctoModel: null,
@@ -60,7 +60,7 @@ const actions: SettingsActions = {
 };
 const render = (d = data(), errors: Record<string, string | undefined> = {}) => renderToStaticMarkup(<SettingsView data={d} errors={errors} actions={actions} />);
 
-const keysIn = (html: string): string[] => [...html.matchAll(/data-setting-key="([^"]+)"/g)].map((m) => m[1]!).filter((k) => !k.startsWith("budgets.") && !k.startsWith("routing.") && !k.startsWith("notify.") && !k.startsWith("heartbeat.") && !k.startsWith("triggers."));
+const keysIn = (html: string): string[] => [...html.matchAll(/data-setting-key="([^"]+)"/g)].map((m) => m[1]!).filter((k) => !k.startsWith("budgets.") && !k.startsWith("routing.") && !k.startsWith("notify.") && !k.startsWith("heartbeat.") && !k.startsWith("triggers.") && !k.startsWith("chat."));
 
 test("the web view offers exactly the setting keys of the terminal view, plus the web-only extras", () => {
   const terminal = SETTING_ITEMS.map((x) => settingKey(x.item));

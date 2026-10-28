@@ -1,7 +1,7 @@
 // The pure part of the Settings view, shared by the terminal UI and the web app so their items, labels and
 // help text cannot drift apart: which settings exist, their groups and order, and what each one says it does.
 
-import { BUDGET_AGENT_PREFIX, BUDGET_LIMIT_KEYS, BUDGET_PROJECT_KEY, DEFAULT_AUTHORITY, DEFAULT_LIMITS, ROUTING_PIN_PROJECT_KEY, type BudgetLimitKey, type BudgetLimits, type FallbackEntry, type RoutingSettings } from "../core/store-types.js";
+import { BUDGET_AGENT_PREFIX, BUDGET_LIMIT_KEYS, BUDGET_PROJECT_KEY, CHAT_KEYS, DEFAULT_AUTHORITY, DEFAULT_LIMITS, ROUTING_PIN_PROJECT_KEY, type BudgetLimitKey, type BudgetLimits, type ChatSettings, type FallbackEntry, type RoutingSettings } from "../core/store-types.js";
 import { LIVE_ENGINES, type EngineId } from "../core/types.js";
 import type { ProviderStatus } from "../runtime/protocol.js";
 
@@ -16,7 +16,7 @@ export type LimitName = keyof typeof DEFAULT_LIMITS;
 export const AUTH_NAMES = Object.keys(DEFAULT_AUTHORITY) as AuthorityName[];
 export const LIMIT_NAMES = Object.keys(DEFAULT_LIMITS) as LimitName[];
 
-export const GROUPS = ["Engines", "Backups", "Control", "Limits", "Budgets", "Routing", "Automation"] as const;
+export const GROUPS = ["Engines", "Backups", "Control", "Limits", "Budgets", "Routing", "Automation", "Chat"] as const;
 export type Group = (typeof GROUPS)[number];
 
 /** A setting both UIs show, as the terminal UI's cursor visits them. */
@@ -129,6 +129,33 @@ export function otherPinLines(pins: RoutingSettings["pins"], taskName: (id: stri
     ...Object.entries(pins.roles).map(([role, e]) => `Role ${role}: ${pinWords(e)}`),
     ...Object.entries(pins.tasks).map(([id, e]) => `Task ${taskName(id)}: ${pinWords(e)}`),
   ];
+}
+
+// ---------------------------------------------------------------- agent chat (issues #13, #37)
+
+export type ChatName = keyof ChatSettings;
+
+/** The chat guardrails in the order both UIs show them. Only Billy changes them. */
+export const CHAT_NAMES: ChatName[] = ["perAgentPerHour", "perChannelPerHour", "loopTurns", "dailyTokens"];
+
+export const CHAT_LABEL: Record<ChatName, string> = {
+  perAgentPerHour: "Messages one agent may post per hour (all channels)",
+  perChannelPerHour: "Agent messages per channel or direct pair per hour",
+  loopTurns: "Messages in a row between the same two agents before they are stopped",
+  dailyTokens: "Tokens all chat turns may use per day (0 is no limit)",
+};
+
+export const chatKey = (name: ChatName): string => CHAT_KEYS[name];
+
+export const CHAT_HELP =
+  "Agents answer when you mention them with @Name or write to them directly, in a short read-only chat turn that never starts task work. Over a limit, an agent's message is refused with the reason and no new chat turn starts for it until the hour frees up. Two agents that go back and forth are stopped there and you are asked in the Inbox. When the daily chat tokens are used up, messages wait for the next day; task work is not affected.";
+
+/** A chat limit as typed: a whole number, at least 1 (0 is allowed for the daily tokens). Null when it is not one. */
+export function parseChatInput(name: ChatName, raw: string): number | null {
+  const t = raw.trim();
+  if (!/^\d+$/.test(t) || !Number.isSafeInteger(Number(t))) return null;
+  const n = Number(t);
+  return n >= (name === "dailyTokens" ? 0 : 1) ? n : null;
 }
 
 /** The `settings.set` key an item writes. */

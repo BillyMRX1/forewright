@@ -79,6 +79,10 @@ import {
   type Verification,
   type AutomationSettings,
   AUTOMATION_KEYS,
+  type Ask,
+  CHAT_KEYS,
+  DEFAULT_CHAT,
+  type ChatSettings,
   DEFAULT_AUTOMATION,
   type Routine,
 } from "./store-types.js";
@@ -1338,7 +1342,33 @@ export class Store {
       dedupeKey: (r["dedupe_key"] as string | null) ?? null,
       createdAt: r["created_at"] as string,
       supersedesMessageId: (r["supersedes_message_id"] as string | null) ?? null,
+      threadId: (r["thread_id"] as string | null) ?? null,
+      mentions: r["mentions"] ? (JSON.parse(r["mentions"] as string) as string[]) : [],
     };
+  }
+
+  getMessage(id: string): Message {
+    const r = this.one("SELECT * FROM message WHERE id = ? AND project_id = ?", id, this.projectId);
+    if (!r) throw new NotFoundError(`Message ${id}`, { messageId: id });
+    return this.messageFromRow(r);
+  }
+
+  /**
+   * Agent ids named with @Name in a text: not retired agents, case-insensitive, and the name must end at a word
+   * boundary (so @Bob does not name Bo). @everyone is not a name; see mentionsEveryone.
+   */
+  mentionsIn(body: string): string[] {
+    const out: string[] = [];
+    for (const a of this.listAgents()) {
+      const name = a.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`(^|[^\\p{L}\\p{N}_@])@${name}(?![\\p{L}\\p{N}_])`, "iu").test(body)) out.push(a.id);
+    }
+    return out;
+  }
+
+  /** Agents a message was delivered to (whatever the delivery state). */
+  messageRecipients(messageId: string): string[] {
+    return this.all("SELECT recipient_agent_id FROM message_delivery WHERE message_id = ? ORDER BY rowid", messageId).map((r) => r["recipient_agent_id"] as string);
   }
 
   postMessage(input: {
@@ -1349,9 +1379,11 @@ export class Store {
     recipients: string[];
     dedupeKey?: string;
     supersedesMessageId?: string;
+    /** Reply in the thread of this message (its root when it is a reply itself). Channel and task must match the root's. */
+    threadId?: string;
     /** Human direct instruction that changes product behavior: also routed to the CTO as a scope proposal trigger. */
     changesProductBehavior?: boolean;
-  }): { id: string; duplicate: boolean } {
+  }): { id: string; duplicate: boolean; recipients: string[] } {
     return tx(this.db, () => this.postMessageTx(input));
   }
 
@@ -1363,14 +1395,24 @@ export class Store {
     recipients: string[];
     dedupeKey?: string;
     supersedesMessageId?: string;
+    threadId?: string;
     changesProductBehavior?: boolean;
-  }): { id: string; duplicate: boolean } {
+  }): { id: string; duplicate: boolean; recipients: string[] } {
     if (input.dedupeKey) {
       const existing = this.one("SELECT id FROM message WHERE dedupe_key = ?", input.dedupeKey);
-      if (existing) return { id: existing["id"] as string, duplicate: true };
+      if (existing) return { id: existing["id"] as string, duplicate: true, recipients: this.messageRecipients(existing["id"] as string) };
     }
     const taskId = input.taskId ? this.getTask(input.taskId).id : null;
     if (input.channel === "task" && !taskId) throw new ValidationError("A task-thread message needs a task.");
+    let threadId: string | null = null;
+    if (input.threadId) {
+      const root = this.getMessage(input.threadId);
+      threadId = root.threadId ?? root.id;
+      if (root.channel !== input.channel || root.taskId !== taskId) {
+        throw new ValidationError("A reply must stay in the channel (and task) of its thread.", { threadId, channel: input.channel, taskId, threadChannel: root.channel, threadTaskId: root.taskId });
+      }
+    }
+    const mentions = this.mentionsIn(input.body);
     if (input.sender.kind === "agent") {
       const limit = this.getSettings().maxMessagesPerThreadPerHour;
       const since = new Date(this.clock.now().getTime() - HOUR_MS).toISOString();
@@ -1402,8 +1444,8 @@ export class Store {
     }
     const id = newId("msg");
     this.run(
-      `INSERT INTO message (id, project_id, channel, task_id, sender_kind, sender_id, body, dedupe_key, created_at, supersedes_message_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO message (id, project_id, channel, task_id, sender_kind, sender_id, body, dedupe_key, created_at, supersedes_message_id, thread_id, mentions)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       this.projectId,
       input.channel,
@@ -1414,22 +1456,148 @@ export class Store {
       input.dedupeKey ?? null,
       this.nowIso(),
       input.supersedesMessageId ?? null,
+      threadId,
+      mentions.length > 0 ? JSON.stringify(mentions) : null,
     );
     for (const r of recipients) {
       this.getAgent(r);
       this.run("INSERT INTO message_delivery (message_id, recipient_agent_id, state) VALUES (?,?, 'pending')", id, r);
     }
-    this.appendEvent("message.posted", "message", id, actorLabel(input.sender), { channel: input.channel, taskId, recipients });
+    this.appendEvent("message.posted", "message", id, actorLabel(input.sender), { channel: input.channel, taskId, recipients, ...(threadId ? { threadId } : {}), ...(mentions.length > 0 ? { mentions } : {}) });
     if (routeToCto) {
       this.appendEvent("message.scope_instruction", "message", id, actorLabel(input.sender), { taskId, needsScopeRevision: true });
     }
-    return { id, duplicate: false };
+    return { id, duplicate: false, recipients };
   }
 
-  listMessages(filter: { channel?: MessageChannel; taskId?: string; limit?: number } = {}): Message[] {
+  /**
+   * Messages oldest first. `threadId`: only that thread (the root and its replies). `topLevel`: only messages that
+   * are not replies, each with its reply count and last reply time. Otherwise every message, replies included.
+   */
+  listMessages(filter: { channel?: MessageChannel; taskId?: string; limit?: number; threadId?: string; topLevel?: boolean } = {}): Message[] {
     const rows = this.all("SELECT * FROM message WHERE project_id = ? ORDER BY created_at, rowid", this.projectId).map((r) => this.messageFromRow(r));
-    const out = rows.filter((m) => (!filter.channel || m.channel === filter.channel) && (!filter.taskId || m.taskId === this.getTask(filter.taskId).id));
+    const taskDbId = filter.taskId ? this.getTask(filter.taskId).id : null;
+    let rootId: string | null = null;
+    if (filter.threadId) {
+      const root = this.getMessage(filter.threadId);
+      rootId = root.threadId ?? root.id;
+    }
+    let out = rows.filter((m) => (!filter.channel || m.channel === filter.channel) && (!taskDbId || m.taskId === taskDbId));
+    if (rootId) out = out.filter((m) => m.id === rootId || m.threadId === rootId);
+    else if (filter.topLevel) out = this.withReplyCounts(out.filter((m) => m.threadId === null));
     return filter.limit ? out.slice(-filter.limit) : out;
+  }
+
+  /** Messages posted at or after a moment, oldest first (the chat guardrails count these). */
+  listMessagesSince(sinceIso: string): Message[] {
+    return this.all("SELECT * FROM message WHERE project_id = ? AND created_at >= ? ORDER BY created_at, rowid", this.projectId, sinceIso).map((r) => this.messageFromRow(r));
+  }
+
+  /** Adds replyCount and lastReplyAt to top-level messages. */
+  withReplyCounts(messages: Message[]): Message[] {
+    const stats = new Map(
+      this.all("SELECT thread_id, COUNT(*) AS n, MAX(created_at) AS last FROM message WHERE project_id = ? AND thread_id IS NOT NULL GROUP BY thread_id", this.projectId).map((r) => [
+        r["thread_id"] as string,
+        { n: r["n"] as number, last: r["last"] as string },
+      ]),
+    );
+    return messages.map((m) => {
+      const s = stats.get(m.id);
+      return { ...m, replyCount: s?.n ?? 0, lastReplyAt: s?.last ?? null };
+    });
+  }
+
+  /**
+   * Direct messages between Billy and an agent (peer null), or between two agents, oldest first. A direct message
+   * from Billy goes to agents; one from an agent with no agent recipient goes to Billy.
+   */
+  listDirectMessages(agentId: string, peerAgentId: string | null): Message[] {
+    const rows = this.all(
+      `SELECT DISTINCT m.* FROM message m LEFT JOIN message_delivery d ON d.message_id = m.id
+       WHERE m.project_id = ? AND m.channel = 'direct' AND (m.sender_id = ? OR d.recipient_agent_id = ?) ORDER BY m.created_at, m.rowid`,
+      this.projectId,
+      agentId,
+      agentId,
+    ).map((r) => this.messageFromRow(r));
+    return rows.filter((m) => {
+      const pair = this.directPair(m);
+      return pair.length === 2 && pair.includes(agentId) && pair.includes(peerAgentId ?? "billy");
+    });
+  }
+
+  /**
+   * The two sides of a direct message, sorted: agent ids, or "billy". Billy's messages go to the agents he wrote to;
+   * an agent's message goes to its agent recipients, or to Billy when it has none. A message to several agents has more.
+   */
+  directPair(m: Message): string[] {
+    const sender = m.senderKind === "human" ? "billy" : (m.senderId ?? "forewright");
+    let to = this.messageRecipients(m.id).filter((r) => r !== sender);
+    // Billy's instruction to a worker is also delivered to the CTO (see the instruction conflict rule); that copy
+    // does not make the CTO a side of the conversation.
+    const ctoId = this.getCto()?.id;
+    if (m.senderKind === "human" && to.length > 1 && ctoId) to = to.filter((r) => r !== ctoId);
+    const others = to.length > 0 ? to : m.senderKind === "agent" ? ["billy"] : [];
+    return [...new Set([sender, ...others])].sort();
+  }
+
+  /** Messages that were delivered into runs of a task (a work or review run read them), with the run that got them. */
+  deliveredMessagesForTask(taskId: string): Array<{ runId: string; message: Message }> {
+    const id = this.getTask(taskId).id;
+    return this.all(
+      `SELECT m.*, d.delivered_run_id AS delivered_run_id FROM message m JOIN message_delivery d ON d.message_id = m.id
+       JOIN run r ON r.id = d.delivered_run_id WHERE r.task_id = ? AND m.project_id = ? ORDER BY d.delivered_at, m.created_at, m.rowid`,
+      id,
+      this.projectId,
+    ).map((r) => ({ runId: r["delivered_run_id"] as string, message: this.messageFromRow(r) }));
+  }
+
+  // ------------------------------------------------------------ ask_teammate
+
+  private askFromRow(r: Row): Ask {
+    return {
+      id: r["id"] as string,
+      askerAgentId: r["asker_agent_id"] as string,
+      teammateAgentId: r["teammate_agent_id"] as string,
+      questionMessageId: r["question_message_id"] as string,
+      answerMessageId: (r["answer_message_id"] as string | null) ?? null,
+      taskId: (r["task_id"] as string | null) ?? null,
+      createdAt: r["created_at"] as string,
+      answeredAt: (r["answered_at"] as string | null) ?? null,
+    };
+  }
+
+  recordAsk(input: { askerAgentId: string; teammateAgentId: string; questionMessageId: string; taskId: string | null }): Ask {
+    return tx(this.db, () => {
+      const existing = this.one("SELECT * FROM ask WHERE question_message_id = ? AND project_id = ?", input.questionMessageId, this.projectId);
+      if (existing) return this.askFromRow(existing);
+      const id = newId("ask");
+      this.run(
+        "INSERT INTO ask (id, project_id, asker_agent_id, teammate_agent_id, question_message_id, task_id, created_at) VALUES (?,?,?,?,?,?,?)",
+        id,
+        this.projectId,
+        input.askerAgentId,
+        input.teammateAgentId,
+        input.questionMessageId,
+        input.taskId,
+        this.nowIso(),
+      );
+      this.appendEvent("ask.created", "agent", input.askerAgentId, actorLabel({ kind: "agent", id: input.askerAgentId }), { askId: id, teammate: input.teammateAgentId, taskId: input.taskId });
+      return this.askFromRow(this.one("SELECT * FROM ask WHERE id = ?", id)!);
+    });
+  }
+
+  /** Questions without an answer yet, oldest first; optionally only those of one asker or to one teammate. */
+  listOpenAsks(filter: { askerAgentId?: string; teammateAgentId?: string } = {}): Ask[] {
+    return this.all("SELECT * FROM ask WHERE project_id = ? AND answered_at IS NULL ORDER BY created_at, rowid", this.projectId)
+      .map((r) => this.askFromRow(r))
+      .filter((a) => (!filter.askerAgentId || a.askerAgentId === filter.askerAgentId) && (!filter.teammateAgentId || a.teammateAgentId === filter.teammateAgentId));
+  }
+
+  answerAsk(askId: string, answerMessageId: string): void {
+    tx(this.db, () => {
+      const n = this.run("UPDATE ask SET answer_message_id = ?, answered_at = ? WHERE id = ? AND project_id = ? AND answered_at IS NULL", answerMessageId, this.nowIso(), askId, this.projectId);
+      if (n > 0) this.appendEvent("ask.answered", "message", answerMessageId, "system", { askId });
+    });
   }
 
   /** Undelivered messages for an agent, oldest first. Busy agents keep them until the next boundary. */
@@ -1472,6 +1640,15 @@ export class Store {
         if (n === 0) throw new NotFoundError(`Pending delivery of ${id} to ${agentId}`, { messageId: id, agentId });
       }
       this.appendEvent("message.delivered", "agent", agentId, "system", { messageIds, runId });
+    });
+  }
+
+  /** A pending delivery the agent gets another way (an answer copied to its task thread): it never starts a turn. */
+  settleDelivery(messageId: string, agentId: string): void {
+    tx(this.db, () => {
+      const now = this.nowIso();
+      const n = this.run("UPDATE message_delivery SET state = 'acknowledged', delivered_at = ?, acknowledged_at = ? WHERE message_id = ? AND recipient_agent_id = ? AND state = 'pending'", now, now, messageId, agentId);
+      if (n > 0) this.appendEvent("message.settled", "agent", agentId, "system", { messageId });
     });
   }
 
@@ -2215,7 +2392,12 @@ export class Store {
       githubLabel: (stored.get(AUTOMATION_KEYS.githubLabel) as string | undefined) ?? DEFAULT_AUTOMATION.githubLabel,
       ciFailures: stored.get(AUTOMATION_KEYS.ciFailures) === true,
     };
-    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly, budgets, routing, automation };
+    const chat = { ...DEFAULT_CHAT };
+    for (const name of Object.keys(CHAT_KEYS) as Array<keyof ChatSettings>) {
+      const v = stored.get(CHAT_KEYS[name]);
+      if (typeof v === "number") chat[name] = v;
+    }
+    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly, budgets, routing, automation, chat };
   }
 
   /** Authority keys are written as `authority.<name>` and only a human may change them. */
@@ -2265,6 +2447,13 @@ export class Store {
       // Automation wakes the CTO by itself and spends Billy's usage, so only a human switches it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
       value = validateAutomationSetting(key, value);
+    } else if ((Object.values(CHAT_KEYS) as string[]).includes(key)) {
+      // Chat guardrails decide how much agents may talk and spend, so only a human changes them.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      const min = key === CHAT_KEYS.dailyTokens ? 0 : 1;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min) {
+        throw new ValidationError(min === 0 ? `${key} must be a whole number of tokens, or 0 for no limit.` : `${key} must be a positive whole number.`, { key, value });
+      }
     } else if (key === "planOnly") {
       // Plan-only mode holds back every implementation run, so only Billy switches it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
@@ -2669,7 +2858,7 @@ export class Store {
 
   /**
    * The session registry. A provider session belongs to one agent, one engine and one
-   * purpose: a task id (work and review runs of that task), "cto", or "chat" (reserved).
+   * purpose: a task id (work and review runs of that task), "cto", or "chat" (chat turns).
    * Sessions never cross engines or purposes.
    */
   getAgentSession(agentId: string, engine: EngineId, purpose: string): string | null {
@@ -2724,7 +2913,7 @@ export class Store {
 
   /** A run's purpose is the CTO's own session or the task it works on. A run with neither keeps no session. */
   private recordRunSession(run: Run, sessionId: string): void {
-    const purpose = run.kind === "cto" ? "cto" : run.taskId;
+    const purpose = run.kind === "cto" ? "cto" : run.kind === "chat" ? "chat" : run.taskId;
     if (purpose) this.setAgentSession(run.agentId, run.engine, purpose, sessionId, run.id);
   }
 

@@ -1,10 +1,10 @@
 // In-memory ClientApi for view tests. Records every call so tests can assert on them.
 
 import { ClientError, type ClientApi, type ConnectionState, type Subscription } from "./client.js";
-import type { AutomationsView, EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
+import type { AutomationsView, ChatStatus, EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
 import type { BudgetScopeStatus } from "../core/budgets.js";
-import type { Agent, Authority, AutomationSettings, BudgetSettings, RoutingSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
-import { DEFAULT_AUTHORITY, DEFAULT_AUTOMATION, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
+import type { Agent, Authority, AutomationSettings, BudgetSettings, ChatSettings, RoutingSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
+import { DEFAULT_AUTHORITY, DEFAULT_AUTOMATION, DEFAULT_CHAT, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
 import { DEFAULT_PRICES, summarizeUsage, type UsageRow } from "../core/usage.js";
 import { automationRows } from "../runtime/automation-rows.js";
@@ -81,6 +81,8 @@ export function baseData() {
     dedupeKey: null,
     createdAt: NOW,
     supersedesMessageId: null,
+    threadId: null,
+    mentions: [],
   });
   const messages: Message[] = [msg("m1", "human", null, "Build a tip calculator"), msg("m2", "agent", "a1", "Sure. I drafted a PRD."), msg("m3", "agent", "a1", EVIL)];
   const doc = (revision: number, status: RequirementDoc["status"], body: string): RequirementDoc => ({
@@ -240,6 +242,7 @@ export class FakeClient implements ClientApi {
   routing: RoutingSettings = { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } };
   /** Automation settings as state.settings reports them. Changed by settings.set (heartbeat.hours, triggers.*). */
   automation: AutomationSettings = { ...DEFAULT_AUTOMATION };
+  chat: ChatSettings = { ...DEFAULT_CHAT };
   /** What routines.list returns (nothing set up by default). */
   automations: Omit<AutomationsView, "rows"> = {
     routines: [],
@@ -257,6 +260,10 @@ export class FakeClient implements ClientApi {
   hasCommits = true;
   /** Messages returned by state.messages for a non-CTO channel, keyed `channel` or `channel:agentId`. Others get one generic message. */
   chatMessages: Record<string, Message[]> = {};
+  /** What state.chat returns. */
+  chatStatus: ChatStatus = { presence: [], budget: { usedTokens: 0, limitTokens: 0 }, loops: [], limits: { perAgentPerHour: 20, perChannelPerHour: 60, loopTurns: 6 } };
+  /** The agent ids chat.send reports as woken. */
+  chatWoke: string[] = [];
   ctoEngine = "claude";
   ctoModel: string | null = null;
   /** Makes the next settings.set for this key fail, with this message. */
@@ -289,7 +296,7 @@ export class FakeClient implements ClientApi {
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
 
   settings(): Settings {
-    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly, budgets: this.budgets, routing: this.routing, automation: this.automation };
+    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly, budgets: this.budgets, routing: this.routing, automation: this.automation, chat: this.chat };
   }
 
   runtime(): RuntimeStatus {
@@ -445,9 +452,12 @@ export class FakeClient implements ClientApi {
           this.hasCommits = true;
           return created ? { created: true, message: "Created the initial commit." } : { created: false, message: "Nothing to do: this project already has commits." };
         }
+        case "state.chat":
+          return this.chatStatus;
         case "cto.send":
-        case "chat.send":
           return { messageId: "new" };
+        case "chat.send":
+          return { messageId: "new", woke: this.chatWoke };
         case "decisions.resolve":
           return { decision: { ...d.decision, status: "resolved" } };
         case "prd.approve":
@@ -481,6 +491,7 @@ export class FakeClient implements ClientApi {
           if (p["key"] === "triggers.githubIssues") this.automation = { ...this.automation, githubIssues: p["value"] === true };
           if (p["key"] === "triggers.ciFailures") this.automation = { ...this.automation, ciFailures: p["value"] === true };
           if (p["key"] === "triggers.githubLabel") this.automation = { ...this.automation, githubLabel: p["value"] as string };
+          if (typeof p["key"] === "string" && p["key"].startsWith("chat.")) this.chat = { ...this.chat, [p["key"].slice("chat.".length)]: p["value"] as number };
           if (p["key"] === "ctoEngine") this.ctoEngine = p["value"] as string;
           if (p["key"] === "ctoModel") this.ctoModel = p["value"] as string | null;
           if (typeof p["key"] === "string" && p["key"].startsWith("authority.")) this.authority = { ...this.authority, [p["key"].slice("authority.".length)]: p["value"] };

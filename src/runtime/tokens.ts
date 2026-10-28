@@ -6,7 +6,8 @@ import type { Db } from "../core/db.js";
 import type { Clock } from "../core/clock.js";
 
 export interface TokenScope {
-  kind: "cto" | "work" | "review";
+  /** chat: a short chat turn of a worker (read only, no task). */
+  kind: "cto" | "work" | "review" | "chat";
   taskId?: string;
   /** Review tokens: what the reviewer is judging. */
   commit?: string;

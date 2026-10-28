@@ -16,6 +16,7 @@ import { DesktopNotifier } from "./notify.js";
 
 // Each view loads on first visit, so the first page load only fetches the shell.
 const Cto = lazy(() => import("./views/Cto.js").then((m) => ({ default: m.Cto })));
+const Chat = lazy(() => import("./views/Chat.js").then((m) => ({ default: m.Chat })));
 const Home = lazy(() => import("./views/Home.js").then((m) => ({ default: m.Home })));
 const Tasks = lazy(() => import("./views/Tasks.js").then((m) => ({ default: m.Tasks })));
 const Inbox = lazy(() => import("./views/Inbox.js").then((m) => ({ default: m.Inbox })));
@@ -23,11 +24,12 @@ const Team = lazy(() => import("./views/Team.js").then((m) => ({ default: m.Team
 const Settings = lazy(() => import("./views/Settings.js").then((m) => ({ default: m.Settings })));
 const Kickoff = lazy(() => import("./views/Kickoff.js").then((m) => ({ default: m.Kickoff })));
 
-export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "kickoff" | "settings";
+export type ViewId = "home" | "cto" | "chat" | "tasks" | "team" | "inbox" | "kickoff" | "settings";
 
 export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> = [
   { id: "home", label: "Home", soon: "An overview of the project: what needs you, what is running and what is done." },
   { id: "cto", label: "CTO", soon: "" },
+  { id: "chat", label: "Chat", soon: "" },
   { id: "tasks", label: "Tasks", soon: "The task board, with each task's state, owner and evidence." },
   { id: "team", label: "Team", soon: "Your agents, what each one is doing, and their engines." },
   { id: "inbox", label: "Inbox", soon: "Decisions that wait for you, such as approvals and questions." },
@@ -37,6 +39,7 @@ export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> =
 
 export const HINTS: Record<ViewId, string[]> = {
   cto: ["Enter send", "Shift+Enter new line", "/ commands", "Tab complete command", "Esc close dialogs"],
+  chat: ["Enter send", "Shift+Enter new line", "@ mention", "Esc close thread"],
   home: ["Click a row under Needs you to open it", "Esc close dialogs"],
   tasks: ["Arrow keys move between tasks", "Enter opens a task", "Esc back to the list", "Esc close dialogs"],
   team: ["Tab moves between cards and buttons", "Space or Enter opens Memory notes", "Esc close dialogs"],
@@ -357,6 +360,8 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     );
   } else if (view === "cto" && project) {
     body = <Cto key={project.projectId} />;
+  } else if (view === "chat" && project) {
+    body = <Chat key={project.projectId} />;
   } else if (view === "home" && project) {
     body = <Home key={project.projectId} />;
   } else if (view === "tasks" && project) {

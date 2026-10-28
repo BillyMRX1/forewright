@@ -20,6 +20,7 @@ import { engineRoleProblem } from "./engine-roles.js";
 import { MEMORY_CAP_BYTES, writeMemory } from "./memory.js";
 import { KICKOFF_ALL_KEYS, KICKOFF_DOC_CAP, WIREFRAME_MAX, isPackKey, proposeKickoffRevision, readKickoffDoc, setKickoffUi, writeKickoffDoc, writeKickoffWireframe } from "./kickoff.js";
 import { SVG_CAP_BYTES } from "./svg-sanitize.js";
+import { postAgentMessage, sendDirect } from "./chat.js";
 
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -375,20 +376,31 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "send_message",
-    description: 'CTO: to is an agent name, "task:T-1", "project" or "billy". Worker: to is "cto" or "task".',
-    properties: { to: { type: "string" }, body: { type: "string" } },
+    description:
+      'to: an agent name (a direct message), "billy", "cto", "project" (#general), "task:T-1", or "task" (your own task thread in task work). thread: a message id to reply in its thread. Mention a teammate with @Name to wake them (at most 3; no @everyone).',
+    properties: { to: { type: "string" }, body: { type: "string" }, thread: { type: "string", description: "Optional: reply in the thread of this message id" } },
     required: ["to", "body"],
-    roles: ["cto", "work", "review"],
+    roles: ["cto", "work", "review", "chat"],
     action: "send_message",
     mutating: true,
-    run: (ctx, a) => sendMessage(ctx, str(a, "to", { max: 80 }).trim(), str(a, "body", { max: 8000 })),
+    run: (ctx, a) => sendMessage(ctx, str(a, "to", { max: 80 }).trim(), str(a, "body", { max: 8000 }), optStr(a, "thread", 100)?.trim() || undefined),
+  },
+  {
+    name: "ask_teammate",
+    description: "Ask a teammate (by name) a question. It returns at once and never waits: the answer reaches you in a later turn (in task work, on your task thread).",
+    properties: { teammate: { type: "string" }, question: { type: "string" } },
+    required: ["teammate", "question"],
+    roles: ["cto", "work", "review", "chat"],
+    action: "send_message",
+    mutating: true,
+    run: (ctx, a) => askTeammate(ctx, str(a, "teammate", { max: 60 }).trim(), str(a, "question", { max: 4000 })),
   },
   {
     name: "update_memory",
     description: `Replace your memory notes with a new version (Markdown, at most ${MEMORY_CAP_BYTES} bytes): decisions, conventions, where things are, open questions. A future session of yours starts from them. Never put secrets in it.`,
     properties: { text: { type: "string" } },
     required: ["text"],
-    roles: ["cto", "work", "review"],
+    roles: ["cto", "work", "review", "chat"],
     action: "update_memory",
     mutating: true,
     run: (ctx, a) => {
@@ -619,27 +631,50 @@ const FORBIDDEN: Record<string, ActionName> = {
   settings: "change_authority",
 };
 
-function sendMessage(ctx: ToolCtx, to: string, body: string): unknown {
-  const { store } = ctx.rt;
+function sendMessage(ctx: ToolCtx, to: string, body: string, thread: string | undefined): unknown {
+  const { rt } = ctx;
+  const { store } = rt;
   const me = ctx.agent;
-  const sender = { kind: "agent", id: me.id } as const;
-  if (ctx.record.scope.kind === "cto") {
-    if (to === "project") {
-      const recipients = store.listAgents().filter((a) => a.id !== me.id).map((a) => a.id);
-      return store.postMessage({ channel: "project", sender, body, recipients });
-    }
-    if (to.toLowerCase() === "billy") return store.postMessage({ channel: "cto", sender, body, recipients: [] });
-    if (to.toLowerCase().startsWith("task:")) {
-      const t = store.getTask(to.slice(5).trim());
-      return store.postMessage({ channel: "task", taskId: t.id, sender, body, recipients: t.assigneeAgentId ? [t.assigneeAgentId] : [] });
-    }
-    const target = agentByName(ctx, to);
-    return store.postMessage({ channel: "direct", sender, body, recipients: [target.id] });
+  const scope = ctx.record.scope;
+  const lower = to.toLowerCase();
+  const threadId = thread ?? null;
+  if (lower === "billy") {
+    // The CTO answers Billy in its own channel; everyone else writes to him directly.
+    if (scope.kind === "cto") return store.postMessage({ channel: "cto", sender: { kind: "agent", id: me.id }, body, recipients: [], ...(thread ? { threadId: thread } : {}) });
+    return sendDirect(rt, me, "billy", body, { threadId });
   }
-  const taskId = ctx.record.scope.taskId!;
-  if (to.toLowerCase() === "cto") return store.postMessage({ channel: "task", taskId, sender, body, recipients: [ctx.rt.ctoAgent().id] });
-  if (to.toLowerCase() === "task") return store.postMessage({ channel: "task", taskId, sender, body, recipients: [] });
-  throw new ToolError('Workers can message "cto" or their own "task" thread only.');
+  if (lower === "project") return postAgentMessage(rt, me, { channel: "project", threadId, body, recipients: [] }); // mentions decide who wakes
+  if (lower === "task" || lower.startsWith("task:")) {
+    const ref = lower === "task" ? scope.taskId : to.slice(5).trim();
+    if (!ref) throw new ToolError('You have no task in this turn. Name one, like "task:T-1".');
+    const t = store.getTask(ref);
+    const recipients = scope.kind === "cto" && t.assigneeAgentId ? [t.assigneeAgentId] : [];
+    return postAgentMessage(rt, me, { channel: "task", taskId: t.id, threadId, body, recipients });
+  }
+  if (lower === "cto" && scope.kind !== "cto") {
+    const cto = rt.ctoAgent();
+    if (scope.taskId) return postAgentMessage(rt, me, { channel: "task", taskId: scope.taskId, threadId, body, recipients: [cto.id] });
+    return sendDirect(rt, me, cto, body, { threadId });
+  }
+  const target = agentByName(ctx, to);
+  if (target.id === me.id) throw new ToolError("You cannot send a message to yourself.");
+  if (target.retiredAt) throw new ToolError(`${target.name} is retired.`);
+  return sendDirect(rt, me, target, body, { threadId });
+}
+
+function askTeammate(ctx: ToolCtx, teammateName: string, question: string): unknown {
+  const { rt } = ctx;
+  const me = ctx.agent;
+  const teammate = agentByName(ctx, teammateName);
+  if (teammate.id === me.id) throw new ToolError("You cannot ask yourself.");
+  if (teammate.retiredAt) throw new ToolError(`${teammate.name} is retired; ask someone else.`);
+  if (teammate.id === rt.ctoAgent().id) throw new ToolError('To ask the CTO, use send_message with to "cto".');
+  const taskId = ctx.record.scope.taskId ?? null;
+  const r = postAgentMessage(rt, me, { channel: "direct", body: question, recipients: [teammate.id] });
+  rt.store.recordAsk({ askerAgentId: me.id, teammateAgentId: teammate.id, questionMessageId: r.id, taskId });
+  return taskId
+    ? `Asked ${teammate.name}. The answer will reach you in a later turn, on your task thread. Keep working meanwhile.`
+    : `Asked ${teammate.name}. The answer will reach you in a later turn.`;
 }
 
 function requestMerge(ctx: ToolCtx, targetArg: string | undefined): unknown {
@@ -692,6 +727,8 @@ export function toolDefinitions(role: Role): Array<{ name: string; description: 
 function actorFor(agent: Agent, role: Role): Actor {
   // A reviewer run is read-only whatever the agent's usual profile is.
   if (role === "review") return { kind: "agent", agentId: agent.id, role: "review", permission: "read_only" };
+  // A chat turn only talks: it is read-only whatever the agent's usual profile is.
+  if (role === "chat") return { kind: "agent", agentId: agent.id, role: agent.role, permission: "read_only" };
   return { kind: "agent", agentId: agent.id, role: agent.role, permission: agent.permission };
 }
 

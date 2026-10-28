@@ -1,8 +1,9 @@
 // Test fixtures for the Home view and the live layer: a busy project and an empty one.
 
-import type { Decision, ForewrightEvent, RequirementDoc, Task } from "../core/store-types.js";
+import type { Decision, ForewrightEvent, Message, RequirementDoc, Task } from "../core/store-types.js";
 import type { UsageSummary, UsageTotals } from "../core/usage.js";
-import type { RuntimeStatus, TeamMember } from "../runtime/protocol.js";
+import type { ChatStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
+import type { ChannelEntry } from "./chat-model.js";
 import { needsYouItems } from "../tui/attention.js";
 import type { Snapshot } from "./live.js";
 
@@ -136,4 +137,42 @@ export function fixture() {
   const runtime: RuntimeStatus = { ...idleRuntime, activeRuns: [{ runId: "run_1", kind: "work", agentId: "a1", taskId: "t2", startedAt: "2026-01-01T00:55:00.000Z" }] };
   const events = [event(1, "task.completed", "t1"), event(2, "decision.requested", "d1", { title: "Pick a database" }, "agent:a1"), event(3, "requirement_doc.proposed", "doc2", { revision: 2 })];
   return { snapshot, expectedNeedItems, runtime, events };
+}
+
+/** The chat view's data: people with presence, channels (#general, a task thread, direct messages) and open loop flags. */
+export function chatFixture() {
+  const people: ChatStatus["presence"] = [
+    { agentId: "c1", name: "CTO", role: "cto", state: "idle", detail: null },
+    { agentId: "a1", name: "Ada", role: "backend", state: "working", detail: "T-2" },
+    { agentId: "a2", name: "Bo", role: "frontend", state: "chatting", detail: null },
+    { agentId: "a3", name: "Cy", role: "testing", state: "blocked", detail: "T-3" },
+    { agentId: "a4", name: "Di", role: "docs", state: "waiting", detail: "asked Bo" },
+  ];
+  const channels: ChannelEntry[] = [
+    { channel: "project", taskId: null, agentId: null, label: "Project", lastAt: at },
+    { channel: "task", taskId: "t2", agentId: null, label: "T-2 Add the list view", lastAt: at },
+    { channel: "direct", taskId: null, agentId: "a1", label: "Ada", lastAt: at },
+    { channel: "direct", taskId: null, agentId: "a2", label: "Ada and Bo", lastAt: at },
+  ];
+  const status: ChatStatus = {
+    presence: people,
+    budget: { usedTokens: 12400, limitTokens: 200000 },
+    loops: [{ channel: "direct", taskId: null, agentIds: ["a1", "a2"], decisionId: "d1", since: at }],
+    limits: { perAgentPerHour: 20, perChannelPerHour: 60, loopTurns: 6 },
+  };
+  const message = (id: string, body: string, over: Partial<Message> = {}): Message => ({
+    id,
+    channel: "project",
+    taskId: null,
+    senderKind: "agent",
+    senderId: "a1",
+    body,
+    dedupeKey: null,
+    createdAt: at,
+    supersedesMessageId: null,
+    threadId: null,
+    mentions: [],
+    ...over,
+  });
+  return { people, channels, status, message };
 }

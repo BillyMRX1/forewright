@@ -10,12 +10,12 @@ import { LIVE_ENGINES, type EngineId } from "../../core/types.js";
 import { localStatusWords } from "../../core/local-format.js";
 import { borderStyle, palette, sym } from "../theme.js";
 import { engineLabel } from "../toasts.js";
-import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, GROUPS, LOCAL_NOTICE, MODES, REPOSITORY_HELP, SETTING_ITEMS, fallbackWords, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, withLimit, ROUTING_HELP, ROUTING_ITEMS, ROUTING_LABEL, otherPinLines, parsePinInput, pinWords, routingKey, type BudgetItem, type FallbackList, type Group, type RoutingItem, type SettingItem } from "../settings-model.js";
+import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, GROUPS, LOCAL_NOTICE, MODES, REPOSITORY_HELP, SETTING_ITEMS, fallbackWords, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, withLimit, ROUTING_HELP, ROUTING_ITEMS, ROUTING_LABEL, otherPinLines, parsePinInput, pinWords, routingKey, CHAT_HELP, CHAT_LABEL, CHAT_NAMES, chatKey, parseChatInput, type ChatName, type BudgetItem, type FallbackList, type Group, type RoutingItem, type SettingItem } from "../settings-model.js";
 import { AUTOMATION_HELP, AUTOMATION_LABEL, AUTOMATION_NAMES, automationKey, type AutomationName } from "../automation-model.js";
 
 export { GROUPS, LOCAL_NOTICE, fallbackWords };
 
-type Item = SettingItem | BudgetItem | RoutingItem | { kind: "automation"; name: AutomationName } | { kind: "setup" } | { kind: "initial-commit" };
+type Item = SettingItem | BudgetItem | RoutingItem | { kind: "automation"; name: AutomationName } | { kind: "chat"; name: ChatName } | { kind: "setup" } | { kind: "initial-commit" };
 
 /** Every item with the group it lives in, in the order the cursor visits them. */
 const ITEMS: Array<{ group: Group; item: Item }> = [...SETTING_ITEMS.slice(0, 2), { group: "Engines", item: { kind: "setup" } }, ...SETTING_ITEMS.slice(2)];
@@ -92,7 +92,8 @@ export function SettingsView() {
   const budgetRows = budgetItems("Project", (team.data?.agents ?? []).filter((a) => !a.retiredAt)).map((item) => ({ group: "Budgets" as const, item: item as Item }));
   const routingRows = ROUTING_ITEMS.map((item) => ({ group: "Routing" as const, item: item as Item }));
   const automationItems = AUTOMATION_NAMES.map((name) => ({ group: "Automation" as const, item: { kind: "automation", name } as Item }));
-  const items = [...(noCommits ? [{ group: "Engines" as const, item: { kind: "initial-commit" } as Item }] : []), ...ITEMS, ...budgetRows, ...routingRows, ...automationItems];
+  const chatItems = CHAT_NAMES.map((name) => ({ group: "Chat" as const, item: { kind: "chat", name } as Item }));
+  const items = [...(noCommits ? [{ group: "Engines" as const, item: { kind: "initial-commit" } as Item }] : []), ...ITEMS, ...budgetRows, ...routingRows, ...automationItems, ...chatItems];
   // The commit action leads the list while it exists; keep the cursor on the same item when it goes.
   const hadAction = useRef(false);
   useEffect(() => {
@@ -119,6 +120,7 @@ export function SettingsView() {
     }
     if (it.kind === "budget") return (it.agentId === null ? s.budgets.project : s.budgets.agents[it.agentId])?.[it.limit] ?? "no limit";
     if (it.kind === "automation") return s.automation[it.name];
+    if (it.kind === "chat") return s.chat[it.name];
     if (it.kind === "authority") return s.authority[it.name];
     if (it.kind === "fallback") return fallbackWords(fb[it.list]);
     return s[it.name];
@@ -232,6 +234,13 @@ export function SettingsView() {
       }
       return;
     }
+    if (it.kind === "chat") {
+      if (fromEnter) {
+        setText(String(value(it)));
+        setEditing(true);
+      }
+      return;
+    }
     if (it.kind === "automation") {
       const v = value(it);
       if (typeof v === "boolean") void set(automationKey(it.name), !v);
@@ -273,6 +282,13 @@ export function SettingsView() {
       void set(budgetKey(it), withLimit(current, it.limit, parsed.value));
       return;
     }
+    if (it.kind === "chat") {
+      const n = parseChatInput(it.name, raw);
+      if (n === null) return ctx.fail({ plain: it.name === "dailyTokens" ? "Enter a whole number of tokens, 0 for no limit." : "Enter a whole number above 0.", detail: `"${raw}" is not a valid limit` });
+      setEditing(false);
+      void set(chatKey(it.name), n);
+      return;
+    }
     if (it.kind === "automation") {
       if (it.name === "githubLabel") {
         if (raw.trim() === "") return ctx.fail({ plain: "Enter a GitHub label name.", detail: "the label is empty" });
@@ -307,7 +323,7 @@ export function SettingsView() {
     void set(it.kind === "authority" ? `authority.${it.name}` : it.name, n);
   };
 
-  const editLabel = (it: Item | undefined): string => (it?.kind === "limit" || it?.kind === "authority" ? it.name : it?.kind === "budget" ? `${budgetLabel(it)} (empty for no limit)` : it?.kind === "routing" ? ROUTING_LABEL[it.name] : it?.kind === "automation" ? AUTOMATION_LABEL[it.name] : "");
+  const editLabel = (it: Item | undefined): string => (it?.kind === "limit" || it?.kind === "authority" ? it.name : it?.kind === "budget" ? `${budgetLabel(it)} (empty for no limit)` : it?.kind === "routing" ? ROUTING_LABEL[it.name] : it?.kind === "automation" ? AUTOMATION_LABEL[it.name] : it?.kind === "chat" ? CHAT_LABEL[it.name] : "");
 
   const group = items[Math.min(sel, items.length - 1)]!.group;
   const moveGroup = (dir: 1 | -1) => {
@@ -338,7 +354,7 @@ export function SettingsView() {
   let selLine = 0;
   const heading = (t: string) => lines.push({ text: t.toUpperCase(), bold: true, dim: true });
   const itemsOfGroup = items.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
-  const labelOf = (it: Item) => (it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "budget" ? budgetLabel(it) : it.kind === "routing" ? ROUTING_LABEL[it.name] : it.kind === "automation" ? AUTOMATION_LABEL[it.name] : itemLabel(it));
+  const labelOf = (it: Item) => (it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "budget" ? budgetLabel(it) : it.kind === "routing" ? ROUTING_LABEL[it.name] : it.kind === "automation" ? AUTOMATION_LABEL[it.name] : it.kind === "chat" ? CHAT_LABEL[it.name] : itemLabel(it));
   const labelW = Math.min(Math.max(...itemsOfGroup.map((x) => [...labelOf(x.item)].length)), Math.max(12, Math.floor(inner * 0.6)));
   const pushItem = (it: Item, i: number) => {
     const name = labelOf(it);
@@ -390,6 +406,10 @@ export function SettingsView() {
     heading("Automation");
     for (const l of wrapText(AUTOMATION_HELP, inner)) lines.push({ text: l, dim: true });
     lines.push({ text: "  Routines are listed on the overview and edited in the web app's Settings.", dim: true });
+    lines.push({ text: "" });
+  } else if (group === "Chat") {
+    heading("Agent chat");
+    for (const l of wrapText(CHAT_HELP, inner)) lines.push({ text: l, dim: true });
     lines.push({ text: "" });
   } else heading("Limits");
   for (const x of itemsOfGroup) if (x.item.kind !== "initial-commit") pushItem(x.item, x.i);
