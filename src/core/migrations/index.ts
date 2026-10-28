@@ -9,6 +9,7 @@ import { migration008 } from "./008_kickoff_ui.js";
 import { migration009 } from "./009_budget_holds.js";
 import { migration010 } from "./010_run_execution.js";
 import { migration011 } from "./011_route_decisions.js";
+import { migration012 } from "./012_automation.js";
 
 export interface Migration {
   version: number;
@@ -17,4 +18,4 @@ export interface Migration {
 }
 
 // Ordered, append-only. Never edit a migration that has shipped.
-export const MIGRATIONS: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011];
+export const MIGRATIONS: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012];

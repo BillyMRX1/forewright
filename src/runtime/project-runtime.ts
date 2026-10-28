@@ -13,6 +13,8 @@ import { redactSecrets } from "../core/safety.js";
 import { type Agent, type Decision, type MessageSender, type Run, type Task, Store } from "../core/store.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { EventBus } from "./bus.js";
+import { NotifyPipeline } from "./notify.js";
+import type { SendOptions } from "./notify-send.js";
 import { activeHolds, BUDGET_ACTION, onBudgetDecision } from "./budgets.js";
 import { purposeFor, resolveFor } from "./fallback.js";
 import { CtoDriver } from "./cto.js";
@@ -24,6 +26,7 @@ import { nudgeKickoff, resolveKickoffProposal } from "./kickoff.js";
 import { reconcileOnOpen } from "./recovery.js";
 import { type ActiveRun, type StopKind } from "./runs.js";
 import { Scheduler } from "./scheduler.js";
+import { GithubTriggers, ghRunner } from "./github.js";
 import { TokenRepo } from "./tokens.js";
 import { INTEGRATION_BRANCH, WorkspaceManager } from "./workspace.js";
 
@@ -44,6 +47,10 @@ export interface RuntimeDeps {
   connectedClients: () => number;
   /** Engine of a new project's CTO when the project has no ctoEngine setting yet. */
   defaultCtoEngine: EngineId;
+  /** For tests: delivery options of the phone notifications (timeouts, backoff, Telegram and Pushover addresses). */
+  notifySend?: Omit<SendOptions, "home">;
+  /** The GitHub CLI the triggers run (default "gh" on PATH); tests point it at a fake. */
+  ghBinary?: string;
 }
 
 export interface Notifier {
@@ -58,10 +65,12 @@ export interface QuotaState {
 export class ProjectRuntime {
   readonly store: Store;
   readonly bus: EventBus;
+  readonly notify: NotifyPipeline;
   readonly tokens: TokenRepo;
   readonly workspace: WorkspaceManager;
   readonly scheduler: Scheduler;
   readonly cto: CtoDriver;
+  readonly triggers: GithubTriggers;
   readonly active = new Map<string, ActiveRun>();
   readonly subscribers = new Set<Notifier>();
   readonly ownerId = `daemon:${process.pid}:${randomUUID().slice(0, 8)}`;
@@ -86,7 +95,10 @@ export class ProjectRuntime {
     this.tokens = new TokenRepo(store.db, projectId, deps.clock);
     this.workspace = new WorkspaceManager(root, projectId, store);
     this.cto = new CtoDriver(this);
+    this.triggers = new GithubTriggers(this, ghRunner(deps.ghBinary));
     this.scheduler = new Scheduler(this, deps.watchdogMs);
+    this.notify = new NotifyPipeline({ store, projectName: name, home: deps.forewrightHome, ...(deps.notifySend ? { send: deps.notifySend } : {}) });
+    this.bus.subscribe((ev) => this.notify.handle(ev));
     this.bus.subscribe((ev) => {
       for (const s of this.subscribers) s.notify("event", { projectId, event: ev });
     });
@@ -406,8 +418,25 @@ export class ProjectRuntime {
     }
   }
 
+  /**
+   * "Refs #<n>" lines for GitHub issues whose work this merge brings into Billy's branch: done tasks that came from
+   * a labeled issue, whose commit is on the integration branch and not yet on the target.
+   */
+  issueRefs(target: string): string[] {
+    const numbers = new Set<number>();
+    for (const t of this.store.listTasks({ states: ["done"] })) {
+      if (t.origin?.kind !== "github_issue" || !t.candidateCommit || !/^\d+$/.test(t.origin.id)) continue;
+      if (gitTry(this.root, ["merge-base", "--is-ancestor", t.candidateCommit, `refs/heads/${INTEGRATION_BRANCH}`]).code !== 0) continue;
+      if (gitTry(this.root, ["merge-base", "--is-ancestor", t.candidateCommit, `refs/heads/${target}`]).code === 0) continue;
+      numbers.add(Number(t.origin.id));
+    }
+    return [...numbers].sort((a, b) => a - b).map((n) => `Refs #${n}`);
+  }
+
   performMerge(target: string): { merged: boolean; message: string } {
-    const r = gitTry(this.root, ["merge", "--no-ff", "-m", `Merge ${INTEGRATION_BRANCH} into ${target}`, INTEGRATION_BRANCH], { identity: true });
+    const refs = this.issueRefs(target);
+    const subject = `Merge ${INTEGRATION_BRANCH} into ${target}${refs.length > 0 ? `\n\n${refs.join("\n")}` : ""}`;
+    const r = gitTry(this.root, ["merge", "--no-ff", "-m", subject, INTEGRATION_BRANCH], { identity: true });
     if (r.code !== 0) {
       gitTry(this.root, ["merge", "--abort"]);
       const message = `Merging ${INTEGRATION_BRANCH} into ${target} hit conflicts and was rolled back. Nothing changed.`;
@@ -456,6 +485,7 @@ export class ProjectRuntime {
     await this.integrationPromise;
     this.publish();
     this.closed = true;
+    this.notify.stop();
     this.tokens.revokeAll();
     this.store.db.close();
   }
@@ -464,6 +494,7 @@ export class ProjectRuntime {
   crash(): void {
     this.closed = true;
     this.scheduler.stop();
+    this.notify.stop();
     this.store.db.close();
   }
 }

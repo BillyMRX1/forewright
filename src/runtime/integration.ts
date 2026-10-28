@@ -120,7 +120,9 @@ async function integrate(rt: ProjectRuntime, task: Task): Promise<void> {
   store.recordEvent("integration.started", "task", task.id, { kind: "system" }, { candidate, base: old });
   rt.publish();
 
-  const merge = gitTry(wt, ["merge", "--no-ff", "-m", `Integrate ${task.shortId}: ${task.title}`, candidate], { identity: true });
+  // Work that came from a labeled GitHub issue links back to it from the integration branch too.
+  const refs = task.origin?.kind === "github_issue" && /^\d+$/.test(task.origin.id) ? `\n\nRefs #${task.origin.id}` : "";
+  const merge = gitTry(wt, ["merge", "--no-ff", "-m", `Integrate ${task.shortId}: ${task.title}${refs}`, candidate], { identity: true });
   if (merge.code !== 0) {
     const conflicted = gitTry(wt, ["ls-files", "-u"]).stdout.trim() !== "" || /CONFLICT/.test(merge.stdout + merge.stderr);
     gitTry(wt, ["merge", "--abort"]);

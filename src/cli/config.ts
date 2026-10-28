@@ -4,6 +4,9 @@ import {
   clearCaFile, clearProxy, maskProxyUrl, networkConfigPath, readNetworkConfig, setCaFile, setProxy, type NetworkConfig,
 } from "../core/network.js";
 import { forewrightHome } from "../core/paths.js";
+import { NTFY_DEFAULT_SERVER, clearPhoneConfig, describePhone, readPhoneConfig, setPhoneConfig } from "../core/notify-config.js";
+import { PhoneSendError } from "../runtime/notify-send.js";
+import { sendTestNotification } from "../runtime/notify.js";
 import { addGuiAllowHost, clearGuiAllowHosts, readGuiConfig, setGuiAutostart, setGuiEditorHost, setGuiPort, type GuiConfig } from "../core/gui-config.js";
 
 export const CONFIG_HELP = `forewright config: proxy and certificate settings for a company network, and GUI settings.
@@ -21,6 +24,13 @@ Usage:
   forewright config gui autostart on|off    start the GUI whenever the service starts
   forewright config gui editor-host <name>  SSH host name for "Open in editor" when the GUI runs on a remote server
   forewright config gui editor-host --clear open files in an editor on the browser's own machine
+  forewright config notify ntfy <topic> [--server URL] [--token T]   phone notifications through ntfy (default server https://ntfy.sh)
+  forewright config notify telegram <botToken> <chatId>              phone notifications through a Telegram bot
+  forewright config notify pushover <appToken> <userKey>             phone notifications through Pushover
+  forewright config notify test             send one test notification now
+  forewright config notify --clear          turn phone notifications off
+
+Phone notifications are off until you set a service. They carry titles and ids only, never code or secrets. Mute single types per project in the GUI Settings.
 
 Variables already set in the environment (HTTPS_PROXY, NO_PROXY, NODE_EXTRA_CA_CERTS, ...) win over these settings.
 Check the result with: forewright doctor
@@ -54,7 +64,7 @@ export function runConfig(args: string[], io: { out: (s: string) => void; err: (
     return 2;
   };
   const file = networkConfigPath(home);
-  if (what === undefined || what === "show") return (io.out(describeConfig(readNetworkConfig(home), file) + describeGui(readGuiConfig(home))), 0);
+  if (what === undefined || what === "show") return (io.out(describeConfig(readNetworkConfig(home), file) + describeGui(readGuiConfig(home)) + `${describePhone(readPhoneConfig(home))}\n`), 0);
   if (what === "--help" || what === "-h" || what === "help") return (io.out(CONFIG_HELP), 0);
   if (what === "proxy") {
     if (rest.length === 1 && rest[0] === "--clear") {
@@ -109,5 +119,56 @@ export function runConfig(args: string[], io: { out: (s: string) => void; err: (
     }
     return usage(key === undefined ? "forewright config gui needs a setting: port, allow-host, autostart or editor-host." : `Unknown GUI setting "${key}".`);
   }
+  if (what === "notify") {
+    const [service, ...vals] = rest;
+    const saved = (): number => (io.out(`Saved.\n${describePhone(readPhoneConfig(home))}\nSend a test with: forewright config notify test\n`), 0);
+    if (service === "--clear") return (clearPhoneConfig(home), io.out(`Phone notifications are off.\n`), 0);
+    if (service === "ntfy") {
+      let topic: string | undefined;
+      let server = NTFY_DEFAULT_SERVER;
+      let token: string | undefined;
+      for (let i = 0; i < vals.length; i++) {
+        const a = vals[i] as string;
+        if (a === "--server" || a === "--token") {
+          const v = vals[++i];
+          if (v === undefined) return usage(`${a} needs a value.`);
+          if (a === "--server") server = v;
+          else token = v;
+        } else if (a.startsWith("--")) return usage(`Unknown option "${a}".`);
+        else if (topic === undefined) topic = a;
+        else return usage(`Unexpected argument "${a}".`);
+      }
+      if (topic === undefined) return usage("forewright config notify ntfy needs a topic.");
+      setPhoneConfig({ service: "ntfy", server, topic, ...(token !== undefined ? { token } : {}) }, home);
+      return saved();
+    }
+    if (service === "telegram" || service === "pushover") {
+      if (vals.length !== 2 || vals.some((v) => v.startsWith("--"))) return usage(service === "telegram" ? "forewright config notify telegram needs a bot token and a chat id." : "forewright config notify pushover needs an app token and a user key.");
+      setPhoneConfig(service === "telegram" ? { service, botToken: vals[0] as string, chatId: vals[1] as string } : { service, appToken: vals[0] as string, userKey: vals[1] as string }, home);
+      return saved();
+    }
+    if (service === "test") return usage("Use: forewright config notify test (it needs the service to run it).");
+    return usage(service === undefined ? "forewright config notify needs ntfy, telegram, pushover, test or --clear." : `Unknown notify service "${service}".`);
+  }
   return usage(`Unknown config setting "${what}".`);
+}
+
+/** `forewright config notify test`: one test message to the configured phone service. Returns the exit code. */
+export async function runNotifyTest(io: { out: (s: string) => void; err: (s: string) => void } = { out: (s) => process.stdout.write(s), err: (s) => process.stderr.write(s) }, home: string = forewrightHome(), send: Parameters<typeof sendTestNotification>[2] = {}): Promise<number> {
+  const cfg = readPhoneConfig(home);
+  if (cfg === null) {
+    io.err("Phone notifications are not set up. Run: forewright config notify ntfy <topic>\n");
+    return 1;
+  }
+  try {
+    await sendTestNotification(cfg, home, send);
+  } catch (err) {
+    if (err instanceof PhoneSendError) {
+      io.err(`${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+  io.out(`Test notification sent through ${cfg.service}.\n`);
+  return 0;
 }

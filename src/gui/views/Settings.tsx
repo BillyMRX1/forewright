@@ -15,7 +15,13 @@ import type { AuthorityName, FallbackList, Group, LimitName, Mode } from "../../
 import { engineLabel } from "../../tui/toasts.js";
 import { isAgentEvent, useLive, useProject } from "../live.js";
 import { plainError } from "../Picker.js";
-import { ConfirmDialog } from "../ui.js";
+import { ConfirmDialog, writeStore } from "../ui.js";
+import { NOTIFY_MUTE_KEY, NOTIFY_TYPES, NOTIFY_TYPE_LABEL } from "../../core/notify-model.js";
+import type { NotifyType } from "../../core/notify-model.js";
+import { DESKTOP_KEY, desktopOn, enableDesktop, permissionProblem } from "../notify.js";
+import { Automations } from "../automations.js";
+import { SCHEDULE_HELP } from "../../core/schedule.js";
+import { AUTOMATION_HELP, AUTOMATION_LABEL, AUTOMATION_NAMES, automationKey } from "../../tui/automation-model.js";
 
 type SettingsData = Result<"state.settings">;
 
@@ -403,6 +409,8 @@ export interface SettingsViewProps {
   /** Plain refusal text of the last save of each key. */
   errors: Record<string, string | undefined>;
   actions: SettingsActions;
+  /** Sections that load their own data (the routines), shown last in the same scrolling column. */
+  children?: ReactNode;
 }
 
 const ROUTING_MODE_OPTIONS = [{ value: "off", label: "Off" }, { value: "auto", label: "Auto" }];
@@ -426,10 +434,10 @@ function ChecksBox({ value, onSave, error }: { value: string[]; onSave: (v: stri
   );
 }
 
-export function SettingsView({ data, errors, actions }: SettingsViewProps) {
+export function SettingsView({ data, errors, actions, children }: SettingsViewProps) {
   const { settings, providers } = data;
   const [pendingCommit, setPendingCommit] = useState(false);
-  const section = (group: Group, children: ReactNode, intro?: ReactNode) => (
+  const section = (group: Group | "Notifications", children: ReactNode, intro?: ReactNode) => (
     <section className="card card-wide set-group" aria-labelledby={`set-g-${group}`} key={group}>
       <h2 id={`set-g-${group}`}>{group}</h2>
       {intro}
@@ -589,6 +597,20 @@ export function SettingsView({ data, errors, actions }: SettingsViewProps) {
           ))}
         </>
       ), <p className="muted">{ROUTING_HELP}</p>)}
+      {data.notify ? section("Notifications", <NotifySettings notify={data.notify} onMute={(list) => void actions.save(NOTIFY_MUTE_KEY, list)} />) : null}
+      {section("Automation", AUTOMATION_NAMES.map((name) => {
+        const key = automationKey(name);
+        const label = AUTOMATION_LABEL[name];
+        const v = settings.automation[name];
+        return (
+          <Row key={key} settingKey={key} label={label} error={errors[key]}>
+            {typeof v === "boolean" ? <Switch label={label} on={v} onChange={(x) => void actions.save(key, x)} /> : null}
+            {typeof v === "number" ? <NumberField label={label} inputKey={key} value={v} onCommit={(n) => actions.save(key, n)} /> : null}
+            {typeof v === "string" ? <input type="text" className="set-number" aria-label={label} defaultValue={v} key={v} onBlur={(e) => e.target.value.trim() !== v && void actions.save(key, e.target.value.trim())} /> : null}
+          </Row>
+        );
+      }), <p className="muted">{AUTOMATION_HELP}</p>)}
+      {children}
       {pendingCommit ? (
         <ConfirmDialog
           title="Create initial commit"
@@ -602,6 +624,52 @@ export function SettingsView({ data, errors, actions }: SettingsViewProps) {
         />
       ) : null}
     </div>
+  );
+}
+
+/** The Notifications block of Settings: the browser switch, one switch per type, and the phone status. */
+function NotifySettings({ notify, onMute }: { notify: NonNullable<Result<"state.settings">["notify"]>; onMute: (list: NotifyType[]) => void }): ReactNode {
+  const [on, setOn] = useState(desktopOn);
+  const [problem, setProblem] = useState<string | null>(null);
+  const flip = (want: boolean) => {
+    if (!want) {
+      writeStore(DESKTOP_KEY, "off");
+      setOn(false);
+      return;
+    }
+    void enableDesktop().then((p) => {
+      setProblem(permissionProblem(p));
+      setOn(desktopOn());
+    });
+  };
+  const { service, lastError } = notify.phone;
+  return (
+    <>
+      <div className="set-row" data-setting-key="notify.desktop">
+        <div className="set-label">
+          <span>Browser notifications (only while this page is hidden)</span>
+        </div>
+        <div className="set-control">
+          <Switch label="Browser notifications" on={on} onChange={flip} />
+        </div>
+        {problem ? <p className="form-error" role="alert">{problem}</p> : null}
+      </div>
+      {NOTIFY_TYPES.map((t) => (
+        <div className="set-row" key={t} data-setting-key={`notify.mute.${t}`}>
+          <div className="set-label">
+            <span>{NOTIFY_TYPE_LABEL[t]}</span>
+          </div>
+          <div className="set-control">
+            <Switch label={NOTIFY_TYPE_LABEL[t]} on={!notify.mute.includes(t)} onChange={(v) => onMute(v ? notify.mute.filter((m) => m !== t) : [...notify.mute, t])} />
+          </div>
+        </div>
+      ))}
+      <p className="muted">
+        {service === null ? "Phone: off (forewright config notify)." : `Phone: ${service}.`}
+        {lastError ? ` Last delivery failed: ${lastError}` : ""}
+      </p>
+      <p className="muted">Off by default. Titles and ids only. The switches apply to this project, browser and phone.</p>
+    </>
   );
 }
 
@@ -717,7 +785,13 @@ export function Settings() {
           {problem}
         </p>
       ) : null}
-      <SettingsView data={live.data} errors={errors} actions={actions} />
+      <SettingsView data={live.data} errors={errors} actions={actions}>
+        <section className="card card-wide set-group" aria-label="Routines">
+          <h2>Routines</h2>
+          <p className="muted">{`Each routine sends its brief to the CTO on its schedule. ${SCHEDULE_HELP} One missed while the service was down runs once at start.`}</p>
+          <Automations edit />
+        </section>
+      </SettingsView>
     </>
   );
 }

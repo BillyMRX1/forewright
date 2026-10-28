@@ -50,6 +50,16 @@ function nameOf(agents: ReadonlyMap<string, string>, id: string | null): string 
 }
 
 /** The plain reason a task is blocked, shown on cards and in the detail. Waiting for another task is shown quietly. */
+/** "Automation" for work a routine, heartbeat or GitHub trigger started; "Project" (detail only) for Billy's own. */
+export function OriginBadge({ task, project }: { task: Task; project?: boolean }) {
+  if (!task.origin) return project ? <span className="chip">Project</span> : null;
+  return (
+    <span className="chip chip-accent" title={task.origin.label}>
+      Automation<span className="sr-only">: {task.origin.label}</span>
+    </span>
+  );
+}
+
 function BlockBadge({ task }: { task: Task }) {
   if (task.blockReason === null || task.state === "done" || task.state === "cancelled") return null;
   const text = plainBlockReason(task.blockReason, task.blockDetail);
@@ -78,6 +88,7 @@ function Card({ task, agents, selected, onOpen }: { task: Task; agents: Readonly
       <button type="button" className={selected ? "task-card task-selected" : "task-card"} data-task-id={task.id} aria-current={selected ? "true" : undefined} onClick={() => onOpen(task.id)}>
         <span className="task-card-head">
           <span className="mono muted">{task.shortId}</span>
+          <OriginBadge task={task} />
           <BlockBadge task={task} />
         </span>
         <span className="task-card-title">{oneLine(task.title)}</span>
@@ -144,7 +155,7 @@ export function TaskList({ tasks, agents, selectedId, onOpen, now }: PaneProps) 
               <TaskGlyph state={t.state} />
               <span className="mono muted task-row-id">{t.shortId}</span>
               <span className="task-row-title">
-                {oneLine(t.title)} <BlockBadge task={t} />
+                {oneLine(t.title)} <OriginBadge task={t} /> <BlockBadge task={t} />
               </span>
               <span className="task-row-state muted">{TASK_STATE_LABEL[t.state].toLowerCase()}</span>
               <span className="task-row-who muted">{who}</span>
@@ -264,8 +275,9 @@ export function TaskDetailView(p: TaskDetailViewProps) {
         <p className="task-status">
           <TaskGlyph state={t.state} />
           <strong>{TASK_STATE_LABEL[t.state]}</strong>
-          <span className="muted">, {who}</span>
+          <span className="muted">, {who}</span> <OriginBadge task={t} project />
         </p>
+        {t.origin ? <p className="muted">From {oneLine(t.origin.label)}{t.origin.url ? `, ${t.origin.url}` : ""}</p> : null}
         {t.branch ? (
           <p className="muted">
             Branch <code>{t.branch}</code>

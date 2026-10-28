@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
+import { DEFAULT_AUTHORITY, DEFAULT_AUTOMATION, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
 import type { Settings } from "../core/store-types.js";
 import type { ProviderCapabilities, ProviderHealth } from "../core/types.js";
 import type { Result } from "../runtime/protocol.js";
@@ -36,7 +36,7 @@ const providers = [provider("claude"), provider("codex"), provider("antigravity"
 
 function data(over: Partial<Result<"state.settings">> = {}, settings: Partial<Settings> = {}): Result<"state.settings"> {
   return {
-    settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: { cto: [], workers: [] }, workers: { engines: [] }, setup: { completedAt: null, skippedAt: null }, planOnly: false, budgets: { project: {}, agents: {} }, routing: { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } }, ...settings },
+    settings: { ...DEFAULT_LIMITS, authority: { ...DEFAULT_AUTHORITY }, fallback: { cto: [], workers: [] }, workers: { engines: [] }, setup: { completedAt: null, skippedAt: null }, planOnly: false, budgets: { project: {}, agents: {} }, routing: { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } }, automation: { ...DEFAULT_AUTOMATION }, ...settings },
     providers,
     ctoEngine: "claude",
     ctoModel: null,
@@ -60,7 +60,7 @@ const actions: SettingsActions = {
 };
 const render = (d = data(), errors: Record<string, string | undefined> = {}) => renderToStaticMarkup(<SettingsView data={d} errors={errors} actions={actions} />);
 
-const keysIn = (html: string): string[] => [...html.matchAll(/data-setting-key="([^"]+)"/g)].map((m) => m[1]!).filter((k) => !k.startsWith("budgets.") && !k.startsWith("routing."));
+const keysIn = (html: string): string[] => [...html.matchAll(/data-setting-key="([^"]+)"/g)].map((m) => m[1]!).filter((k) => !k.startsWith("budgets.") && !k.startsWith("routing.") && !k.startsWith("notify.") && !k.startsWith("heartbeat.") && !k.startsWith("triggers."));
 
 test("the web view offers exactly the setting keys of the terminal view, plus the web-only extras", () => {
   const terminal = SETTING_ITEMS.map((x) => settingKey(x.item));
@@ -271,4 +271,27 @@ test("the Routing section is off by default, shows every routing field, the pins
   assert.match(pinned, /aria-checked="true" class="set-seg-opt set-seg-on">Auto</);
   assert.match(pinned, /aria-label="Project pin: engine or engine\/model \(empty for none\)"[^>]*value="hearthwork"/);
   assert.match(pinned, /Role frontend: codex\/gpt-5/);
+});
+
+test("the Notifications section shows one switch per type with the project's mutes, and the phone status without secrets", () => {
+  assert.ok(!render().includes('id="set-g-Notifications"'), "an older service without notify data shows nothing");
+  const html = render(data({ notify: { mute: ["task_done"], phone: { service: "ntfy", lastError: "ntfy delivery failed: HTTP 500" } } }));
+  assert.ok(html.indexOf('id="set-g-Routing"') < html.indexOf('id="set-g-Notifications"'));
+  assert.match(html, /data-setting-key="notify\.desktop"/);
+  assert.match(html, /aria-checked="false"[^>]*aria-label="Finished tasks"|aria-label="Finished tasks"[^>]*aria-checked="false"/);
+  assert.match(html, /aria-checked="true"[^>]*aria-label="Decisions that need you"|aria-label="Decisions that need you"[^>]*aria-checked="true"/);
+  assert.match(html, /Phone: ntfy\./);
+  assert.match(html, /Last delivery failed: ntfy delivery failed: HTTP 500/);
+  assert.match(render(data({ notify: { mute: [], phone: { service: null, lastError: null } } })), /Phone: off/);
+});
+
+test("the Automation section is off by default: the heartbeat is a number, the triggers are switches, and the label is text", () => {
+  const html = render();
+  const row = (key: string) => html.slice(html.indexOf(`data-setting-key="${key}"`)).split('data-setting-key="')[1]!;
+  assert.ok(html.includes('id="set-g-Automation"'));
+  assert.match(row("heartbeat.hours"), /class="set-number"[^>]*value="0"/);
+  assert.match(row("triggers.githubIssues"), /role="switch" aria-checked="false"/);
+  assert.match(row("triggers.ciFailures"), /role="switch" aria-checked="false"/);
+  assert.match(row("triggers.githubLabel"), /value="forewright"/);
+  assert.match(html, /untrusted data/);
 });

@@ -6,7 +6,7 @@ import { forewrightHome, migrateLegacyHome, socketPath } from "../core/paths.js"
 import { createAdapters } from "../providers/registry.js";
 import { startDaemon } from "../runtime/daemon.js";
 import { runBridge } from "../runtime/mcp-bridge.js";
-import { runConfig } from "./config.js";
+import { runConfig, runNotifyTest } from "./config.js";
 import { runGui } from "./gui.js";
 import { queryService, runDoctor } from "./doctor.js";
 import { runReport } from "./report.js";
@@ -107,7 +107,7 @@ async function main(argv: string[]): Promise<number> {
     case "report":
       return runReport(argv.slice(1));
     case "config":
-      return runConfig(argv.slice(1));
+      return argv[1] === "notify" && argv[2] === "test" && argv.length === 3 ? runNotifyTest() : runConfig(argv.slice(1));
     case "gui":
       return runGui(argv.slice(1));
     case "service": {

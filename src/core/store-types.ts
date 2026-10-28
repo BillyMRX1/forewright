@@ -32,6 +32,18 @@ export interface Task {
   requirementKeys: string[];
   /** Kickoff catalog keys whose approved versions this task's worker is shown. */
   kickoffDocs: string[];
+  /** The automation whose CTO turn created this task (routine, heartbeat, GitHub issue, CI failure), or null for project work. */
+  origin?: TaskOrigin | null;
+}
+
+export type AutomationKind = "routine" | "heartbeat" | "github_issue" | "ci_failure";
+
+/** Where an automated task came from. `id` is the routine id, "heartbeat", the issue number or the workflow run id. */
+export interface TaskOrigin {
+  kind: AutomationKind;
+  id: string;
+  label: string;
+  url?: string;
 }
 
 export interface Agent {
@@ -409,7 +421,36 @@ export interface RouteReason {
   independence?: string;
 }
 
-export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean; budgets: BudgetSettings; routing: RoutingSettings };
+/**
+ * Automation (issues #27 and #36), all off by default. heartbeatHours 0 means no heartbeat. The GitHub triggers poll
+ * with the user's own `gh` login every few minutes while the daemon runs.
+ */
+export interface AutomationSettings {
+  heartbeatHours: number;
+  githubIssues: boolean;
+  githubLabel: string;
+  ciFailures: boolean;
+}
+
+/** Setting keys of AutomationSettings. Only a human writes them. */
+export const AUTOMATION_KEYS = { heartbeatHours: "heartbeat.hours", githubIssues: "triggers.githubIssues", githubLabel: "triggers.githubLabel", ciFailures: "triggers.ciFailures" } as const;
+export const DEFAULT_AUTOMATION: AutomationSettings = { heartbeatHours: 0, githubIssues: false, githubLabel: "forewright", ciFailures: false };
+
+/** A scheduled brief for the CTO (table routine). lastResult is "sent", "skipped: <why>" or "failed: <why>". */
+export interface Routine {
+  id: string;
+  name: string;
+  schedule: string;
+  prompt: string;
+  enabled: boolean;
+  lastRunAt: string | null;
+  lastResult: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean; budgets: BudgetSettings; routing: RoutingSettings; automation: AutomationSettings };
 
 export const DEFAULT_LIMITS: Limits = {
   maxConcurrentWorkers: 2,

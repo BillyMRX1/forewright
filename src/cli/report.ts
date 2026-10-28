@@ -18,6 +18,7 @@ Usage:
 
 Outcomes cover tasks that reached done: first-pass review rate, retries, review rounds, time, and whether you merged
 them as they were (answer the prompt in the TUI when a task is done). Task type is the role of the agent that did the work.
+Origin tells project work (from your conversations) from automation (routines, heartbeats, GitHub issues, CI failures).
 
 Engine routing (off unless you turn it on in Settings) lists each routed task: the engine, model and backend of
 every routed run, why it was chosen, whether it explored or followed a pin, whether the review was independent of
@@ -96,6 +97,7 @@ export function renderOutcomes(o: OutcomeSummary): string[] {
   out.push(...outcomeSection("By engine (who did the work)", o.byEngine));
   out.push(...outcomeSection("By model", o.byModel));
   out.push(...outcomeSection("By task type (the worker's role)", o.byType));
+  out.push(...outcomeSection("By origin (Project work, or Automation: routines, heartbeats, GitHub issues, CI failures)", o.byOrigin));
   return out;
 }
 

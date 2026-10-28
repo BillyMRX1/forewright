@@ -93,9 +93,11 @@ export interface HomeBudget {
   latestRows: number;
   /** Engine rows of the usage panel (its rule and header come on top); 0 when there is no room. It only takes rows LATEST can spare. */
   usageRows: number;
+  /** Rows of the automations panel (routines, heartbeat, triggers that are on); 0 when there is none or no room. Also taken from LATEST. */
+  automationRows: number;
 }
 
-export function homeBudget(h: number, needsCount: number, workersCount: number, usageEngines = 0): HomeBudget {
+export function homeBudget(h: number, needsCount: number, workersCount: number, usageEngines = 0, automations = 0): HomeBudget {
   const needsWanted = Math.max(1, needsCount);
   // Always leave a rule, a header and one row for the workers.
   const needsCap = Math.max(1, Math.min(4, h - 1 - 3));
@@ -131,7 +133,15 @@ export function homeBudget(h: number, needsCount: number, workersCount: number, 
       latestRows -= 2 + want;
     }
   }
-  return { needsShown, needsMore, workersShown, progressRows, latestRows, usageRows };
+  let automationRows = 0;
+  if (automations > 0 && latestRows > 0) {
+    const want = Math.min(3, automations);
+    if (latestRows - (2 + want) >= 4) {
+      automationRows = want;
+      latestRows -= 2 + want;
+    }
+  }
+  return { needsShown, needsMore, workersShown, progressRows, latestRows, usageRows, automationRows };
 }
 
 export interface UsageLine {

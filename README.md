@@ -122,6 +122,24 @@ forewright config gui autostart on                           start the GUI whene
 
 A new port applies the next time the service starts; allowed host names apply at once. If the port is busy, `forewright gui` says so; pick another one with `forewright config gui port <n>`.
 
+## Notifications
+
+Off by default. Forewright can tell you when something needs you, on your phone and in the browser. A notification has a short title and ids only (never code, diffs, prompts or secrets), and each item notifies once. The types: a decision waits in the Inbox, a PRD revision waits for approval, a task is done, a task is blocked or ran out of retries, and a usage limit or budget hold started. Mute single types per project in Settings, Notifications (it applies to both).
+
+Phone (ntfy, Telegram or Pushover), set up once for your user in `config.json` (kept private to you):
+
+```
+forewright config notify ntfy <topic> [--server https://ntfy.example.org] [--token <access token>]
+forewright config notify telegram <botToken> <chatId>
+forewright config notify pushover <appToken> <userKey>
+forewright config notify test       send one test message
+forewright config notify --clear    turn it off
+```
+
+Messages go out over HTTPS through your proxy and certificate settings, with at most 20 per hour per project (the rest collapse into one "N more updates"). The GUI never sees the secrets, and `forewright config` shows them masked. A failed delivery is logged and shown in Settings. Treat an ntfy topic like a password: anyone who knows it can read your notifications.
+
+Browser: turn it on in Settings, Notifications. That click is when the browser asks for permission. A notification shows only while the page is hidden, and clicking it opens the item. Browsers allow notifications only on a secure page: `localhost` through the SSH tunnel works, plain http on another host does not. A link such as `/#/inbox/<decision id>` opens the Inbox on that item.
+
 ## Running on a Linux server
 
 Forewright runs on a Linux machine you reach over SSH, for one user. The terminal UI works over SSH, and the GUI works from your laptop or phone through a tunnel (see "Using the GUI from your laptop or phone").

@@ -34,6 +34,8 @@ export interface DaemonOptions {
   defaultCtoEngine?: EngineId;
   /** For tests: the folder the GUI bridge serves the web app from. */
   guiStaticDir?: string;
+  /** For tests: the GitHub CLI the triggers run (default gh on PATH). */
+  ghBinary?: string;
 }
 
 interface LockRecord {
@@ -90,6 +92,7 @@ export class Daemon {
       socketPath: this.socketPath,
       watchdogMs: opts.watchdogMs ?? 15_000,
       defaultCtoEngine: opts.defaultCtoEngine ?? "claude",
+      ...(opts.ghBinary ? { ghBinary: opts.ghBinary } : {}),
       connectedClients: () => [...this.server.connections].filter((c) => c.kind === "client").length,
     };
     this.api = new ClientApi(this);

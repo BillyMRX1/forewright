@@ -35,6 +35,8 @@ export interface TaskOutcome {
   /** Billy's answer: null when never asked or skipped. */
   mergedAsIs: boolean | null;
   fixMinutes: number | null;
+  /** "Project" for work from Billy's conversations, else "Automation (<kind>)" for work an automation started. */
+  origin: string;
 }
 
 export interface OutcomeGroup {
@@ -64,6 +66,8 @@ export interface OutcomeSummary {
   byModel: OutcomeGroup[];
   /** By the worker's role; tasks have no type of their own. */
   byType: OutcomeGroup[];
+  /** Project work against automated work (routines, heartbeats, GitHub issues, CI failures). */
+  byOrigin: OutcomeGroup[];
   tasks: TaskOutcome[];
 }
 
@@ -99,9 +103,10 @@ function groupBy(tasks: TaskOutcome[], keyOf: (t: TaskOutcome) => string): Outco
 /** Tasks that reached done since `sinceIso` (all projects in the database), with everything derived about them. */
 export function readTaskOutcomes(db: Db, sinceIso: string): TaskOutcome[] {
   const hasAnswers = db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'task_outcome'").get() !== undefined;
+  const hasOrigin = (db.prepare("PRAGMA table_info(task)").all() as Row[]).some((c) => c["name"] === "origin");
   const tasks = db
     .prepare(
-      `SELECT t.id AS id, t.project_id AS project_id, p.name AS project_name, t.short_id AS short_id, t.title AS title, t.created_at AS created_at,
+      `SELECT t.id AS id, ${hasOrigin ? "t.origin" : "NULL"} AS origin, t.project_id AS project_id, p.name AS project_name, t.short_id AS short_id, t.title AS title, t.created_at AS created_at,
               COALESCE((SELECT MAX(e.at) FROM event e WHERE e.entity_kind = 'task' AND e.entity_id = t.id AND e.type = 'task.completed'), t.updated_at) AS done_at
          FROM task t JOIN project p ON p.id = t.project_id
         WHERE t.state = 'done'
@@ -148,9 +153,19 @@ export function readTaskOutcomes(db: Db, sinceIso: string): TaskOutcome[] {
       minutes: Math.max(0, Math.round((new Date(doneAt).getTime() - new Date(startedAt).getTime()) / 60_000)),
       mergedAsIs: answer ? answer["merged_as_is"] === 1 : null,
       fixMinutes: answer ? ((answer["fix_minutes"] as number | null) ?? null) : null,
+      origin: originWords(t["origin"] as string | null),
     });
   }
   return out;
+}
+
+const ORIGIN_WORDS: Record<string, string> = { routine: "routine", heartbeat: "heartbeat", github_issue: "GitHub issue", ci_failure: "CI failure" };
+
+/** "Project", or "Automation (GitHub issue)" and so on, from a task's origin column. */
+export function originWords(json: string | null): string {
+  if (!json) return "Project";
+  const kind = (JSON.parse(json) as { kind?: string }).kind ?? "";
+  return `Automation (${ORIGIN_WORDS[kind] ?? kind})`;
 }
 
 /** Outcome figures for tasks that reached done in the last `days` local days (today included). */
@@ -164,6 +179,7 @@ export function summarizeOutcomes(tasks: TaskOutcome[], opts: { now: Date; days:
     byEngine: groupBy(inWindow, (t) => t.workerEngine ?? "unknown"),
     byModel: groupBy(inWindow, (t) => t.workerModel ?? "default"),
     byType: groupBy(inWindow, (t) => t.type ?? "all"),
+    byOrigin: groupBy(inWindow, (t) => t.origin),
     tasks: inWindow,
   };
 }

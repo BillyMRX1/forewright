@@ -942,6 +942,26 @@ describe("Kickoff pack", () => {
     assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "routing.pin.project", value: { engine: "codex", model: "gpt-5" } });
   });
 
+  it("Automation: everything off by default, enter switches a trigger, and the heartbeat takes a number of hours", async () => {
+    const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
+    for (let i = 0; i < 6; i++) await tab(h); // Automation
+    const f = h.frame();
+    assert.match(f, /AUTOMATION/);
+    assert.match(f, /▸ Heartbeat: hours between CTO check-ins \(0 is off\)\s+0/);
+    assert.match(f, /Brief the CTO on open GitHub issues with the label\s+off/);
+    assert.match(f, /GitHub label that hands an issue to Forewright\s+forewright/);
+    assert.match(f, /Brief the CTO when CI fails on the default branch\s+off/);
+    await enter(h);
+    await h.send("3");
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "heartbeat.hours", value: 3 });
+    await down(h);
+    await enter(h);
+    await h.settle(150);
+    assert.deepEqual(api.callsTo("settings.set").at(-1)?.params, { projectId: "p1", key: "triggers.githubIssues", value: true });
+  });
+
   it("Settings switches plan-only mode, and the top bar shows PLAN ONLY while it is on", async () => {
     const { h, api } = await mount({ cols: 140, rows: 40, view: VIEW.settings });
     await tab(h);

@@ -320,6 +320,7 @@ export function TasksView() {
         <Text wrap="truncate-end">
           <Text dimColor>{"Tasks > "}</Text>
           <Text bold>{`${selected.shortId} ${oneLine(selected.title)}`}</Text>
+          {selected.origin ? <Text dimColor>{`  auto: ${oneLine(selected.origin.label)}`}</Text> : null}
         </Text>
       </Box>
     );
@@ -433,7 +434,7 @@ export function TasksView() {
           const segs: Seg[] = [
             showWord ? chip : { text: `${taskGlyph(t.state)} `, ...(chip.color ? { color: chip.color } : {}) },
             { text: fit(t.shortId, 6), dim: true },
-            { text: fit(`${t.blockReason && t.blockReason !== "dependency" ? "! " : ""}${clip(oneLine(t.title), titleW)}`, titleW), ...(t.blockReason && t.blockReason !== "dependency" ? { color: palette.attention } : {}) },
+            { text: fit(`${t.blockReason && t.blockReason !== "dependency" ? "! " : ""}${t.origin ? "auto " : ""}${clip(oneLine(t.title), titleW)}`, titleW), ...(t.blockReason && t.blockReason !== "dependency" ? { color: palette.attention } : {}) },
             ...(showWho ? [{ text: ` ${fit(clip(nameOf(t.assigneeAgentId), 8), 8)}`, dim: true }] : []),
             ...(showAge ? [{ text: ` ${shortAge(t.updatedAt).padStart(4)}`, dim: true }] : []),
           ];
@@ -463,7 +464,7 @@ export function TasksView() {
               {list.slice(start, end).map((t) => {
                 const on = t.id === selected?.id;
                 const textW = colW - 1;
-                const head: DLine = { text: fit(`${t.shortId}${t.blockReason && t.blockReason !== "dependency" ? " !" : ""}`, textW), ...(on && ctx.focus === "main" ? { bar: true } : on ? { bold: true } : { bold: true }) };
+                const head: DLine = { text: fit(`${t.shortId}${t.blockReason && t.blockReason !== "dependency" ? " !" : ""}${t.origin ? " auto" : ""}`, textW), ...(on && ctx.focus === "main" ? { bar: true } : on ? { bold: true } : { bold: true }) };
                 const bodyLine: DLine = { text: fit(oneLine(t.title), textW), ...(on && ctx.focus === "main" ? { bar: true } : on ? {} : { dim: true }) };
                 return (
                   <Box key={t.id} flexDirection="column" height={3} flexShrink={0}>

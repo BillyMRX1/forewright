@@ -17,6 +17,7 @@ import type { DisplayStatus } from "../../tui/theme.js";
 import { anyEvent, isUsageEvent, useLive, useNeeds, useProject } from "../live.js";
 import type { Snapshot } from "../live.js";
 import { PrdReader } from "../prd.js";
+import { Automations } from "../automations.js";
 import { StopRunDialog } from "../runcontrols.js";
 import { RunLogModal } from "../runlog.js";
 import type { ViewId } from "../Shell.js";
@@ -108,7 +109,7 @@ function Glyph({ status }: { status: DisplayStatus }) {
   );
 }
 
-export function HomeView({ data, now, actions }: { data: HomeData; now: number; actions: HomeActions }) {
+export function HomeView({ data, now, actions, automations }: { data: HomeData; now: number; actions: HomeActions; /** The Automations card's content (loaded by the connected view). */ automations?: ReactNode }) {
   const { snapshot: snap, runtime } = data;
   const progress = taskProgress(snap.tasks);
   const status = projectStatus(runtime);
@@ -295,6 +296,12 @@ export function HomeView({ data, now, actions }: { data: HomeData; now: number; 
           <p className="muted">Cost is an estimate, not a bill.</p>
         </Card>
 
+        {automations ? (
+          <Card title="Automations" className="card-wide">
+            {automations}
+          </Card>
+        ) : null}
+
         <Card title="Live events" className="card-wide">
           {events === null ? (
             <p className="muted">Loading events.</p>
@@ -364,6 +371,7 @@ export function Home(): ReactNode {
         data={{ name, runtime, snapshot: snap, needRows: needs.rows, usage: usage.data, budgets: budgets.data, events: events.data, error }}
         now={now}
         actions={{ go, openPicker, readPrd: () => setReading(true), openRun: (runId, label) => setViewRun({ runId, label }), stopRun: setStopRunId }}
+        automations={<Automations />}
       />
       {viewRun ? <RunLogModal runId={viewRun.runId} title={`Run output, ${viewRun.label}`} onClose={() => setViewRun(null)} /> : null}
       {stopRunId ? <StopRunDialog runId={stopRunId} onClose={() => setStopRunId(null)} /> : null}

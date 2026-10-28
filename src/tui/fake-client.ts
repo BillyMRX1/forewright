@@ -1,12 +1,13 @@
 // In-memory ClientApi for view tests. Records every call so tests can assert on them.
 
 import { ClientError, type ClientApi, type ConnectionState, type Subscription } from "./client.js";
-import type { EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
+import type { AutomationsView, EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
 import type { BudgetScopeStatus } from "../core/budgets.js";
-import type { Agent, Authority, BudgetSettings, RoutingSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
-import { DEFAULT_AUTHORITY, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
+import type { Agent, Authority, AutomationSettings, BudgetSettings, RoutingSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
+import { DEFAULT_AUTHORITY, DEFAULT_AUTOMATION, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
 import { TASK_STATES, type EngineId, type TaskState } from "../core/types.js";
 import { DEFAULT_PRICES, summarizeUsage, type UsageRow } from "../core/usage.js";
+import { automationRows } from "../runtime/automation-rows.js";
 
 /** The moment everything in the fake project happened: four minutes ago, so ages and elapsed times read like a live project. */
 const NOW = new Date(Date.now() - 4 * 60_000).toISOString();
@@ -237,6 +238,14 @@ export class FakeClient implements ClientApi {
   budgets: BudgetSettings = { project: {}, agents: {} };
   /** Engine routing as state.settings reports it. Changed by settings.set (routing.*). */
   routing: RoutingSettings = { ...DEFAULT_ROUTING, pins: { project: null, roles: {}, tasks: {} } };
+  /** Automation settings as state.settings reports them. Changed by settings.set (heartbeat.hours, triggers.*). */
+  automation: AutomationSettings = { ...DEFAULT_AUTOMATION };
+  /** What routines.list returns (nothing set up by default). */
+  automations: Omit<AutomationsView, "rows"> = {
+    routines: [],
+    heartbeat: { hours: 0, lastAt: null, lastResult: null, nextAt: null },
+    triggers: { repo: null, label: "forewright", githubIssues: { enabled: false, lastPollAt: null, lastError: null, handled: 0 }, ciFailures: { enabled: false, lastPollAt: null, lastError: null, handled: 0 } },
+  };
   /** Holds the runtime status reports. */
   budgetHolds: RuntimeStatus["budgetHolds"] = [];
   /** What state.budgets returns. */
@@ -280,7 +289,7 @@ export class FakeClient implements ClientApi {
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
 
   settings(): Settings {
-    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly, budgets: this.budgets, routing: this.routing };
+    return { ...DEFAULT_LIMITS, authority: { ...this.authority }, fallback: this.fallback, workers: { engines: this.workersEngines }, setup: { ...this.setup }, planOnly: this.planOnly, budgets: this.budgets, routing: this.routing, automation: this.automation };
   }
 
   runtime(): RuntimeStatus {
@@ -468,10 +477,16 @@ export class FakeClient implements ClientApi {
           if (p["key"] === "routing.explore") this.routing = { ...this.routing, explore: p["value"] as number };
           if (p["key"] === "routing.localRetries") this.routing = { ...this.routing, localRetries: p["value"] as number };
           if (p["key"] === "routing.pin.project") this.routing = { ...this.routing, pins: { ...this.routing.pins, project: (p["value"] as FallbackEntry | null) ?? null } };
+          if (p["key"] === "heartbeat.hours") this.automation = { ...this.automation, heartbeatHours: p["value"] as number };
+          if (p["key"] === "triggers.githubIssues") this.automation = { ...this.automation, githubIssues: p["value"] === true };
+          if (p["key"] === "triggers.ciFailures") this.automation = { ...this.automation, ciFailures: p["value"] === true };
+          if (p["key"] === "triggers.githubLabel") this.automation = { ...this.automation, githubLabel: p["value"] as string };
           if (p["key"] === "ctoEngine") this.ctoEngine = p["value"] as string;
           if (p["key"] === "ctoModel") this.ctoModel = p["value"] as string | null;
           if (typeof p["key"] === "string" && p["key"].startsWith("authority.")) this.authority = { ...this.authority, [p["key"].slice("authority.".length)]: p["value"] };
           return { settings: this.settings() };
+        case "routines.list":
+          return { ...this.automations, rows: automationRows(this.automations) };
         case "agents.update":
           return { agent: d.agents[0] };
         case "agents.memory": {

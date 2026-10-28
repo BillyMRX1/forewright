@@ -58,6 +58,8 @@ export interface HarnessOptions {
   extraAdapters?: ProviderAdapter[];
   /** Engine of a new project's CTO (default "fake"). */
   defaultCtoEngine?: EngineId;
+  /** The GitHub CLI the triggers run: a fake for trigger tests. */
+  ghBinary?: string;
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -73,6 +75,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     defaultCtoEngine: opts.defaultCtoEngine ?? "fake",
     watchdogMs: opts.watchdogMs ?? 60_000,
     ...(opts.clock ? { clock: opts.clock } : {}),
+    ...(opts.ghBinary ? { ghBinary: opts.ghBinary } : {}),
   });
   const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
   let open = await client.request("projects.open", { cwd: repo });

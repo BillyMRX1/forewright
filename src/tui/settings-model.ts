@@ -16,7 +16,7 @@ export type LimitName = keyof typeof DEFAULT_LIMITS;
 export const AUTH_NAMES = Object.keys(DEFAULT_AUTHORITY) as AuthorityName[];
 export const LIMIT_NAMES = Object.keys(DEFAULT_LIMITS) as LimitName[];
 
-export const GROUPS = ["Engines", "Backups", "Control", "Limits", "Budgets", "Routing"] as const;
+export const GROUPS = ["Engines", "Backups", "Control", "Limits", "Budgets", "Routing", "Automation"] as const;
 export type Group = (typeof GROUPS)[number];
 
 /** A setting both UIs show, as the terminal UI's cursor visits them. */

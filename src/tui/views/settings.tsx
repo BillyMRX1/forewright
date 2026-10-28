@@ -11,10 +11,11 @@ import { localStatusWords } from "../../core/local-format.js";
 import { borderStyle, palette, sym } from "../theme.js";
 import { engineLabel } from "../toasts.js";
 import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, GROUPS, LOCAL_NOTICE, MODES, REPOSITORY_HELP, SETTING_ITEMS, fallbackWords, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, withLimit, ROUTING_HELP, ROUTING_ITEMS, ROUTING_LABEL, otherPinLines, parsePinInput, pinWords, routingKey, type BudgetItem, type FallbackList, type Group, type RoutingItem, type SettingItem } from "../settings-model.js";
+import { AUTOMATION_HELP, AUTOMATION_LABEL, AUTOMATION_NAMES, automationKey, type AutomationName } from "../automation-model.js";
 
 export { GROUPS, LOCAL_NOTICE, fallbackWords };
 
-type Item = SettingItem | BudgetItem | RoutingItem | { kind: "setup" } | { kind: "initial-commit" };
+type Item = SettingItem | BudgetItem | RoutingItem | { kind: "automation"; name: AutomationName } | { kind: "setup" } | { kind: "initial-commit" };
 
 /** Every item with the group it lives in, in the order the cursor visits them. */
 const ITEMS: Array<{ group: Group; item: Item }> = [...SETTING_ITEMS.slice(0, 2), { group: "Engines", item: { kind: "setup" } }, ...SETTING_ITEMS.slice(2)];
@@ -90,7 +91,8 @@ export function SettingsView() {
   const noCommits = data.data?.hasCommits === false;
   const budgetRows = budgetItems("Project", (team.data?.agents ?? []).filter((a) => !a.retiredAt)).map((item) => ({ group: "Budgets" as const, item: item as Item }));
   const routingRows = ROUTING_ITEMS.map((item) => ({ group: "Routing" as const, item: item as Item }));
-  const items = [...(noCommits ? [{ group: "Engines" as const, item: { kind: "initial-commit" } as Item }] : []), ...ITEMS, ...budgetRows, ...routingRows];
+  const automationItems = AUTOMATION_NAMES.map((name) => ({ group: "Automation" as const, item: { kind: "automation", name } as Item }));
+  const items = [...(noCommits ? [{ group: "Engines" as const, item: { kind: "initial-commit" } as Item }] : []), ...ITEMS, ...budgetRows, ...routingRows, ...automationItems];
   // The commit action leads the list while it exists; keep the cursor on the same item when it goes.
   const hadAction = useRef(false);
   useEffect(() => {
@@ -116,6 +118,7 @@ export function SettingsView() {
       return it.name === "mode" ? r.mode : it.name === "localFirst" ? r.localFirst : it.name === "explore" ? r.explore : it.name === "localRetries" ? r.localRetries : pinWords(r.pins.project);
     }
     if (it.kind === "budget") return (it.agentId === null ? s.budgets.project : s.budgets.agents[it.agentId])?.[it.limit] ?? "no limit";
+    if (it.kind === "automation") return s.automation[it.name];
     if (it.kind === "authority") return s.authority[it.name];
     if (it.kind === "fallback") return fallbackWords(fb[it.list]);
     return s[it.name];
@@ -229,6 +232,15 @@ export function SettingsView() {
       }
       return;
     }
+    if (it.kind === "automation") {
+      const v = value(it);
+      if (typeof v === "boolean") void set(automationKey(it.name), !v);
+      else if (fromEnter) {
+        setText(String(v));
+        setEditing(true);
+      }
+      return;
+    }
     if (it.kind === "routing") {
       const r = data.data.settings.routing;
       if (it.name === "mode") void set(routingKey(it), r.mode === "off" ? "auto" : "off");
@@ -261,6 +273,19 @@ export function SettingsView() {
       void set(budgetKey(it), withLimit(current, it.limit, parsed.value));
       return;
     }
+    if (it.kind === "automation") {
+      if (it.name === "githubLabel") {
+        if (raw.trim() === "") return ctx.fail({ plain: "Enter a GitHub label name.", detail: "the label is empty" });
+        setEditing(false);
+        void set(automationKey(it.name), raw.trim());
+        return;
+      }
+      const n = Number(raw.trim());
+      if (raw.trim() === "" || !Number.isInteger(n)) return ctx.fail({ plain: "Enter a whole number of hours, 0 for off.", detail: `"${raw}" is not a whole number` });
+      setEditing(false);
+      void set(automationKey(it.name), n);
+      return;
+    }
     if (it.kind === "routing") {
       if (it.name === "pinProject") {
         const pin = parsePinInput(raw);
@@ -282,7 +307,7 @@ export function SettingsView() {
     void set(it.kind === "authority" ? `authority.${it.name}` : it.name, n);
   };
 
-  const editLabel = (it: Item | undefined): string => (it?.kind === "limit" || it?.kind === "authority" ? it.name : it?.kind === "budget" ? `${budgetLabel(it)} (empty for no limit)` : it?.kind === "routing" ? ROUTING_LABEL[it.name] : "");
+  const editLabel = (it: Item | undefined): string => (it?.kind === "limit" || it?.kind === "authority" ? it.name : it?.kind === "budget" ? `${budgetLabel(it)} (empty for no limit)` : it?.kind === "routing" ? ROUTING_LABEL[it.name] : it?.kind === "automation" ? AUTOMATION_LABEL[it.name] : "");
 
   const group = items[Math.min(sel, items.length - 1)]!.group;
   const moveGroup = (dir: 1 | -1) => {
@@ -313,7 +338,7 @@ export function SettingsView() {
   let selLine = 0;
   const heading = (t: string) => lines.push({ text: t.toUpperCase(), bold: true, dim: true });
   const itemsOfGroup = items.map((x, i) => ({ ...x, i })).filter((x) => x.group === group);
-  const labelOf = (it: Item) => (it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "budget" ? budgetLabel(it) : it.kind === "routing" ? ROUTING_LABEL[it.name] : itemLabel(it));
+  const labelOf = (it: Item) => (it.kind === "setup" ? "Setup" : it.kind === "initial-commit" ? "Initial commit" : it.kind === "budget" ? budgetLabel(it) : it.kind === "routing" ? ROUTING_LABEL[it.name] : it.kind === "automation" ? AUTOMATION_LABEL[it.name] : itemLabel(it));
   const labelW = Math.min(Math.max(...itemsOfGroup.map((x) => [...labelOf(x.item)].length)), Math.max(12, Math.floor(inner * 0.6)));
   const pushItem = (it: Item, i: number) => {
     const name = labelOf(it);
@@ -360,6 +385,11 @@ export function SettingsView() {
     heading("Engine routing");
     for (const l of wrapText(ROUTING_HELP, inner)) lines.push({ text: l, dim: true });
     for (const p of otherPinLines(data.data.settings.routing.pins)) lines.push({ text: `  ${p}`, dim: true });
+    lines.push({ text: "" });
+  } else if (group === "Automation") {
+    heading("Automation");
+    for (const l of wrapText(AUTOMATION_HELP, inner)) lines.push({ text: l, dim: true });
+    lines.push({ text: "  Routines are listed on the overview and edited in the web app's Settings.", dim: true });
     lines.push({ text: "" });
   } else heading("Limits");
   for (const x of itemsOfGroup) if (x.item.kind !== "initial-commit") pushItem(x.item, x.i);

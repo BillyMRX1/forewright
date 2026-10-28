@@ -19,6 +19,7 @@ import { Team } from "./views/Team.js";
 import { Settings } from "./views/Settings.js";
 import { Kickoff } from "./views/Kickoff.js";
 import { RunControls } from "./runcontrols.js";
+import { DesktopNotifier } from "./notify.js";
 
 export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "kickoff" | "settings";
 
@@ -385,6 +386,7 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
       </div>
       <HintBar hints={showPicker ? ["Enter open the folder", "Tab next field"] : HINTS[view]} />
       <Toasts toasts={toasts} />
+      {projectValue ? <DesktopNotifier /> : null}
     </div>
   );
   if (!projectValue) return frame;
