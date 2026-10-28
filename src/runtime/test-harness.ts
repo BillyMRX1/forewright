@@ -1,13 +1,13 @@
 // Shared by runtime tests only: a real daemon on a temp socket, a real git repo,
 // the fake adapter (real child processes) and an RPC client.
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { type Clock, systemClock } from "../core/clock.js";
 import { tempDir } from "../core/test-helpers.js";
 import type { EngineId, ProviderAdapter, RunRequest } from "../core/types.js";
 import { after, beforeEach } from "node:test";
-import { defaultTreeBackend, setSpawnObserver, terminateGroup, treeGone } from "../providers/process.js";
+import { defaultTreeBackend, setSpawnObserver, terminateGroup, treeGone, type TreeBackend } from "../providers/process.js";
 import type { OwnedProcess } from "../core/types.js";
 import { FakeAdapter, type FakeRule, type FakeScript } from "../providers/fake.js";
 import { RpcClient } from "./client.js";
@@ -247,6 +247,18 @@ interface TrackedTree {
   test: string;
   /** Started by the test itself rather than by the runtime. */
   external: boolean;
+  /** The handle of a runtime-spawned root; absent for trees the test spawned itself. */
+  child?: ChildProcess;
+}
+
+/**
+ * Whether a tracked tree is still running. On Windows pids are reused quickly, so once the root's handle says it
+ * exited, its pid may belong to an unrelated process and must never be checked or killed (a tree whose root
+ * still runs is still caught). POSIX asks the group, which is not subject to that.
+ */
+export function trackedTreeAlive(t: { proc: OwnedProcess; child?: Pick<ChildProcess, "exitCode" | "signalCode"> }, backend: TreeBackend, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform === "win32" && t.child && (t.child.exitCode !== null || t.child.signalCode !== null)) return false;
+  return backend.alive(t.proc);
 }
 
 const trackedTrees: TrackedTree[] = [];
@@ -258,8 +270,8 @@ beforeEach((t) => {
   currentTest = t.name;
 });
 
-setSpawnObserver((proc) => {
-  trackedTrees.push({ proc, test: currentTest, external: false });
+setSpawnObserver((proc, child) => {
+  trackedTrees.push({ proc, test: currentTest, external: false, child });
 });
 
 export function trackDaemon<T extends Daemon>(d: T): T {
@@ -304,9 +316,9 @@ export async function reapTrackedTrees(): Promise<string[]> {
   // asynchronously and keeps reporting the pid alive for a moment. Give every tree a short grace to exit by
   // itself; only one still alive after that is a leak (a real leak never exits, so it is still caught).
   const graceUntil = Date.now() + (process.platform === "win32" ? 5000 : 1000);
-  while (trackedTrees.some((t) => backend.alive(t.proc)) && Date.now() < graceUntil) await sleep(100);
+  while (trackedTrees.some((t) => trackedTreeAlive(t, backend)) && Date.now() < graceUntil) await sleep(100);
   for (const t of trackedTrees.splice(0)) {
-    if (!backend.alive(t.proc)) continue;
+    if (!trackedTreeAlive(t, backend)) continue;
     let ended = "ended";
     try {
       await terminateGroup(t.proc, 300, backend);

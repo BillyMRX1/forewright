@@ -273,7 +273,7 @@ export class ClientApi {
           sender: HUMAN,
           body,
           recipients,
-          changesProductBehavior: channel !== "project",
+          changesProductBehavior: channel === "task",
         });
         rt.scheduler.wake("human_message");
         return { messageId: r.id, woke: r.recipients };

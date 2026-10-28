@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { test } from "node:test";
 import { pidAlive } from "../providers/process.js";
-import { reapTrackedTrees, trackProcess, waitFor } from "./test-harness.js";
+import type { TreeBackend } from "../providers/process.js";
+import { reapTrackedTrees, trackedTreeAlive, trackProcess, waitFor } from "./test-harness.js";
 
 test("a tree still alive at the end of a file is killed and reported with its pid and the test that started it; a finished one is not", async () => {
   const win = process.platform === "win32";
@@ -17,4 +18,13 @@ test("a tree still alive at the end of a file is killed and reported with its pi
   assert.match(report[0] ?? "", new RegExp(`pid ${leaked.pid}\\b.*test-spawned.*started by test "a tree still alive`));
   await waitFor(() => !pidAlive(leaked.pid!), "the leaked process to be gone", 3000);
   assert.deepEqual(await reapTrackedTrees(), [], "nothing is reported twice");
+});
+
+test("on Windows a tree whose root has exited is never reported alive, since its pid may belong to someone else", () => {
+  const backend: TreeBackend = { name: "windows-tree", alive: () => true, signal: () => {} };
+  const proc = { pid: 1, pgid: 1, startedAt: "", command: "x" };
+  const exited = { exitCode: 0, signalCode: null };
+  assert.equal(trackedTreeAlive({ proc, child: exited }, backend, "win32"), false);
+  assert.equal(trackedTreeAlive({ proc, child: exited }, backend, "linux"), true);
+  assert.equal(trackedTreeAlive({ proc, child: { exitCode: null, signalCode: null } }, backend, "win32"), true);
 });
