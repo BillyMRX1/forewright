@@ -38,6 +38,12 @@ test("the built web app has its four files and index.html has no inline script o
   assert.doesNotMatch(html, /\sstyle=/);
   assert.doesNotMatch(html, /\son[a-z]+=/i);
   assert.doesNotMatch(html, /https?:\/\//, "no external resources");
-  // react-dom alone is about 200 KB minified; the cap catches a heavy dependency slipping in, not normal growth of the views.
-  assert.ok(statSync(path.join(distDir, "app.js")).size < 400 * 1024, "the bundle stays under 400 KB");
+  // react-dom alone is about 200 KB minified; the caps catch a heavy dependency slipping in, not normal growth of the views,
+  // which load as separate chunks on first visit.
+  assert.ok(statSync(path.join(distDir, "app.js")).size < 300 * 1024, "the first-load bundle stays under 300 KB");
+  const chunks = readdirSync(path.join(distDir, "chunks"));
+  assert.ok(chunks.some((f) => f.startsWith("Home-")), "the views are split into chunks");
+  for (const f of chunks) assert.match(f, /^[A-Za-z0-9_-]+\.js$/, "chunk names match what the web bridge serves");
+  const total = chunks.reduce((n, f) => n + statSync(path.join(distDir, "chunks", f)).size, statSync(path.join(distDir, "app.js")).size);
+  assert.ok(total < 600 * 1024, "the whole web app stays under 600 KB");
 });

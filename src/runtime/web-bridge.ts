@@ -46,6 +46,9 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/favicon.svg": { file: "favicon.svg", type: "image/svg+xml" },
 };
 
+// The lazily loaded views: one flat directory of esbuild chunk names, nothing else.
+const CHUNK_PATH = /^\/chunks\/[A-Za-z0-9_-]+\.js$/;
+
 // Rate limit on wrong tokens: after this many failed hellos within the window, upgrades are refused for one window.
 const FAIL_LIMIT = 10;
 const FAIL_WINDOW_MS = 60_000;
@@ -240,7 +243,11 @@ export class WebBridge {
     } catch {
       pathname = "";
     }
-    const entry = Object.hasOwn(STATIC_FILES, pathname) ? STATIC_FILES[pathname] : undefined;
+    const entry = Object.hasOwn(STATIC_FILES, pathname)
+      ? STATIC_FILES[pathname]
+      : CHUNK_PATH.test(pathname)
+        ? { file: pathname.slice(1), type: "text/javascript; charset=utf-8" }
+        : undefined;
     if (!entry) {
       this.send(res, 404, "Not found.\n");
       return;
@@ -250,6 +257,10 @@ export class WebBridge {
       body = await readFile(path.join(this.staticDir, entry.file));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      if (entry.file.startsWith("chunks/")) {
+        this.send(res, 404, "Not found.\n");
+        return;
+      }
       this.send(res, 503, "The Forewright web app is not built yet. Build it with pnpm build, then reload this page.\n");
       return;
     }
