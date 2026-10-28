@@ -75,6 +75,24 @@ test("a mention in #general wakes only the mentioned agent, who answers in a thr
   }
 });
 
+test("Billy's DM to a worker does not also go to the CTO unless it mentions the CTO by name", async () => {
+  const adapter = new FakeAdapter({ defaultScript: { outcome: "succeeded", finalText: "ok" } });
+  const h = await startHarness({ adapter });
+  try {
+    const ada = hire(h, "Ada");
+    const cto = h.rt.ctoAgent();
+    h.rt.store.setPaused(true, HUMAN); // a paused project starts no turns, so nothing consumes the deliveries before they are checked
+    const plain = await h.client.request("chat.send", { projectId: h.projectId, channel: "direct", toAgentIds: [ada.id], body: "Are you free?" });
+    assert.deepEqual(plain.woke, [ada.id], "only the worker");
+    assert.ok(!h.rt.store.pendingDeliveries(cto.id).some((m) => m.id === plain.messageId), "the CTO has nothing pending for it");
+    const named = await h.client.request("chat.send", { projectId: h.projectId, channel: "direct", toAgentIds: [ada.id], body: `@${cto.name} please look at this too` });
+    assert.ok(named.woke.includes(ada.id) && named.woke.includes(cto.id), "a mention of the CTO still reaches it");
+    assert.ok(h.rt.store.pendingDeliveries(cto.id).some((m) => m.id === named.messageId), "and it is pending for the CTO");
+  } finally {
+    await h.close();
+  }
+});
+
 test("a thread reply stays in its thread, and the CTO answers a threaded message in that thread", async () => {
   const adapter = new FakeAdapter({ defaultScript: { outcome: "succeeded", finalText: "CTO answer." } });
   const h = await startHarness({ adapter });

@@ -255,10 +255,11 @@ async function processGroupId(pid: number): Promise<string> {
 
 /**
  * Test seam: told about every child the moment it has a pid, before its identity is read, so a test harness
- * can find and end a tree even when spawnOwned later fails. Never set outside tests.
+ * can find and end a tree even when spawnOwned later fails. It also gets the child handle, so a harness can tell
+ * from the handle (not the reusable pid) that the root has exited. Never set outside tests.
  */
-let spawnObserver: ((owned: OwnedProcess) => void) | null = null;
-export function setSpawnObserver(fn: ((owned: OwnedProcess) => void) | null): void {
+let spawnObserver: ((owned: OwnedProcess, child: ChildProcess) => void) | null = null;
+export function setSpawnObserver(fn: ((owned: OwnedProcess, child: ChildProcess) => void) | null): void {
   spawnObserver = fn;
 }
 
@@ -338,7 +339,7 @@ export async function spawnOwned(
   });
   const pid = child.pid;
   if (pid === undefined) throw new SpawnError(`Spawned ${bin} without a pid`, { bin });
-  spawnObserver?.({ pid, pgid: pid, startedAt: "", command: [bin, ...args].join(" ").slice(0, 500) });
+  spawnObserver?.({ pid, pgid: pid, startedAt: "", command: [bin, ...args].join(" ").slice(0, 500) }, child);
   if (opts.stdin !== "ignore" && child.stdin) {
     child.stdin.on("error", () => {
       // EPIPE when the child exits before reading; the exit status reports the real failure.
