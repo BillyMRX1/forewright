@@ -27,6 +27,10 @@ function staticDir(withFiles = true): string {
     writeFileSync(path.join(dir, "app.js"), "console.log('app');");
     writeFileSync(path.join(dir, "app.css"), "body{}");
     writeFileSync(path.join(dir, "favicon.svg"), "<svg/>");
+    mkdirSync(path.join(dir, "chunks"));
+    writeFileSync(path.join(dir, "chunks", "Home-AB12CD.js"), "export const Home = 1;");
+    writeFileSync(path.join(dir, "chunks", "Home-AB12CD.js.map"), "{}");
+    writeFileSync(path.join(dir, "secret.js"), "nope");
   }
   return dir;
 }
@@ -426,11 +430,17 @@ test("static: fixed paths only, with the security headers and no CORS; POST is 4
     assert.equal((await httpGet(port, "/app.css")).status, 200);
     assert.equal((await httpGet(port, "/favicon.svg")).headers["content-type"], "image/svg+xml");
     assert.equal((await httpGet(port, "/app.js?v=2")).status, 200);
+    const chunk = await httpGet(port, "/chunks/Home-AB12CD.js");
+    assert.equal(chunk.status, 200);
+    assert.equal(chunk.headers["content-type"], "text/javascript; charset=utf-8");
+    assert.equal(chunk.headers["x-content-type-options"], "nosniff");
+    assert.equal(chunk.body, "export const Home = 1;");
     const head = await httpGet(port, "/", { method: "HEAD" });
     assert.equal(head.status, 200);
     assert.equal(head.body, "");
 
-    for (const p of ["/../package.json", "/%2e%2e/package.json", "/dist/x", "/app.js.map", "/rpc", "/index.html/", "//etc/passwd", "/constructor", "/__proto__"]) {
+    for (const p of ["/../package.json", "/%2e%2e/package.json", "/dist/x", "/app.js.map", "/rpc", "/index.html/", "//etc/passwd", "/constructor", "/__proto__",
+      "/chunks/missing.js", "/chunks/Home-AB12CD.js.map", "/chunks/../secret.js", "/chunks/%2e%2e/secret.js", "/chunks/..%2fsecret.js", "/chunks/a/b.js", "/chunks/.js", "/chunks/Home.css"]) {
       const r = await httpGet(port, p);
       assert.equal(r.status, 404, `${p} should be 404`);
       assert.equal(r.headers["x-content-type-options"], "nosniff");

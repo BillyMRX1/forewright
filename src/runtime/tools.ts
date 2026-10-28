@@ -235,6 +235,8 @@ const TOOLS: ToolDef[] = [
         dependsOn: strList(a, "depends_on", { max: 60 }),
         ...(a["kickoff_docs"] === undefined ? {} : { kickoffDocs: strList(a, "kickoff_docs", { max: 60, maxItems: 20 }) }),
         ...(assignee ? { assignee: assignee.id } : {}),
+        // A turn started by a routine, heartbeat or GitHub trigger tags its tasks; the CTO cannot set this itself.
+        origin: ctx.rt.cto.originOf(ctx.record.runId),
         actor: ctx.actor,
       });
       return { id: t.shortId, state: t.state, assignee: assignee?.name ?? null };

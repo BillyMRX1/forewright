@@ -42,6 +42,7 @@ export function HomeView() {
   const events = useLoad(() => api.call("state.events", { projectId, sinceSeq: Math.max(0, ctx.latestSeq() - 60), limit: 60 }));
   const usage = useLoad(() => api.call("state.usage", { projectId, days: 7 }));
   const budgets = useLoad(() => api.call("state.budgets", { projectId }));
+  const automations = useLoad(() => api.call("routines.list", { projectId }));
   const [sel, setSel] = useState(0);
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
@@ -83,7 +84,9 @@ export function HomeView() {
   // ---------------------------------------------------------------- the dashboard
   const usageLn = usage.data ? usageLines(usage.data) : [];
   const budgetLn = budgets.data ? budgetRows(budgets.data.scopes) : [];
-  const budget = homeBudget(h, needs.length, workers.length, usageLn.length + budgetLn.length);
+  // Read only here: routines are edited in the web app's Settings, the heartbeat and the triggers in either Settings view.
+  const autoLn = automations.data ? automations.data.rows.filter((r) => r.on || r.kind === "routine") : [];
+  const budget = homeBudget(h, needs.length, workers.length, usageLn.length + budgetLn.length, autoLn.length);
   const focused = ctx.focus === "main" && !filtering;
   const avail = Math.max(10, w - 2);
   const needsStart = windowed(needs.length, at < needs.length ? at : 0, budget.needsShown).start;
@@ -220,6 +223,17 @@ export function HomeView() {
             const head = fit(u.engine, 9);
             const text = `  ${head}today ${u.today}   7 days ${u.week}`;
             return <Row key={u.engine} line={{ text, segs: [{ text: `  ${head}` }, { text: clip(`today ${u.today}   7 days ${u.week}`, Math.max(4, w - 13)), dim: true }] }} width={w} />;
+          })}
+        </>
+      ) : null}
+      {budget.automationRows > 0 ? (
+        <>
+          <Rule width={w} />
+          <SectionLabel title="AUTOMATIONS" note="read only" width={w} />
+          {autoLn.slice(0, budget.automationRows).map((a) => {
+            const nameW = Math.min(24, Math.max(8, Math.floor(avail / 3)));
+            const rest = `${a.schedule}  last ${a.last}${a.next && a.next !== "off" ? `  next ${a.next}` : ""}${a.problem ? `  ${a.problem}` : ""}`;
+            return <Row key={a.key} line={{ text: `  ${a.name} ${rest}`, segs: [{ text: `  ${a.on ? "on " : "off"} `, dim: !a.on }, { text: `${fit(clip(oneLine(a.name), nameW), nameW)} ` }, { text: clip(oneLine(rest), Math.max(4, avail - nameW - 6)), ...(a.problem ? { color: palette.attention } : { dim: true }) }] }} width={w} />;
           })}
         </>
       ) : null}

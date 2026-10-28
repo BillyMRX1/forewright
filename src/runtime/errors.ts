@@ -45,3 +45,10 @@ export class ToolError extends ForewrightError {
     super("tool_error", message, details);
   }
 }
+
+/** A GitHub trigger could not poll: gh is missing or not logged in, the remote is not on GitHub, or gh failed. */
+export class TriggerError extends ForewrightError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("trigger_failed", message, details);
+  }
+}

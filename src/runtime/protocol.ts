@@ -16,6 +16,7 @@ import type {
   Message,
   MessageChannel,
   RequirementDoc,
+  Routine,
   Run,
   Settings,
   Task,
@@ -26,7 +27,20 @@ import type { Store } from "../core/store.js";
 import type { BudgetScopeStatus } from "../core/budgets.js";
 import type { UsageSummary } from "../core/usage.js";
 import type { FallbackEntryStatus } from "./fallback.js";
+import type { NotifyType } from "../core/notify-model.js";
+import type { PhoneStatus } from "./notify.js";
 import type { Checkpoints, UndoResult } from "./checkpoints.js";
+import type { HeartbeatStatus } from "./automation.js";
+import type { TriggersStatus } from "./github.js";
+import type { AutomationRow } from "./automation-rows.js";
+
+export interface AutomationsView {
+  routines: Routine[];
+  heartbeat: HeartbeatStatus;
+  triggers: TriggersStatus;
+  /** The same, worded for the lists (see automation-rows.ts). */
+  rows: AutomationRow[];
+}
 
 export const PROTOCOL_VERSION = 1;
 
@@ -153,12 +167,19 @@ export interface Methods {
   "kickoff.wireframe": { params: { projectId: string; name: string }; result: { name: string; svg: string } };
   "state.adrs": { params: { projectId: string }; result: { adrs: Adr[] } };
   "state.evidence": { params: { projectId: string; taskId: string }; result: { task: Task; verifications: Verification[]; artifacts: Artifact[]; runs: Run[]; /** Engine routing choices for this task, oldest first; empty while routing is off. */ routes?: RouteDecision[] } };
-  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; /** Commands run as checks after every task, besides the task's own. */ projectChecks?: string[]; /** The agents that can have a token budget (not retired), for the Budgets fields. */ agents?: Array<{ id: string; name: string }>; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] } } };
+  "state.settings": { params: { projectId: string }; result: { settings: Settings; providers: ProviderStatus[]; ctoEngine: string; ctoModel: string | null; hasCommits: boolean; /** Commands run as checks after every task, besides the task's own. */ projectChecks?: string[]; /** The agents that can have a token budget (not retired), for the Budgets fields. */ agents?: Array<{ id: string; name: string }>; fallbackStatus?: { cto: FallbackEntryStatus[]; workers: FallbackEntryStatus[] }; /** Muted notification types, and whether phone notifications are set up (never the secrets). */ notify?: { mute: NotifyType[]; phone: PhoneStatus } } };
   "state.events": { params: { projectId: string; sinceSeq: number; limit?: number }; result: { events: ForewrightEvent[] } };
   /** Tokens and estimated cost of this project's runs over the last `days` local days (default 7). */
   "state.usage": { params: { projectId: string; days?: number }; result: UsageSummary };
   /** Spend against every budget limit that is set, per scope (the project and each agent with a limit). */
   "state.budgets": { params: { projectId: string }; result: { scopes: BudgetScopeStatus[] } };
+  /** Routines, the heartbeat and the GitHub triggers with their last and next runs (issues #27, #36). */
+  "routines.list": { params: { projectId: string }; result: AutomationsView };
+  /** Creates (no id) or changes a routine. Human only. */
+  "routines.save": { params: { projectId: string; id?: string; name: string; schedule: string; prompt: string; enabled: boolean }; result: { routine: Routine } };
+  "routines.delete": { params: { projectId: string; routineId: string }; result: { ok: true } };
+  /** Posts the routine's brief to the CTO now; the schedule is unchanged. */
+  "routines.runNow": { params: { projectId: string; routineId: string }; result: { routine: Routine } };
   "evidence.diff": { params: { projectId: string; taskId: string }; result: { base: string | null; head: string | null; diff: string; truncated: boolean } };
   /** The task branch's commits since it left the integration branch (newest first, at most 200) and the PRD revisions. */
   "tasks.checkpoints": { params: { projectId: string; taskId: string }; result: Checkpoints };

@@ -9,7 +9,8 @@ import { NOT_GIT_MARKER } from "./project-runtime.js";
 import { dispatchReviews } from "./review.js";
 import { integrateNext } from "./integration.js";
 import { dispatchWork } from "./workers.js";
-import { evaluateBudgets } from "./budgets.js";
+import { blockingHold, evaluateBudgets } from "./budgets.js";
+import { runDueRoutines, runHeartbeat } from "./automation.js";
 import { liftRoutingBlocks, localWaitPending } from "./routing.js";
 import { nudgeKickoff } from "./kickoff.js";
 import { reconcileLeases } from "./recovery.js";
@@ -84,10 +85,14 @@ export class Scheduler {
     const { store } = rt;
     reconcileLeases(rt);
     const paused = store.getProject().paused;
-    if (paused) return;
+    if (paused) {
+      this.automate(false); // due routines and heartbeats are skipped (and say so), triggers wait
+      return;
+    }
     store.refreshReadiness();
     rt.clearExpiredQuota();
     evaluateBudgets(rt);
+    this.automate(true);
     this.gateEnvironment(reason);
     liftRoutingBlocks(rt);
     // A task waiting for a local engine: probe again on the slow watchdog beat, so a model that came up is seen.
@@ -98,6 +103,18 @@ export class Scheduler {
     if (!store.getSettings().planOnly) dispatchWork(rt);
     if (!rt.cto.busy()) nudgeKickoff(rt, "progress");
     rt.cto.maybeStart(reason);
+  }
+
+  /**
+   * Routines, the heartbeat and the GitHub triggers (all off by default). They only post notices for the CTO,
+   * whose turn then obeys the usual limits. Triggers do not poll while paused or while the CTO is budget-held,
+   * so items found later are still briefed once.
+   */
+  private automate(poll: boolean): void {
+    const rt = this.rt;
+    runDueRoutines(rt);
+    runHeartbeat(rt);
+    if (poll && !blockingHold(rt, rt.ctoAgent().id)) void rt.triggers.maybePoll();
   }
 
   /** Code tasks in a folder that is not a git repository stay blocked until Billy decides. */

@@ -22,6 +22,7 @@ import {
   ValidationError,
 } from "./errors.js";
 import { assertAcyclic } from "./graph.js";
+import { NOTIFY_MUTE_KEY, NOTIFY_TYPES, parseMute } from "./notify-model.js";
 import { newId, nextTaskShortId } from "./ids.js";
 import { authorize } from "./policy.js";
 import { redactSecrets, truncate } from "./safety.js";
@@ -74,8 +75,14 @@ import {
   type RunKind,
   type Settings,
   type Task,
+  type TaskOrigin,
   type Verification,
+  type AutomationSettings,
+  AUTOMATION_KEYS,
+  DEFAULT_AUTOMATION,
+  type Routine,
 } from "./store-types.js";
+import { nextRunAfter, parseSchedule } from "./schedule.js";
 import {
   type AgentLifecycle,
   type AgentRole,
@@ -235,6 +242,7 @@ export class Store {
         (x) => x["k"] as string,
       ),
       kickoffDocs: JSON.parse((r["kickoff_docs"] as string | undefined) ?? "[]") as string[],
+      origin: r["origin"] ? (JSON.parse(r["origin"] as string) as TaskOrigin) : null,
     };
   }
 
@@ -276,6 +284,8 @@ export class Store {
     dependsOn?: string[];
     assignee?: string;
     kickoffDocs?: string[];
+    /** The automation whose CTO turn creates this task; absent or null for project work. */
+    origin?: TaskOrigin | null;
     actor?: Actor;
   }): Task {
     if (input.title.trim().length === 0) throw new ValidationError("A task needs a title.");
@@ -299,7 +309,7 @@ export class Store {
       const now = this.nowIso();
       this.run(
         `INSERT INTO task (id, project_id, short_id, title, description, acceptance, verify_commands, state, assignee_agent_id,
-           requirement_revision, kickoff_docs, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           requirement_revision, kickoff_docs, origin, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         id,
         this.projectId,
         shortId,
@@ -311,6 +321,7 @@ export class Store {
         input.assignee ?? null,
         doc?.revision ?? null,
         JSON.stringify(kickoffDocs),
+        input.origin ? JSON.stringify(input.origin) : null,
         now,
         now,
       );
@@ -325,6 +336,7 @@ export class Store {
         dependsOn: deps,
         requirementKeys: keys,
         kickoffDocs,
+        ...(input.origin ? { origin: input.origin } : {}),
       });
       return this.getTask(id);
     });
@@ -2197,7 +2209,13 @@ export class Store {
       if (k.startsWith(ROUTING_PIN_ROLE_PREFIX)) routing.pins.roles[k.slice(ROUTING_PIN_ROLE_PREFIX.length) as AgentRole] = v as FallbackEntry;
       else if (k.startsWith(ROUTING_PIN_TASK_PREFIX)) routing.pins.tasks[k.slice(ROUTING_PIN_TASK_PREFIX.length)] = v as FallbackEntry;
     }
-    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly, budgets, routing };
+    const automation: AutomationSettings = {
+      heartbeatHours: (stored.get(AUTOMATION_KEYS.heartbeatHours) as number | undefined) ?? DEFAULT_AUTOMATION.heartbeatHours,
+      githubIssues: stored.get(AUTOMATION_KEYS.githubIssues) === true,
+      githubLabel: (stored.get(AUTOMATION_KEYS.githubLabel) as string | undefined) ?? DEFAULT_AUTOMATION.githubLabel,
+      ciFailures: stored.get(AUTOMATION_KEYS.ciFailures) === true,
+    };
+    return { ...(limits as unknown as Limits), authority: authority as unknown as Authority, fallback, workers, setup, planOnly, budgets, routing, automation };
   }
 
   /** Authority keys are written as `authority.<name>` and only a human may change them. */
@@ -2237,6 +2255,16 @@ export class Store {
       // Routing decides which engines spend Billy's usage, so only a human writes it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
       value = this.validateRoutingSetting(key, value);
+    } else if (key === NOTIFY_MUTE_KEY) {
+      // Which notifications reach Billy's phone and desktop; only a human changes it.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      const mute = parseMute(value);
+      if (mute === null) throw new ValidationError(`${NOTIFY_MUTE_KEY} must be a list of notification types (${NOTIFY_TYPES.join(", ")}).`, { key });
+      value = mute;
+    } else if ((Object.values(AUTOMATION_KEYS) as string[]).includes(key)) {
+      // Automation wakes the CTO by itself and spends Billy's usage, so only a human switches it.
+      authorize(by, "change_authority", {}, this.getSettings().authority);
+      value = validateAutomationSetting(key, value);
     } else if (key === "planOnly") {
       // Plan-only mode holds back every implementation run, so only Billy switches it.
       authorize(by, "change_authority", {}, this.getSettings().authority);
@@ -2414,6 +2442,120 @@ export class Store {
       if (h.decisionId !== null && this.getDecision(h.decisionId).status === "open") this.withdrawDecision(h.decisionId, { kind: "system" });
       this.appendEvent(status === "continued" ? "budget.continued" : "budget.ended", "budget", holdId, actorLabel(by), { scope: h.scope, scopeId: h.scopeId, window: h.window, why });
       return this.holdFrom(this.one("SELECT * FROM budget_hold WHERE id = ?", holdId) as Row);
+    });
+  }
+
+  // ------------------------------------------------------------ routines and trigger items (automation)
+
+  private routineFrom(r: Row): Routine {
+    return {
+      id: r["id"] as string,
+      name: r["name"] as string,
+      schedule: r["schedule"] as string,
+      prompt: r["prompt"] as string,
+      enabled: r["enabled"] === 1,
+      lastRunAt: (r["last_run_at"] as string | null) ?? null,
+      lastResult: (r["last_result"] as string | null) ?? null,
+      nextRunAt: (r["next_run_at"] as string | null) ?? null,
+      createdAt: r["created_at"] as string,
+      updatedAt: r["updated_at"] as string,
+    };
+  }
+
+  listRoutines(): Routine[] {
+    return this.all("SELECT * FROM routine WHERE project_id = ? ORDER BY created_at, id", this.projectId).map((r) => this.routineFrom(r));
+  }
+
+  getRoutine(id: string): Routine {
+    const r = this.one("SELECT * FROM routine WHERE project_id = ? AND id = ?", this.projectId, id);
+    if (!r) throw new NotFoundError(`Routine ${id}`, { routineId: id });
+    return this.routineFrom(r);
+  }
+
+  /**
+   * Creates a routine (no id) or changes one. Only a human does this. The next run is computed from now whenever
+   * the routine is enabled with a new schedule or switched on; a disabled routine has no next run.
+   */
+  saveRoutine(input: { id?: string; name: string; schedule: string; prompt: string; enabled: boolean }, by: Actor): Routine {
+    authorize(by, "change_authority", {}, this.getSettings().authority);
+    const name = input.name.trim();
+    const prompt = input.prompt.trim();
+    if (name === "" || name.length > 80) throw new ValidationError("A routine needs a name of up to 80 characters.", { name: input.name });
+    if (prompt === "" || prompt.length > 4000) throw new ValidationError("A routine needs a brief for the CTO of up to 4000 characters.", { length: prompt.length });
+    const parsed = parseSchedule(input.schedule);
+    const schedule = input.schedule.trim().toLowerCase().replace(/\s+/g, " ");
+    return tx(this.db, () => {
+      const clash = this.one("SELECT id FROM routine WHERE project_id = ? AND name = ? AND id != ?", this.projectId, name, input.id ?? "");
+      if (clash) throw new ValidationError(`There is already a routine called "${name}".`, { name });
+      const now = this.nowIso();
+      const fresh = nextRunAfter(parsed, this.clock.now()).toISOString();
+      if (input.id === undefined) {
+        const id = newId("rtn");
+        this.run(
+          "INSERT INTO routine (id, project_id, name, schedule, prompt, enabled, next_run_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+          id, this.projectId, name, schedule, prompt, input.enabled ? 1 : 0, input.enabled ? fresh : null, now, now,
+        );
+        this.appendEvent("routine.created", "routine", id, actorLabel(by), { name, schedule, enabled: input.enabled });
+        return this.getRoutine(id);
+      }
+      const old = this.getRoutine(input.id);
+      const next = !input.enabled ? null : old.enabled && old.schedule === schedule && old.nextRunAt !== null ? old.nextRunAt : fresh;
+      this.run("UPDATE routine SET name = ?, schedule = ?, prompt = ?, enabled = ?, next_run_at = ?, updated_at = ? WHERE id = ?", name, schedule, prompt, input.enabled ? 1 : 0, next, now, old.id);
+      this.appendEvent("routine.updated", "routine", old.id, actorLabel(by), { name, schedule, enabled: input.enabled });
+      return this.getRoutine(old.id);
+    });
+  }
+
+  deleteRoutine(id: string, by: Actor): void {
+    authorize(by, "change_authority", {}, this.getSettings().authority);
+    tx(this.db, () => {
+      const r = this.getRoutine(id);
+      this.run("DELETE FROM routine WHERE id = ?", r.id);
+      this.appendEvent("routine.deleted", "routine", r.id, actorLabel(by), { name: r.name });
+    });
+  }
+
+  /** Records one run of a routine (sent, skipped or failed) and its next run time; a manual run keeps the schedule's next run. */
+  recordRoutineRun(id: string, input: { result: string; nextRunAt?: string | null }, by: Actor): Routine {
+    return tx(this.db, () => {
+      const r = this.getRoutine(id);
+      const now = this.nowIso();
+      const next = input.nextRunAt === undefined ? r.nextRunAt : input.nextRunAt;
+      this.run("UPDATE routine SET last_run_at = ?, last_result = ?, next_run_at = ?, updated_at = ? WHERE id = ?", now, input.result, next, now, r.id);
+      this.appendEvent("routine.ran", "routine", r.id, actorLabel(by), { name: r.name, result: input.result, nextRunAt: next });
+      return this.getRoutine(r.id);
+    });
+  }
+
+  /** Whether a GitHub trigger already handled this issue number or workflow run id. */
+  automationItemSeen(source: "github_issue" | "ci_failure", key: string): boolean {
+    return this.one("SELECT 1 AS x FROM automation_item WHERE project_id = ? AND source = ? AND item_key = ?", this.projectId, source, key) !== undefined;
+  }
+
+  automationItem(source: "github_issue" | "ci_failure", key: string): { label: string; url: string | null } | null {
+    const r = this.one("SELECT label, url FROM automation_item WHERE project_id = ? AND source = ? AND item_key = ?", this.projectId, source, key);
+    return r ? { label: r["label"] as string, url: (r["url"] as string | null) ?? null } : null;
+  }
+
+  /** How many items a trigger turned into briefs (baseline items seen at the first poll are not counted). */
+  countAutomationItems(source: "github_issue" | "ci_failure"): number {
+    return Number(this.one("SELECT COUNT(*) AS n FROM automation_item WHERE project_id = ? AND source = ? AND briefed = 1", this.projectId, source)?.["n"] ?? 0);
+  }
+
+  /**
+   * Marks a trigger item handled. With a brief, the CTO notice is posted in the same transaction, so an item is
+   * never recorded without its brief (or briefed twice after a restart). Returns false when it was already seen.
+   */
+  recordAutomationItem(input: { source: "github_issue" | "ci_failure"; key: string; label: string; url: string | null; brief: Parameters<Store["postMessage"]>[0] | null }): boolean {
+    return tx(this.db, () => {
+      if (this.automationItemSeen(input.source, input.key)) return false;
+      this.run(
+        "INSERT INTO automation_item (project_id, source, item_key, label, url, briefed, handled_at) VALUES (?,?,?,?,?,?,?)",
+        this.projectId, input.source, input.key, input.label, input.url, input.brief ? 1 : 0, this.nowIso(),
+      );
+      this.appendEvent(input.brief ? "trigger.briefed" : "trigger.baseline", "trigger", `${input.source}:${input.key}`, "system", { source: input.source, key: input.key, label: input.label });
+      if (input.brief) this.postMessage(input.brief);
+      return true;
     });
   }
 
@@ -2759,6 +2901,20 @@ function validateBudgetLimits(key: string, value: unknown): BudgetLimits {
     out[name] = n;
   }
   return out as BudgetLimits;
+}
+
+/** Automation settings: heartbeat hours 0 (off) to 24, the triggers on or off, a GitHub label name. */
+function validateAutomationSetting(key: string, value: unknown): unknown {
+  if (key === AUTOMATION_KEYS.heartbeatHours) {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 24) throw new ValidationError(`${key} must be a whole number of hours from 1 to 24, or 0 for off.`, { key, value });
+    return value;
+  }
+  if (key === AUTOMATION_KEYS.githubLabel) {
+    if (typeof value !== "string" || !/^[^\s,][^,]{0,49}$/.test(value.trim())) throw new ValidationError(`${key} must be a GitHub label name (up to 50 characters, no commas).`, { key, value });
+    return value.trim();
+  }
+  if (typeof value !== "boolean") throw new ValidationError(`${key} must be on or off.`, { key, value });
+  return value;
 }
 
 /** The worker engine list: known live engines, each at most once. Empty is allowed and means "any usable engine". */

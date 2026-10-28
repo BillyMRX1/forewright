@@ -135,11 +135,11 @@ test("Billy's answer is stored, replaced by a later one, and 0 minutes means mer
 
 test("summarizeOutcomes groups by engine, model and type with the rates the report shows", () => {
   const base = { projectId: "p", projectName: "p", title: "t", reviewerEngine: "codex" as const, reviewerModel: null, startedAt: "", doneAt: new Date(2026, 9, 24, 12).toISOString() };
-  const mk = (n: number, over: Partial<ReturnType<typeof readTaskOutcomes>[number]>) => ({ ...base, taskId: `t${n}`, shortId: `T-${n}`, type: "backend" as const, workerEngine: "claude" as const, workerModel: "opus", firstPass: true, retries: 0, reviewRounds: 1, minutes: 10, mergedAsIs: null, fixMinutes: null, ...over });
+  const mk = (n: number, over: Partial<ReturnType<typeof readTaskOutcomes>[number]>) => ({ ...base, taskId: `t${n}`, shortId: `T-${n}`, type: "backend" as const, workerEngine: "claude" as const, workerModel: "opus", firstPass: true, retries: 0, reviewRounds: 1, minutes: 10, mergedAsIs: null, fixMinutes: null, origin: "Project", ...over });
   const tasks = [
     mk(1, { mergedAsIs: true }),
     mk(2, { firstPass: false, retries: 2, reviewRounds: 3, minutes: 30, mergedAsIs: false, fixMinutes: 20 }),
-    mk(3, { workerEngine: "codex", workerModel: null, type: "frontend", mergedAsIs: false, fixMinutes: 10 }),
+    mk(3, { workerEngine: "codex", workerModel: null, type: "frontend", mergedAsIs: false, fixMinutes: 10, origin: "Automation (GitHub issue)" }),
     mk(4, { doneAt: new Date(2026, 9, 1).toISOString() }),
   ];
   const s = summarizeOutcomes(tasks, { now: new Date(2026, 9, 24, 18), days: 7 });
@@ -149,6 +149,7 @@ test("summarizeOutcomes groups by engine, model and type with the rates the repo
   assert.deepEqual([claude.avgRetries, claude.avgReviewRounds, claude.avgMinutes, claude.answered, claude.mergedAsIsRate, claude.avgFixMinutes], [1, 2, 20, 2, 0.5, 20]);
   assert.deepEqual(s.byModel.map((g) => g.name), ["opus", "default"]);
   assert.deepEqual(s.byType.map((g) => g.name), ["backend", "frontend"]);
+  assert.deepEqual(s.byOrigin.map((g) => [g.name, g.tasksDone]), [["Project", 2], ["Automation (GitHub issue)", 1]]);
   assert.equal(summarizeOutcomes([], { now: new Date(), days: 7 }).totals.firstPassRate, null);
   assert.match(outcomeText(claude), /2 done, 50% first pass, 1 retries, 2 review rounds, 20 min, 50% merged as is \(2 answered\), 20 min fixing/);
 });

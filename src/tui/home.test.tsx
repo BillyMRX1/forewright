@@ -102,6 +102,23 @@ describe("Overview", () => {
     assert.match(short.h.frame(), /WORKERS/);
   });
 
+  it("lists routines and the automations that are on, read only, and nothing when automation is off", async () => {
+    const off = await mount({ cols: 140, rows: 50 });
+    assert.doesNotMatch(off.h.frame(), /AUTOMATIONS/);
+    const api = new FakeClient();
+    api.automations = {
+      ...api.automations,
+      routines: [{ id: "rtn_1", name: "Morning triage", schedule: "daily 07:00", prompt: "x", enabled: true, lastRunAt: null, lastResult: null, nextRunAt: new Date(2026, 9, 29, 7, 0).toISOString(), createdAt: "", updatedAt: "" }],
+      triggers: { ...api.automations.triggers, githubIssues: { enabled: true, lastPollAt: null, lastError: "gh is not logged in.", handled: 1 } },
+    };
+    const { h } = await mount({ cols: 140, rows: 50, api });
+    const f = h.frame();
+    assert.match(f, /AUTOMATIONS.*read only/);
+    assert.match(f, /on  Morning triage\s+daily 07:00  last never  next Thu 07:00/);
+    assert.match(f, /on  GitHub issues labeled \S*\s+every 5 min  last 1 briefed  gh is not logged in\./);
+    assert.doesNotMatch(f, /Heartbeat/, "an automation that is off is not listed");
+  });
+
   it("Enter on a needs-you decision opens it in the Inbox", async () => {
     const { h } = await mount();
     assert.match(hints(h), /enter open/);

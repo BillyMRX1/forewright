@@ -2,7 +2,8 @@
 // turn is a run of kind "cto" with the coordinator permission profile in the
 // project root. The CTO acts only through its MCP tools; its final text is
 // posted where the humans it answers wrote (see replyTargets), else to the cto channel.
-import type { Message, MessageChannel, Run } from "../core/store.js";
+import type { Message, MessageChannel, Run, TaskOrigin } from "../core/store.js";
+import { originOfBatch } from "./automation.js";
 import type { RunOutcome } from "../core/types.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
 import { unusableReason } from "./health.js";
@@ -45,6 +46,7 @@ function replyTargets(batch: Message[]): ReplyTarget[] {
 
 export class CtoDriver {
   private readonly targets = new Map<string, ReplyTarget[]>(); // run id -> where its final text is posted
+  private readonly origins = new Map<string, TaskOrigin>(); // run id -> the automation that started the turn
   private cooldownUntil = 0;
   private error: string | null = null;
   /** The CTO's conversation just overflowed: the one fresh-session turn that follows ignores the cooldown and the wake-up limit. */
@@ -54,6 +56,11 @@ export class CtoDriver {
 
   busy(): boolean {
     return this.rt.agentBusy(this.rt.ctoAgent().id) || [...this.rt.active.values()].some((a) => a.kind === "cto");
+  }
+
+  /** The automation a running CTO turn was started by (tasks it creates carry it), or null for project work. */
+  originOf(runId: string): TaskOrigin | null {
+    return this.origins.get(runId) ?? null;
   }
 
   lastError(): string | null {
@@ -145,7 +152,8 @@ export class CtoDriver {
     const cto = asRunning(primary, res); // the CTO as it runs now: the engine and model actually chosen
     const adapter = adapterFor(rt, cto);
     const leaseGeneration = acquireLease(rt, cto); // one live run per agent; a second turn is refused while this one holds it
-    store.recordEvent("cto.turn_started", "agent", cto.id, { kind: "system" }, { messages: batch.length });
+    const origin = originOfBatch(rt, batch);
+    store.recordEvent("cto.turn_started", "agent", cto.id, { kind: "system" }, { messages: batch.length, ...(origin ? { origin } : {}) });
     let run: Run;
     try {
       // A CTO turn belongs to no task, so the agent lease generation is its only fence.
@@ -155,6 +163,7 @@ export class CtoDriver {
       throw err;
     }
     this.targets.set(run.id, replyTargets(batch));
+    if (origin) this.origins.set(run.id, origin);
     if (batch.length > 0) store.markDelivered(batch.map((m) => m.id), cto.id, run.id);
 
     const nameOf = nameOfSender(rt);
@@ -254,6 +263,7 @@ export class CtoDriver {
   private async handleOutcome(a: ActiveRun, outcome: RunOutcome): Promise<void> {
     const rt = this.rt;
     const { store } = rt;
+    this.origins.delete(a.run.id);
     try {
       store.finishRun(a.run.id, a.generation, outcome);
     } catch (err) {

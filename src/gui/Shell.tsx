@@ -1,7 +1,7 @@
 // The app shell: top bar, sidebar (a drawer on narrow screens), the current view and the hint bar.
 // Named Shell (not App) so tsc's output does not clash with the bundle app.js on case-insensitive disks.
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import type { RuntimeStatus } from "../runtime/protocol.js";
 import { Picker, plainError } from "./Picker.js";
@@ -11,14 +11,17 @@ import { Toasts, readStore, writeStore } from "./ui.js";
 import type { Toast } from "./ui.js";
 import { NeedsProvider, ProjectContext, sidebarBadges, useNeeds, useProject } from "./live.js";
 import type { Badge, Focus, ProjectContextValue } from "./live.js";
-import { Cto } from "./views/Cto.js";
-import { Home } from "./views/Home.js";
-import { Tasks } from "./views/Tasks.js";
-import { Inbox } from "./views/Inbox.js";
-import { Team } from "./views/Team.js";
-import { Settings } from "./views/Settings.js";
-import { Kickoff } from "./views/Kickoff.js";
 import { RunControls } from "./runcontrols.js";
+import { DesktopNotifier } from "./notify.js";
+
+// Each view loads on first visit, so the first page load only fetches the shell.
+const Cto = lazy(() => import("./views/Cto.js").then((m) => ({ default: m.Cto })));
+const Home = lazy(() => import("./views/Home.js").then((m) => ({ default: m.Home })));
+const Tasks = lazy(() => import("./views/Tasks.js").then((m) => ({ default: m.Tasks })));
+const Inbox = lazy(() => import("./views/Inbox.js").then((m) => ({ default: m.Inbox })));
+const Team = lazy(() => import("./views/Team.js").then((m) => ({ default: m.Team })));
+const Settings = lazy(() => import("./views/Settings.js").then((m) => ({ default: m.Settings })));
+const Kickoff = lazy(() => import("./views/Kickoff.js").then((m) => ({ default: m.Kickoff })));
 
 export type ViewId = "home" | "cto" | "tasks" | "team" | "inbox" | "kickoff" | "settings";
 
@@ -381,10 +384,11 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
       ) : null}
       <div className="main-row">
         {projectValue ? <BadgedSidebar {...sidebarProps} /> : <Sidebar {...sidebarProps} />}
-        <main className="content">{body}</main>
+        <main className="content"><Suspense fallback={<p className="muted pad">Loading.</p>}>{body}</Suspense></main>
       </div>
       <HintBar hints={showPicker ? ["Enter open the folder", "Tab next field"] : HINTS[view]} />
       <Toasts toasts={toasts} />
+      {projectValue ? <DesktopNotifier /> : null}
     </div>
   );
   if (!projectValue) return frame;

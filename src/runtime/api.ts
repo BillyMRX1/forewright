@@ -7,7 +7,10 @@ import { ValidationError } from "../core/errors.js";
 import { readRegistry } from "../core/identity.js";
 import { forewrightHome, logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
+import { NOTIFY_MUTE_KEY, parseMute } from "../core/notify-model.js";
 import { budgetStatus } from "./budgets.js";
+import { heartbeatStatus, runRoutineNow } from "./automation.js";
+import { automationRows } from "./automation-rows.js";
 import { loadPrices, readUsageRows, summarizeUsage, windowStart } from "../core/usage.js";
 import type { Message, MessageChannel } from "../core/store.js";
 import type { EngineId, PermissionProfile } from "../core/types.js";
@@ -186,6 +189,7 @@ export class ClientApi {
           projectChecks: rt.store.getSetting<string[]>("projectChecks") ?? [],
           agents: rt.store.listAgents().map((a) => ({ id: a.id, name: a.name })),
           fallbackStatus: { cto: fallbackStatus(rt, "cto", settings.fallback.cto), workers: fallbackStatus(rt, "workers", settings.fallback.workers) },
+          notify: { mute: parseMute(rt.store.getSetting(NOTIFY_MUTE_KEY)) ?? [], phone: rt.notify.status() },
         };
       },
       "state.events": async (p) => {
@@ -200,6 +204,25 @@ export class ClientApi {
         return summarizeUsage(rows, { now, days, prices: loadPrices(forewrightHome()) });
       },
       "state.budgets": async (p) => ({ scopes: budgetStatus(await this.rt(p)) }),
+
+      // Automation (routines, heartbeat, GitHub triggers). Only Billy reaches these methods; agents have no tool for them.
+      "routines.list": async (p) => {
+        const rt = await this.rt(p);
+        const view = { routines: rt.store.listRoutines(), heartbeat: heartbeatStatus(rt), triggers: rt.triggers.status() };
+        return { ...view, rows: automationRows(view) };
+      },
+      "routines.save": async (p) => {
+        const rt = await this.rt(p);
+        if (typeof p["enabled"] !== "boolean") throw new RpcError(-32602, "invalid_params", '"enabled" must be true or false.', { key: "enabled" });
+        const routine = rt.store.saveRoutine({ ...(optStr(p, "id") ? { id: optStr(p, "id")! } : {}), name: reqStr(p, "name", 200), schedule: reqStr(p, "schedule", 100), prompt: reqStr(p, "prompt", 8000), enabled: p["enabled"] }, HUMAN);
+        rt.scheduler.wake("routine_saved");
+        return { routine };
+      },
+      "routines.delete": async (p) => {
+        (await this.rt(p)).store.deleteRoutine(reqStr(p, "routineId", 200), HUMAN);
+        return { ok: true as const };
+      },
+      "routines.runNow": async (p) => ({ routine: runRoutineNow(await this.rt(p), reqStr(p, "routineId", 200)) }),
       "evidence.diff": async (p) => this.diff(await this.rt(p), reqStr(p, "taskId", 200)),
       "tasks.checkpoints": async (p) => taskCheckpoints(await this.rt(p), reqStr(p, "taskId", 200)),
       "tasks.undoTo": async (p) => {
