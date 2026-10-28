@@ -51,7 +51,7 @@ export async function reconcileOnOpen(rt: ProjectRuntime): Promise<void> {
         store.transitionTask(t.id, "ready", { actor: { kind: "system" } }); // not a retry penalty
       }
     }
-    if (run.kind === "cto") store.requeueDeliveries(run.agentId, run.id);
+    if (run.kind === "cto" || run.kind === "chat") store.requeueDeliveries(run.agentId, run.id);
     store.fenceAgentLease(run.agentId, `recovery: run ${run.id} (${run.kind}) was interrupted by a restart`);
     store.releaseAgent(run.agentId);
   }

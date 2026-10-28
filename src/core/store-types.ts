@@ -62,7 +62,7 @@ export interface Agent {
   lastEventSummary: string | null;
 }
 
-export type RunKind = "work" | "review" | "cto" | "integration_check";
+export type RunKind = "work" | "review" | "cto" | "integration_check" | "chat";
 
 export interface Run {
   id: string;
@@ -195,6 +195,26 @@ export interface Message {
   dedupeKey: string | null;
   createdAt: string;
   supersedesMessageId: string | null;
+  /** The id of the thread's root message; null for a top-level message (a root has null too). */
+  threadId: string | null;
+  /** Agent ids named with @Name in the body (not retired agents, case-insensitive). */
+  mentions: string[];
+  /** Top-level listings only (state.messages without threadId): replies in this message's thread. */
+  replyCount?: number;
+  lastReplyAt?: string | null;
+}
+
+/** An ask_teammate question (table ask). The answer is linked when the teammate replies in the direct messages. */
+export interface Ask {
+  id: string;
+  askerAgentId: string;
+  teammateAgentId: string;
+  questionMessageId: string;
+  answerMessageId: string | null;
+  /** The asker's task when it asked during task work; the answer goes to that task's thread. */
+  taskId: string | null;
+  createdAt: string;
+  answeredAt: string | null;
 }
 
 export interface DecisionOption {
@@ -450,7 +470,24 @@ export interface Routine {
   updatedAt: string;
 }
 
-export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean; budgets: BudgetSettings; routing: RoutingSettings; automation: AutomationSettings };
+/**
+ * Chat guardrails (issue #37). perAgentPerHour: messages one agent may post per rolling hour, all channels.
+ * perChannelPerHour: agent messages per channel (with its task, or the DM pair) per hour. loopTurns: consecutive
+ * agent-only messages between the same two agents in one place before they are stopped. dailyTokens: tokens all chat
+ * turns may use per local day (0 means no limit).
+ */
+export interface ChatSettings {
+  perAgentPerHour: number;
+  perChannelPerHour: number;
+  loopTurns: number;
+  dailyTokens: number;
+}
+
+/** Setting keys of ChatSettings. Only a human writes them. */
+export const CHAT_KEYS = { perAgentPerHour: "chat.perAgentPerHour", perChannelPerHour: "chat.perChannelPerHour", loopTurns: "chat.loopTurns", dailyTokens: "chat.dailyTokens" } as const;
+export const DEFAULT_CHAT: ChatSettings = { perAgentPerHour: 20, perChannelPerHour: 60, loopTurns: 6, dailyTokens: 200_000 };
+
+export type Settings = Limits & { authority: Authority; fallback: FallbackSettings; workers: WorkerSettings; setup: SetupSettings; planOnly: boolean; budgets: BudgetSettings; routing: RoutingSettings; automation: AutomationSettings; chat: ChatSettings };
 
 export const DEFAULT_LIMITS: Limits = {
   maxConcurrentWorkers: 2,

@@ -10,12 +10,19 @@ import { migration009 } from "./009_budget_holds.js";
 import { migration010 } from "./010_run_execution.js";
 import { migration011 } from "./011_route_decisions.js";
 import { migration012 } from "./012_automation.js";
+import { migration013 } from "./013_chat.js";
 
 export interface Migration {
   version: number;
   name: string;
   sql: string;
+  /**
+   * The migration rebuilds a table that other tables reference (copy, drop, rename). Foreign keys are switched off
+   * around it, since PRAGMA foreign_keys cannot change inside a transaction, and PRAGMA foreign_key_check must come
+   * back empty before the migration commits.
+   */
+  foreignKeysOff?: boolean;
 }
 
 // Ordered, append-only. Never edit a migration that has shipped.
-export const MIGRATIONS: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012];
+export const MIGRATIONS: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012, migration013];

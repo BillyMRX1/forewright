@@ -50,7 +50,7 @@ test("the PRD reader is a labelled modal with requirements and a Markdown body",
 });
 
 test("messages are attributed to Billy, the CTO or Forewright and render as Markdown text", () => {
-  const base = { id: "m", channel: "cto", taskId: null, senderId: null, dedupeKey: null, createdAt: "2026-01-01T00:00:00.000Z", supersedesMessageId: null } as const;
+  const base = { id: "m", channel: "cto", taskId: null, senderId: null, dedupeKey: null, createdAt: "2026-01-01T00:00:00.000Z", supersedesMessageId: null, threadId: null, mentions: [] as string[] } as const;
   const out = renderToStaticMarkup(
     <ul>
       <MessageItem m={{ ...base, senderKind: "human", body: "hello" }} now={Date.parse("2026-01-01T00:10:00.000Z")} />
@@ -109,7 +109,7 @@ test("the unauthorized screen tells Billy to run forewright gui again", () => {
 });
 
 test("the shell: sidebar views, coming-soon panel, status badges, hint bar limits", () => {
-  assert.deepEqual(VIEWS.map((v) => v.label), ["Home", "CTO", "Tasks", "Team", "Inbox", "Kickoff", "Settings"]);
+  assert.deepEqual(VIEWS.map((v) => v.label), ["Home", "CTO", "Chat", "Tasks", "Team", "Inbox", "Kickoff", "Settings"]);
   assert.match(renderToStaticMarkup(<ComingSoon title="Tasks" text="The board." />), /Coming soon\. Use the terminal UI for this for now\./);
   for (const hints of Object.values(HINTS)) assert.ok(hints.length <= 6);
   assert.equal((renderToStaticMarkup(<HintBar hints={["a", "b", "c", "d", "e", "f", "g"]} />).match(/<span/g) ?? []).length, 6);

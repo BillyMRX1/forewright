@@ -30,6 +30,7 @@ import type { KickoffScale } from "../core/store.js";
 import { readGuiConfig, validateGuiPort } from "../core/gui-config.js";
 import { NOTE_MAX, requestChange } from "./change-request.js";
 import { taskCheckpoints, undoTaskTo } from "./checkpoints.js";
+import { chatStatus, humanRecipients } from "./chat.js";
 
 type P = Record<string, unknown>;
 type Handler = (p: P, conn: Connection) => unknown | Promise<unknown>;
@@ -137,19 +138,27 @@ export class ClientApi {
       "state.inbox": async (p) => (await this.rt(p)).store.inbox(),
       "state.messages": async (p) => {
         const rt = await this.rt(p);
+        const { store } = rt;
         const channel = optStr(p, "channel") as MessageChannel | undefined;
         const taskId = optStr(p, "taskId");
         const agentId = optStr(p, "agentId");
+        const peerAgentId = optStr(p, "peerAgentId");
+        const threadId = optStr(p, "threadId");
         const limit = typeof p["limit"] === "number" ? p["limit"] : 200;
+        // A thread: its root and replies, oldest first. Otherwise top-level messages only, with their reply counts.
+        if (threadId) return { messages: store.listMessages({ threadId, limit }) };
         let messages: Message[];
-        if (agentId) {
-          const taskDbId = taskId ? rt.store.getTask(taskId).id : undefined;
-          messages = rt.store.listMessagesFor(agentId, 1000).filter((m) => (!channel || m.channel === channel) && (!taskDbId || m.taskId === taskDbId)).slice(-limit);
+        if (agentId && (channel === "direct" || peerAgentId)) {
+          messages = store.listDirectMessages(store.getAgent(agentId).id, peerAgentId ? store.getAgent(peerAgentId).id : null);
+        } else if (agentId) {
+          const taskDbId = taskId ? store.getTask(taskId).id : undefined;
+          messages = store.listMessagesFor(agentId, 1000).filter((m) => (!channel || m.channel === channel) && (!taskDbId || m.taskId === taskDbId));
         } else {
-          messages = rt.store.listMessages({ ...(channel ? { channel } : {}), ...(taskId ? { taskId } : {}), limit });
+          messages = store.listMessages({ ...(channel ? { channel } : {}), ...(taskId ? { taskId } : {}) });
         }
-        return { messages };
+        return { messages: store.withReplyCounts(messages.filter((m) => m.threadId === null)).slice(-limit) };
       },
+      "state.chat": async (p) => chatStatus(await this.rt(p)),
       "state.channels": async (p) => this.channels(await this.rt(p)),
       "state.prd": async (p) => {
         const rt = await this.rt(p);
@@ -174,7 +183,7 @@ export class ClientApi {
       "state.evidence": async (p) => {
         const rt = await this.rt(p);
         const ev = rt.store.listEvidence(reqStr(p, "taskId", 200));
-        return { task: ev.task, verifications: ev.verifications, artifacts: ev.artifacts, runs: ev.runs, routes: rt.store.listRouteDecisions(ev.task.id) };
+        return { task: ev.task, verifications: ev.verifications, artifacts: ev.artifacts, runs: ev.runs, routes: rt.store.listRouteDecisions(ev.task.id), deliveredMessages: rt.store.deliveredMessagesForTask(ev.task.id) };
       },
       "state.settings": async (p) => {
         const rt = await this.rt(p);
@@ -253,28 +262,21 @@ export class ClientApi {
         const channel = reqStr(p, "channel", 20) as Exclude<MessageChannel, "cto">;
         if (!["project", "task", "direct"].includes(channel)) throw new ValidationError(`Unknown channel "${channel}".`, { channel });
         const taskId = optStr(p, "taskId");
-        let recipients = Array.isArray(p["toAgentIds"]) ? (p["toAgentIds"] as string[]) : [];
-        if (recipients.length === 0) {
-          if (channel === "task") {
-            if (!taskId) throw new ValidationError("A task message needs a task.");
-            const t = rt.store.getTask(taskId);
-            recipients = t.assigneeAgentId ? [t.assigneeAgentId] : [];
-          } else if (channel === "project") {
-            recipients = rt.store.listAgents().map((a) => a.id);
-          } else {
-            throw new ValidationError("A direct message needs at least one recipient.");
-          }
-        }
+        const threadId = optStr(p, "threadId");
+        const body = reqStr(p, "body", 20_000);
+        const toAgentIds = Array.isArray(p["toAgentIds"]) ? (p["toAgentIds"] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        const recipients = humanRecipients(rt, { channel, ...(taskId ? { taskId } : {}), toAgentIds, ...(threadId ? { threadId } : {}), body });
         const r = rt.store.postMessage({
           channel,
           ...(taskId ? { taskId } : {}),
+          ...(threadId ? { threadId } : {}),
           sender: HUMAN,
-          body: reqStr(p, "body", 20_000),
+          body,
           recipients,
           changesProductBehavior: channel !== "project",
         });
         rt.scheduler.wake("human_message");
-        return { messageId: r.id };
+        return { messageId: r.id, woke: r.recipients };
       },
       "prd.approve": async (p) => {
         const rt = await this.rt(p);
@@ -444,7 +446,7 @@ export class ClientApi {
     const { store } = rt;
     const all = store.listMessages();
     const last = (ms: Message[]) => ms.at(-1)?.createdAt ?? null;
-    const out: Array<{ channel: MessageChannel; taskId: string | null; agentId: string | null; label: string; lastAt: string | null }> = [
+    const out: Array<{ channel: MessageChannel; taskId: string | null; agentId: string | null; peerAgentId?: string | null; label: string; lastAt: string | null }> = [
       { channel: "cto", taskId: null, agentId: null, label: "CTO", lastAt: last(all.filter((m) => m.channel === "cto")) },
       { channel: "project", taskId: null, agentId: null, label: "Project", lastAt: last(all.filter((m) => m.channel === "project")) },
     ];
@@ -454,8 +456,20 @@ export class ClientApi {
     }
     for (const a of store.listAgents()) {
       if (a.role === "cto") continue;
-      const ms = store.listMessagesFor(a.id, 1000).filter((m) => m.channel === "direct");
-      out.push({ channel: "direct", taskId: null, agentId: a.id, label: a.name, lastAt: last(ms) });
+      out.push({ channel: "direct", taskId: null, agentId: a.id, label: a.name, lastAt: last(store.listDirectMessages(a.id, null)) });
+    }
+    // Direct messages between two agents (ask_teammate, chat replies), one entry per pair that has any, labeled "Ada and Bo".
+    const pairs = new Map<string, { ids: string[]; lastAt: string }>();
+    for (const m of all) {
+      if (m.channel !== "direct") continue;
+      const pair = store.directPair(m);
+      if (pair.length !== 2 || pair.includes("billy")) continue;
+      pairs.set(pair.join("+"), { ids: pair, lastAt: m.createdAt });
+    }
+    const name = (id: string) => store.getAgent(id).name;
+    for (const { ids, lastAt } of pairs.values()) {
+      const [x, y] = [...ids].sort((p1, p2) => name(p1).localeCompare(name(p2)));
+      out.push({ channel: "direct", taskId: null, agentId: x!, peerAgentId: y!, label: `${name(x!)} and ${name(y!)}`, lastAt });
     }
     return { channels: out };
   }

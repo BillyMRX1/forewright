@@ -238,6 +238,48 @@ export function buildCtoPrompt(input: {
   return truncate(s.join("\n\n"), 150 * 1024);
 }
 
+// ---------------------------------------------------------------- chat turns
+
+/** The final text of a chat turn that has nothing to say: it is not posted. */
+export const NO_REPLY = "NO_REPLY";
+
+export function chatSystemPrompt(agentName: string): string {
+  return [
+    `You are ${agentName}, a member of a small software team coordinated by forewright. This is a short chat turn: someone wrote to you and you answer.`,
+    "Rules:",
+    "- Answer only. Do not start task work, do not edit files, and do not run long commands. Task work happens in task runs.",
+    "- Keep it short: a few sentences. Your final message is posted as your reply where you were written to.",
+    `- If nothing needs an answer (a thanks, an acknowledgement), your final message is exactly ${NO_REPLY} and nothing is posted.`,
+    "- Scope changes go through the CTO and Billy. If someone asks you to change what a task should do, say so and tell the CTO with send_message.",
+    "- Use ask_teammate to ask a teammate a question; the answer reaches you in a later turn. Mention someone with @Name only when they need to read it.",
+    `- ${UNTRUSTED_NOTE}`,
+  ].join("\n");
+}
+
+export function buildChatPrompt(input: {
+  agent: Agent;
+  projectName: string;
+  ctoName: string;
+  /** The new messages, formatted (formatMessage). */
+  messages: string[];
+  /** Earlier messages of the threads being answered (root and the last replies), formatted. */
+  threads: string[];
+  /** The agent's own tasks in a line each, for context. */
+  tasks: string[];
+  instructions: string;
+  /** Memory notes for a fresh session; empty or absent when resuming. */
+  memory?: string;
+}): string {
+  const s: string[] = [`You are ${input.agent.name}, the ${input.agent.role} agent on "${input.projectName}". Billy is the human owner; ${input.ctoName} is the CTO.`];
+  if (input.tasks.length > 0) s.push(`## Your tasks\n${input.tasks.join("\n")}`);
+  if (input.memory) s.push(input.memory);
+  if (input.instructions) s.push(input.instructions);
+  if (input.threads.length > 0) s.push(`## Earlier in the thread\n${input.threads.join("\n")}`);
+  s.push(`## New messages for you\n${input.messages.length > 0 ? input.messages.join("\n") : "(none)"}`);
+  s.push("Answer only. Do not start task work. Keep it short.");
+  return truncate(s.join("\n\n"), 60 * 1024);
+}
+
 /** Context for a CTO turn that could not resume its provider session. */
 export function buildResetSummary(doc: RequirementDoc | null, recentCtoMessages: string[], heading = "## Context (your previous session could not be resumed)"): string {
   return [

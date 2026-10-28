@@ -103,6 +103,7 @@ export class Scheduler {
     if (!store.getSettings().planOnly) dispatchWork(rt);
     if (!rt.cto.busy()) nudgeKickoff(rt, "progress");
     rt.cto.maybeStart(reason);
+    rt.chat.maybeStart();
   }
 
   /**

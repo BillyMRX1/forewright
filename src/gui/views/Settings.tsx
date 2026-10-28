@@ -10,7 +10,7 @@ import type { EngineId } from "../../core/types.js";
 import { localStatusWords } from "../../core/local-format.js";
 import { engineRoleProblem } from "../../runtime/engine-roles.js";
 import type { ProviderStatus, Result } from "../../runtime/protocol.js";
-import { BACKUP_HELP, BUDGET_HELP, FALLBACK_TITLE, LABELS, LOCAL_NOTICE, MODES, PLAN_ONLY_LABEL, REPOSITORY_HELP, SETTING_ITEMS, authorityControl, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, settingKey, withLimit, ROUTING_HELP, ROUTING_ITEMS, ROUTING_LABEL, otherPinLines, parsePinInput, pinWords, routingKey } from "../../tui/settings-model.js";
+import { BACKUP_HELP, BUDGET_HELP, CHAT_HELP, CHAT_LABEL, CHAT_NAMES, chatKey, FALLBACK_TITLE, LABELS, LOCAL_NOTICE, MODES, PLAN_ONLY_LABEL, REPOSITORY_HELP, SETTING_ITEMS, authorityControl, itemLabel, providerHealthWord, budgetItems, budgetKey, budgetLabel, parseBudgetInput, settingKey, withLimit, ROUTING_HELP, ROUTING_ITEMS, ROUTING_LABEL, otherPinLines, parsePinInput, pinWords, routingKey } from "../../tui/settings-model.js";
 import type { AuthorityName, FallbackList, Group, LimitName, Mode } from "../../tui/settings-model.js";
 import { engineLabel } from "../../tui/toasts.js";
 import { isAgentEvent, useLive, useProject } from "../live.js";
@@ -437,7 +437,7 @@ function ChecksBox({ value, onSave, error }: { value: string[]; onSave: (v: stri
 export function SettingsView({ data, errors, actions, children }: SettingsViewProps) {
   const { settings, providers } = data;
   const [pendingCommit, setPendingCommit] = useState(false);
-  const section = (group: Group | "Notifications", children: ReactNode, intro?: ReactNode) => (
+  const section = (group: Group | "Notifications" | "Chat", children: ReactNode, intro?: ReactNode) => (
     <section className="card card-wide set-group" aria-labelledby={`set-g-${group}`} key={group}>
       <h2 id={`set-g-${group}`}>{group}</h2>
       {intro}
@@ -610,6 +610,15 @@ export function SettingsView({ data, errors, actions, children }: SettingsViewPr
           </Row>
         );
       }), <p className="muted">{AUTOMATION_HELP}</p>)}
+      {section("Chat", CHAT_NAMES.map((name) => {
+        const key = chatKey(name);
+        const label = CHAT_LABEL[name];
+        return (
+          <Row key={key} settingKey={key} label={label} error={errors[key]}>
+            <NumberField label={label} inputKey={key} value={settings.chat[name]} onCommit={(n) => actions.save(key, n)} />
+          </Row>
+        );
+      }), <p className="muted">{CHAT_HELP}</p>)}
       {children}
       {pendingCommit ? (
         <ConfirmDialog

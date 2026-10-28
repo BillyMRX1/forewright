@@ -17,6 +17,8 @@ import { NotifyPipeline } from "./notify.js";
 import type { SendOptions } from "./notify-send.js";
 import { activeHolds, BUDGET_ACTION, onBudgetDecision } from "./budgets.js";
 import { purposeFor, resolveFor } from "./fallback.js";
+import { ChatDriver } from "./chat.js";
+import { LOOP_ACTION, onLoopDecision } from "./chat-guard.js";
 import { CtoDriver } from "./cto.js";
 import { isGateDecision } from "./gates.js";
 import { git, gitLine, gitTry, hasCommits, isGitRepo, revParse } from "./git.js";
@@ -70,6 +72,7 @@ export class ProjectRuntime {
   readonly workspace: WorkspaceManager;
   readonly scheduler: Scheduler;
   readonly cto: CtoDriver;
+  readonly chat: ChatDriver;
   readonly triggers: GithubTriggers;
   readonly active = new Map<string, ActiveRun>();
   readonly subscribers = new Set<Notifier>();
@@ -95,6 +98,7 @@ export class ProjectRuntime {
     this.tokens = new TokenRepo(store.db, projectId, deps.clock);
     this.workspace = new WorkspaceManager(root, projectId, store);
     this.cto = new CtoDriver(this);
+    this.chat = new ChatDriver(this);
     this.triggers = new GithubTriggers(this, ghRunner(deps.ghBinary));
     this.scheduler = new Scheduler(this, deps.watchdogMs);
     this.notify = new NotifyPipeline({ store, projectName: name, home: deps.forewrightHome, ...(deps.notifySend ? { send: deps.notifySend } : {}) });
@@ -332,10 +336,14 @@ export class ProjectRuntime {
   async onDecisionResolved(decision: Decision): Promise<void> {
     const chosen = decision.options.find((o) => o.key === decision.resolutionOption);
     const approved = chosen !== undefined && (chosen.approves === true || chosen.key === "approve");
-    this.notifyCto(
-      `decision:${decision.id}`,
-      `Billy answered "${decision.title}" with "${chosen?.label ?? decision.resolutionOption}"${decision.resolutionNote ? `: ${decision.resolutionNote}` : ""}.`,
-    );
+    const action = (decision.boundAction as { action?: string } | null)?.action;
+    // A chat loop is between two workers and Billy; the CTO is not woken for his answer.
+    if (action !== LOOP_ACTION) {
+      this.notifyCto(
+        `decision:${decision.id}`,
+        `Billy answered "${decision.title}" with "${chosen?.label ?? decision.resolutionOption}"${decision.resolutionNote ? `: ${decision.resolutionNote}` : ""}.`,
+      );
+    }
     if (isGateDecision(decision) && !approved) {
       // Billy said no: the task stays blocked with a clear reason until he unblocks it (which asks again).
       for (const id of decision.affectedTaskIds) {
@@ -348,6 +356,7 @@ export class ProjectRuntime {
       if (decision.kind === "merge" && approved) this.executeMerge(decision.id);
       if ((decision.boundAction as { action?: string } | null)?.action === "kickoff_revise") resolveKickoffProposal(this, decision, approved);
       if ((decision.boundAction as { action?: string } | null)?.action === BUDGET_ACTION) onBudgetDecision(this, decision, approved);
+      if (action === LOOP_ACTION) onLoopDecision(this, decision, approved);
     } catch (err) {
       if (err instanceof ForewrightError) {
         this.store.recordEvent(`${decision.kind}.refused`, "decision", decision.id, { kind: "system" }, { code: err.code, message: err.message });

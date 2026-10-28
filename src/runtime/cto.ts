@@ -31,15 +31,18 @@ function isRoutine(m: Message): boolean {
   return m.senderKind === "system" && m.dedupeKey !== null && ROUTINE_NOTICE_KEY.test(m.dedupeKey);
 }
 
-type ReplyTarget = { channel: MessageChannel; taskId?: string };
+type ReplyTarget = { channel: MessageChannel; taskId?: string; threadId?: string };
 
-/** Where a turn's final text goes: each distinct channel (and task thread) a human wrote in, or the cto channel. */
+/**
+ * Where a turn's final text goes: each distinct channel (and task thread) a human wrote in, or the cto channel.
+ * A human message inside a chat thread is answered in that thread.
+ */
 function replyTargets(batch: Message[]): ReplyTarget[] {
   const out: ReplyTarget[] = [];
   for (const m of batch) {
     if (m.senderKind !== "human") continue;
-    if (out.some((t) => t.channel === m.channel && t.taskId === (m.taskId ?? undefined))) continue;
-    out.push(m.taskId ? { channel: m.channel, taskId: m.taskId } : { channel: m.channel });
+    if (out.some((t) => t.channel === m.channel && t.taskId === (m.taskId ?? undefined) && t.threadId === (m.threadId ?? undefined))) continue;
+    out.push({ channel: m.channel, ...(m.taskId ? { taskId: m.taskId } : {}), ...(m.threadId ? { threadId: m.threadId } : {}) });
   }
   return out.length > 0 ? out : [{ channel: "cto" }];
 }
@@ -280,7 +283,7 @@ export class CtoDriver {
       case "succeeded":
         if (outcome.finalText && outcome.finalText.trim() !== "") {
           for (const t of targets) {
-            const suffix = t.channel === "cto" ? "" : `:${t.channel}${t.taskId ? `:${t.taskId}` : ""}`;
+            const suffix = t.channel === "cto" ? "" : `:${t.channel}${t.taskId ? `:${t.taskId}` : ""}${t.threadId ? `:${t.threadId}` : ""}`;
             store.postMessage({ ...t, sender: { kind: "agent", id: a.agent.id }, body: outcome.finalText, recipients: [], dedupeKey: `cto-final:${a.run.id}${suffix}` });
           }
         }

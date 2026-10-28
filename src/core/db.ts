@@ -44,13 +44,22 @@ export function migrate(db: Db, now: () => Date = () => new Date()): void {
   }
   for (const m of MIGRATIONS) {
     if (m.version <= row.v) continue;
+    // PRAGMA foreign_keys is a no-op inside a transaction, so it is switched before BEGIN and restored after COMMIT.
+    const fkWasOn = (db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys === 1;
+    if (m.foreignKeysOff && fkWasOn) db.exec("PRAGMA foreign_keys = OFF");
     try {
       tx(db, () => {
         db.exec(m.sql);
+        if (m.foreignKeysOff) {
+          const broken = db.prepare("PRAGMA foreign_key_check").all();
+          if (broken.length > 0) throw new Error(`foreign key check failed after the rebuild: ${JSON.stringify(broken.slice(0, 5))}`);
+        }
         db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(m.version, now().toISOString());
       });
     } catch (err) {
       throw new MigrationError(`Migration ${m.version} (${m.name}) failed.`, { version: m.version, cause: String(err) });
+    } finally {
+      if (m.foreignKeysOff && fkWasOn) db.exec("PRAGMA foreign_keys = ON");
     }
   }
 }
