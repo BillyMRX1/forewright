@@ -1,5 +1,5 @@
 // Shared by *.test.ts files only.
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { TestClock } from "./clock.js";
@@ -7,8 +7,24 @@ import { type Db, openAndMigrate } from "./db.js";
 import { Store } from "./store.js";
 import type { EngineId, RunUsage } from "./types.js";
 
+const createdDirs: string[] = [];
+
+// node --test runs each test file in its own process, so removing on exit
+// keeps a full run from leaving thousands of folders in the temp directory.
+process.once("exit", () => {
+  for (const dir of createdDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch (err) {
+      process.stderr.write(`test cleanup: could not remove ${dir}: ${(err as Error).message}\n`);
+    }
+  }
+});
+
 export function tempDir(prefix = "forewright-test-"): string {
-  return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
+  createdDirs.push(dir);
+  return dir;
 }
 
 export interface TestEnv {

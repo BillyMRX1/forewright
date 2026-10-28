@@ -1,4 +1,5 @@
 import { envGet, WINDOWS_ENV_NAMES } from "../core/platform.js";
+import { tempDir } from "../core/test-helpers.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,7 +9,7 @@ import type { EngineParser, ExitInfo } from "./runner.js";
 import { makeEmitter } from "./runner.js";
 
 export function tmpDir(prefix = "forewright-test-"): string {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  return tempDir(prefix);
 }
 
 export function fixture(name: string): string[] {
