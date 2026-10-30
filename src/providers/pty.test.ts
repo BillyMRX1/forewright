@@ -107,7 +107,7 @@ test("python helper: a program that does not exist is reported in the output wit
   await p.kill(100);
 });
 
-test("node-pty: the same behavior when the module loads on this machine", async (t) => {
+test("node-pty: the same behavior when the module loads on this machine", { skip: process.platform === "win32" ? "terminals are off on Windows" : false }, async (t) => {
   const loaded = await loadNodePty();
   if (!loaded.mod) {
     t.skip(`node-pty does not load here: ${loaded.error}`);
@@ -120,11 +120,12 @@ test("node-pty: the same behavior when the module loads on this machine", async 
 
 test("choosing: node-pty first, the Python helper next, and a plain reason when neither is there", async () => {
   const fakeMod = { spawn: () => { throw new Error("not used"); } };
-  assert.equal((await choosePty({ loadNodePty: async () => ({ mod: fakeMod, error: null }) })).backend?.name, "node-pty");
+  assert.equal((await choosePty({ platform: "linux", loadNodePty: async () => ({ mod: fakeMod, error: null }) })).backend?.name, "node-pty");
   const missing = async () => ({ mod: null, error: "Cannot find module 'node-pty'" });
-  const win = await ptyAvailability({ platform: "win32", loadNodePty: missing });
+  // Windows is off even when node-pty loads (ConPTY problems in CI); the reason says so.
+  const win = await ptyAvailability({ platform: "win32", loadNodePty: async () => ({ mod: fakeMod, error: null }) });
   assert.equal(win.backend, null);
-  assert.match(win.problem ?? "", /node-pty module to open terminals on Windows/);
+  assert.match(win.problem ?? "", /not available on Windows yet/);
   const noPy = await ptyAvailability({ platform: "linux", loadNodePty: missing, env: { PATH: "/nonexistent" } });
   assert.equal(noPy.backend, null);
   assert.match(noPy.problem ?? "", /needs Python 3, or the node-pty module/);

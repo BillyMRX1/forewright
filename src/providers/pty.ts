@@ -299,16 +299,15 @@ export interface PtyChoiceDeps {
 /** node-pty when it loads, else the Python helper on macOS and Linux, else nothing (Windows without node-pty). */
 export async function choosePty(deps: PtyChoiceDeps = {}): Promise<PtyChoice> {
   const platform = deps.platform ?? process.platform;
+  if (isWindows(platform)) {
+    // node-pty's ConPTY on Windows did not pass resizes through and kept its console host alive after the CLI ended
+    // (seen in CI with node-pty 1.1.0), so terminals stay off there until that is solved on a real Windows machine.
+    return { backend: null, problem: "Terminals into an agent's CLI are not available on Windows yet. They work on macOS and Linux." };
+  }
   const loaded = await (deps.loadNodePty ?? loadNodePty)();
   const dir = platform === "darwin" && loaded.mod ? nodePtyDir() : null;
   const usable = loaded.mod !== null && (dir === null || ensureSpawnHelper(dir));
   if (loaded.mod && usable) return { backend: nodePtyBackend(loaded.mod, platform), problem: null };
-  if (isWindows(platform)) {
-    return {
-      backend: null,
-      problem: `Forewright needs the node-pty module to open terminals on Windows, and it could not be loaded (${loaded.error ?? "unknown error"}). Reinstall Forewright with pnpm install so its prebuilt binary is fetched.`,
-    };
-  }
   const python = findPython(deps.env ?? process.env);
   if (!python) {
     return {

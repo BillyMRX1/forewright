@@ -5,6 +5,7 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { FakeAdapter } from "../providers/fake.js";
+import { HUMAN } from "../core/test-helpers.js";
 import { choosePty } from "../providers/pty.js";
 import type { ProviderAdapter } from "../core/types.js";
 import type { RpcClient } from "./client.js";
@@ -126,7 +127,10 @@ test("while a terminal is open the scheduler starts no work run for the agent, a
     await h.client.request("terminal.detach", { terminalId: terminal.terminalId });
     await waitFor(() => workRequests(h).length === 1, "the work run after the terminal closed");
     const work = workRequests(h)[0]!;
-    await waitFor(() => !h.rt.agentBusy(ada.id) && h.rt.store.getAgentSession(ada.id, "fake", t.id) !== null, "the work run to finish");
+    await waitFor(() => h.rt.store.getAgentSession(ada.id, "fake", t.id) !== null, "the work run to record its session");
+    // Paused, the scheduler starts nothing new (a review or a repair run would race the attach below).
+    h.rt.store.setPaused(true, HUMAN);
+    await waitFor(() => !h.rt.agentBusy(ada.id), "the work run to finish");
 
     // Attaching again resumes the task session, in the task worktree, with the agent's own permission.
     const again = await attach(h, h.client, ada.id);
