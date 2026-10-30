@@ -12,13 +12,57 @@ import { readStore, writeStore } from "./ui.js";
 export const DESKTOP_KEY = "forewright.desktopNotify";
 export type Permission = NotificationPermission | "unsupported";
 
-export const permissionState = (): Permission => (typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+/** The notification API the Forewright desktop app injects into the page (withGlobalTauri). */
+export interface TauriNotification {
+  isPermissionGranted(): Promise<boolean>;
+  requestPermission(): Promise<string>;
+  sendNotification(options: { title: string; body?: string }): void;
+}
 
-/** On means: Billy turned it on in this browser and the browser still allows it. */
+/** The desktop app's notification API when this page runs inside it, otherwise null (a plain browser). */
+export function tauriNotification(g: object = globalThis): TauriNotification | null {
+  const n = (g as { __TAURI__?: { notification?: Partial<TauriNotification> } }).__TAURI__?.notification;
+  return n && typeof n.isPermissionGranted === "function" && typeof n.requestPermission === "function" && typeof n.sendNotification === "function" ? (n as TauriNotification) : null;
+}
+
+const asPermission = (v: string): Permission => (v === "granted" || v === "denied" ? v : "default");
+
+// The desktop app answers asynchronously but permissionState() is read synchronously, so the answer is kept here.
+let tauriPermission: Permission = "default";
+void tauriNotification()?.isPermissionGranted().then((ok) => {
+  tauriPermission = ok ? "granted" : "default";
+}, () => undefined); // stays "default": nothing is shown until Billy turns it on
+
+export const permissionState = (): Permission => {
+  if (tauriNotification()) return tauriPermission;
+  return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+};
+
+/** On means: Billy turned it on in this browser (or the desktop app) and it still allows it. */
 export const desktopOn = (): boolean => readStore(DESKTOP_KEY) === "on" && permissionState() === "granted";
 
-/** Asks the browser for permission (call it from a click only) and remembers the choice. */
+/** Shows one notification. The desktop app has no click callback, so there `onClick` is not used. */
+export function showDesktop(note: { title: string; body: string; tag: string }, onClick: () => void, g: object = globalThis): void {
+  const tauri = tauriNotification(g);
+  if (tauri) {
+    tauri.sendNotification({ title: note.title, body: note.body });
+    return;
+  }
+  const popup = new Notification(note.title, { body: note.body, tag: note.tag });
+  popup.onclick = () => {
+    onClick();
+    popup.close();
+  };
+}
+
+/** Asks the browser (or the desktop app) for permission (call it from a click only) and remembers the choice. */
 export async function enableDesktop(): Promise<Permission> {
+  const tauri = tauriNotification();
+  if (tauri) {
+    tauriPermission = (await tauri.isPermissionGranted()) ? "granted" : asPermission(await tauri.requestPermission());
+    if (tauriPermission === "granted") writeStore(DESKTOP_KEY, "on");
+    return tauriPermission;
+  }
   const p = permissionState();
   if (p === "unsupported" || p === "denied") return p;
   const next = p === "granted" ? p : await Notification.requestPermission();
@@ -91,12 +135,10 @@ export function DesktopNotifier(): ReactNode {
         lookup: { task: (id) => snap.current?.tasks.find((t) => t.id === id) ?? null, agentName: (id) => snap.current?.agents.find((a) => a.id === id)?.name ?? null },
       });
       if (note === null) return;
-      const popup = new Notification(note.title, { body: note.body, tag: note.tag });
-      popup.onclick = () => {
+      showDesktop(note, () => {
         window.focus();
         goRef.current(note.link.view, note.link.id);
-        popup.close();
-      };
+      });
     });
     return () => {
       live = false;

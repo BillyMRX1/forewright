@@ -122,6 +122,10 @@ forewright config gui autostart on                           start the GUI whene
 
 A new port applies the next time the service starts; allowed host names apply at once. If the port is busy, `forewright gui` says so; pick another one with `forewright config gui port <n>`.
 
+## Desktop app
+
+A small desktop app for macOS and Windows opens the same GUI in its own window, shows desktop notifications and can open at login. It uses the `forewright` command already installed on your computer, so install Forewright first. The installers are not signed yet. How to build it and how to open an unsigned app: [desktop/README.md](desktop/README.md).
+
 ## Notifications
 
 Off by default. Forewright can tell you when something needs you, on your phone and in the browser. A notification has a short title and ids only (never code, diffs, prompts or secrets), and each item notifies once. The types: a decision waits in the Inbox, a PRD revision waits for approval, a task is done, a task is blocked or ran out of retries, and a usage limit or budget hold started. Mute single types per project in Settings, Notifications (it applies to both).

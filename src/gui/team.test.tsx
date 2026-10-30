@@ -9,7 +9,7 @@ import type { TeamActions, TeamData } from "./views/Team.js";
 
 const NOW = Date.parse("2026-01-01T01:00:00.000Z");
 const noop = () => undefined;
-const actions: TeamActions = { go: noop, edit: noop, retire: noop };
+const actions: TeamActions = { go: noop, edit: noop, retire: noop, addSkill: noop, removeSkill: noop, setWebResearch: noop };
 
 const caps = (coordinationTools: "mcp" | "none"): ProviderCapabilities => ({
   streaming: true,
@@ -38,7 +38,7 @@ function data(over: Partial<TeamData> = {}): TeamData {
   const f = fixture();
   const retired = agent({ id: "r1", name: "Old Ray", lifecycle: "retired", retiredAt: "2026-01-01T00:10:00.000Z" });
   const agents = f.snapshot.agents.map((a) => (a.role === "cto" ? { ...a, permission: "coordinator" as const } : a));
-  return { agents: [...agents, retired], tasks: f.snapshot.tasks, providers, runtime: f.runtime, usage: usage(), error: null, ...over };
+  return { agents: [...agents, retired], tasks: f.snapshot.tasks, providers, runtime: f.runtime, usage: usage(), skills: [], error: null, ...over };
 }
 
 test("splitTeam puts the CTO first and moves retired agents out", () => {

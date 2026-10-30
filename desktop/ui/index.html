@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forewright</title>
+<style>
+  :root { --bg: #f8fafc; --fg: #111827; --muted: #4b5563; --accent: #0891b2; --panel: #ffffff; --line: #d1d5db; --err: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b1020; --fg: #e5e7eb; --muted: #9ca3af; --accent: #06b6d4; --panel: #111827; --line: #374151; --err: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: 100%; max-width: 520px; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  .spin { width: 28px; height: 28px; margin: 0 auto 16px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+  #error { text-align: left; }
+  #error h1 { color: var(--err); text-align: center; }
+  pre { margin: 0 0 12px; padding: 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--fg); }
+  button { display: block; margin: 0 auto 12px; padding: 8px 18px; font: inherit; color: #fff; background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .hint { font-size: 13px; text-align: center; }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <section id="starting">
+    <div class="spin" aria-hidden="true"></div>
+    <h1>Starting Forewright...</h1>
+    <p>Starting the service and opening the GUI.</p>
+  </section>
+  <section id="error" hidden>
+    <h1>Forewright did not start</h1>
+    <p style="text-align:center">Forewright is not installed, or it could not start.</p>
+    <pre id="detail"></pre>
+    <button id="retry" type="button">Try again</button>
+    <p class="hint">Install it with <code>npm install -g forewright</code>, or set <code>FOREWRIGHT_BIN</code> to the full path of the <code>forewright</code> command and open this app again.</p>
+  </section>
+</main>
+<script>
+  const starting = document.getElementById("starting");
+  const error = document.getElementById("error");
+  const detail = document.getElementById("detail");
+
+  async function start() {
+    error.hidden = true;
+    starting.hidden = false;
+    try {
+      // On success the window navigates to the GUI, so there is nothing more to do here.
+      await window.__TAURI__.core.invoke("start");
+    } catch (e) {
+      detail.textContent = String(e);
+      starting.hidden = true;
+      error.hidden = false;
+      document.getElementById("retry").focus();
+    }
+  }
+
+  document.getElementById("retry").addEventListener("click", start);
+  start();
+</script>
+</body>
+</html>

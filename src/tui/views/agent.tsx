@@ -151,7 +151,7 @@ export function AgentView() {
   const glyph = status === "working" ? spinner : statusGlyph(status);
   const header: DLine = {
     text: `${oneLine(member.name)} ${glyph} ${STATUS_LABEL[status]}`,
-    segs: [{ text: oneLine(member.name), bold: true }, { text: `  ${glyph} ${STATUS_LABEL[status]}`, color: color.color, ...(color.dim ? { dim: true } : {}), bold: status === "needs_you" }, { text: `   ${row?.engine ?? member.engine} ${row?.model ?? member.model ?? "default"}  ${member.role}  ${member.permission}${row?.elapsed ? `  ${row.elapsed}` : ""}`, dim: true }],
+    segs: [{ text: oneLine(member.name), bold: true }, { text: `  ${glyph} ${STATUS_LABEL[status]}`, color: color.color, ...(color.dim ? { dim: true } : {}), bold: status === "needs_you" }, { text: `   ${row?.engine ?? member.engine} ${row?.model ?? member.model ?? "default"}  ${member.role}  ${member.permission}${(member.skills ?? []).length > 0 ? `  skills: ${member.skills.join(", ")}` : ""}${row?.elapsed ? `  ${row.elapsed}` : ""}`, dim: true }],
   };
 
   if (mode === "memory") {

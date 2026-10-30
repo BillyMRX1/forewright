@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "forewright-gui",
+  "description": "The Forewright GUI served from this machine: notifications only, nothing else.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify"
+  ]
+}

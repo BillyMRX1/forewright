@@ -69,7 +69,7 @@ function buildRequest(cfg: PhoneConfig, msg: PhoneMessage, urls: SendOptions["ur
 }
 
 /** The proxy variables that apply (the environment wins over the Forewright config) and the extra certificates. */
-function networkFor(home: string): { proxyEnv: Record<string, string>; ca?: string[] } {
+export function outboundNetwork(home: string): { proxyEnv: Record<string, string>; ca?: string[] } {
   const cfg = readNetworkConfig(home);
   const resolved = resolveNetwork(process.env, cfg);
   const proxyEnv: Record<string, string> = {};
@@ -90,7 +90,7 @@ function attempt(req: Request, timeoutMs: number, home: string): Promise<number>
     let agent: http.Agent | https.Agent | undefined;
     let ca: string[] | undefined;
     if (!local) {
-      const net = networkFor(home);
+      const net = outboundNetwork(home);
       agent = secure ? new https.Agent({ proxyEnv: net.proxyEnv } as https.AgentOptions) : new http.Agent({ proxyEnv: net.proxyEnv } as http.AgentOptions);
       ca = net.ca;
     }

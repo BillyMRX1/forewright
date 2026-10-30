@@ -1,0 +1,52 @@
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "desktop/**"
+      - "src/gui/notify.tsx"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "src/gui/notify.tsx"
+      - ".github/workflows/desktop.yml"
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundle: dmg
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundle: nsis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+      - name: Build the installer (unsigned)
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forewright-desktop-${{ matrix.os }}
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/${{ matrix.bundle }}/*
+          if-no-files-found: error

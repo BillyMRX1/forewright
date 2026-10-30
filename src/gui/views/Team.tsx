@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import type { Task } from "../../core/store-types.js";
+import type { SkillInfo, Task } from "../../core/store-types.js";
 import type { EngineId, PermissionProfile } from "../../core/types.js";
 import type { UsageSummary } from "../../core/usage.js";
 import { compactTokens, costText } from "../../core/usage-format.js";
@@ -18,6 +18,7 @@ import { engineLabel, resetTimePhrase } from "../../tui/toasts.js";
 import { statusGlyph } from "../../tui/theme.js";
 import type { DisplayStatus } from "../../tui/theme.js";
 import { isUsageEvent, useLive, useNeeds, useProject } from "../live.js";
+import { attachChoices, isSkillEvent, skillName } from "../skills-model.js";
 import { plainError } from "../Picker.js";
 import { ConfirmDialog, Modal, relTime } from "../ui.js";
 import { statusWords } from "./Home.js";
@@ -128,7 +129,7 @@ function Glyph({ status }: { status: DisplayStatus }) {
 }
 
 function roleWords(m: TeamMember): string {
-  return m.role === "cto" ? "CTO" : m.role === "review" ? "Reviewer" : m.role;
+  return m.role === "cto" ? "CTO" : m.role === "review" ? "Reviewer" : m.role === "research" ? "Researcher" : m.role;
 }
 
 /** Loads one agent's memory notes while it is on screen (the card renders it only when expanded). */
@@ -199,13 +200,77 @@ function MemoryNotes({ agent }: { agent: TeamMember }): ReactNode {
   );
 }
 
+export const WEB_RESEARCH_LABEL = "Can look up skills on vetted sites";
+
+/** Whether the web research switch is offered: only for research agents. */
+export const hasWebResearchSwitch = (m: Pick<TeamMember, "role">): boolean => m.role === "research";
+
+/** A small switch with the same look as the Settings ones (kept here so Team does not load the Settings chunk). */
+export function ResearchSwitch({ on, busy, onChange }: { on: boolean; busy: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={WEB_RESEARCH_LABEL} className={on ? "set-switch set-switch-on" : "set-switch"} disabled={busy} onClick={() => onChange(!on)}>
+      <span className="set-switch-knob" aria-hidden="true" />
+      <span className="set-switch-text">{on ? "on" : "off"}</span>
+    </button>
+  );
+}
+
 export interface TeamActions {
   go: (view: "tasks", taskId: string) => void;
   edit: (m: TeamMember) => void;
   retire: (m: TeamMember) => void;
+  /** Opens the picker of library skills the agent does not have. */
+  addSkill: (m: TeamMember) => void;
+  /** Asks to take a skill off an agent (the view confirms first). */
+  removeSkill: (m: TeamMember, slug: string) => void;
+  setWebResearch: (m: TeamMember, on: boolean) => void;
 }
 
-function AgentCard({ row, usage, actions, highlight }: { row: WorkerRow; usage: UsageSummary | null; actions: TeamActions; highlight: boolean }) {
+/** The skills of one agent as chips, each with a remove button, and the "Add skill" button. */
+export function SkillChips({ member, library, actions }: { member: TeamMember; library: SkillInfo[]; actions: TeamActions }) {
+  const agentName = oneLine(member.name);
+  return (
+    <div className="team-skills">
+      <span className="team-skills-label">Skills</span>
+      {member.skills.length === 0 ? <span className="muted">None</span> : null}
+      {member.skills.map((slug) => {
+        const label = oneLine(skillName(slug, library));
+        return (
+          <span key={slug} className="chip skill-chip">
+            {label}
+            <button type="button" className="skill-chip-x" onClick={() => actions.removeSkill(member, slug)} aria-label={`Remove ${label} from ${agentName}`}>
+              <span aria-hidden="true">x</span>
+            </button>
+          </span>
+        );
+      })}
+      <button type="button" className="btn btn-quiet btn-inline" onClick={() => actions.addSkill(member)} aria-label={`Add a skill to ${agentName}`}>
+        Add skill
+      </button>
+    </div>
+  );
+}
+
+/** The picker body: library skills the agent lacks, those it cannot take listed disabled with the reason. */
+export function SkillPicker({ member, library, onPick }: { member: TeamMember; library: SkillInfo[]; onPick: (slug: string) => void }) {
+  const choices = attachChoices(library, member);
+  if (choices.length === 0) return <p className="muted">{library.length === 0 ? "The library has no skills yet. Write one on the Skills view." : `${oneLine(member.name)} already has every skill in the library.`}</p>;
+  return (
+    <ul className="skill-pick">
+      {choices.map(({ skill, problem }) => (
+        <li key={skill.slug}>
+          <button type="button" className="skill-pick-btn" disabled={problem !== null} onClick={() => onPick(skill.slug)}>
+            <span className="skill-pick-name">{oneLine(skill.name)}</span>
+            <span className="muted skill-pick-desc">{oneLine(skill.description)}</span>
+            {problem ? <span className="skill-pick-why">{problem}</span> : null}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AgentCard({ row, usage, actions, highlight, library, webBusy }: { row: WorkerRow; usage: UsageSummary | null; actions: TeamActions; highlight: boolean; library: SkillInfo[]; webBusy: boolean }) {
   const m = row.a.agent;
   const [memoryOpen, setMemoryOpen] = useState(false);
   const words = engineWords(m);
@@ -244,6 +309,13 @@ function AgentCard({ row, usage, actions, highlight }: { row: WorkerRow; usage: 
         <dt>Last 7 days</dt>
         <dd>{agentUsageText(usage, m.id)}</dd>
       </dl>
+      <SkillChips member={m} library={library} actions={actions} />
+      {hasWebResearchSwitch(m) ? (
+        <div className="team-web">
+          <span>{WEB_RESEARCH_LABEL}</span>
+          <ResearchSwitch on={m.webResearch} busy={webBusy} onChange={(v) => actions.setWebResearch(m, v)} />
+        </div>
+      ) : null}
       <details className="team-mem" onToggle={(e) => setMemoryOpen(e.currentTarget.open)}>
         <summary>Memory notes</summary>
         {memoryOpen ? <MemoryNotes agent={m} /> : null}
@@ -270,11 +342,13 @@ export interface TeamData {
   providers: ProviderStatus[];
   runtime: RuntimeStatus | null;
   usage: UsageSummary | null;
+  /** The skill library, for the chip names and the picker. */
+  skills: SkillInfo[];
   /** The last problem when loading; the cards keep their last data. */
   error: string | null;
 }
 
-export function TeamView({ data, now, actions, focusId = null }: { data: TeamData; now: number; actions: TeamActions; focusId?: string | null }) {
+export function TeamView({ data, now, actions, focusId = null, webBusyId = null }: { data: TeamData; now: number; actions: TeamActions; focusId?: string | null; webBusyId?: string | null }) {
   const { active, retired } = splitTeam(data.agents);
   const attention = deriveAttention({ agents: active, tasks: data.tasks, decisions: [], runtime: data.runtime, proposedPrd: false, unseenDone: [] });
   const rows = workerRows(attention, data.tasks, data.runtime, data.providers, false, now);
@@ -293,7 +367,7 @@ export function TeamView({ data, now, actions, focusId = null }: { data: TeamDat
       ) : (
         <ul className="team-grid">
           {ordered.map((r) => (
-            <AgentCard key={r.a.agent.id} row={r} usage={data.usage} actions={actions} highlight={focusId === r.a.agent.id} />
+            <AgentCard key={r.a.agent.id} row={r} usage={data.usage} actions={actions} highlight={focusId === r.a.agent.id} library={data.skills} webBusy={webBusyId === r.a.agent.id} />
           ))}
         </ul>
       )}
@@ -423,13 +497,15 @@ export function RetireDialog({ member, error, busy, onConfirm, onCancel }: { mem
 
 // ---------------------------------------------------------------- the connected view
 
-type Dialog = { kind: "edit" | "retire"; agent: TeamMember } | null;
+type Dialog = { kind: "edit" | "retire" | "addSkill"; agent: TeamMember } | { kind: "removeSkill"; agent: TeamMember; slug: string } | null;
 
 export function Team(): ReactNode {
   const { rpc, projectId, runtime, go, notify, focus } = useProject();
   const needs = useNeeds();
   const usage = useLive(() => rpc.call("state.usage", { projectId, days: 7 }), { events: isUsageEvent });
+  const skills = useLive(() => rpc.call("skills.list", { projectId }), { events: isSkillEvent });
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [webBusyId, setWebBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -487,11 +563,47 @@ export function Team(): ReactNode {
       setError(null);
       setDialog({ kind: "retire", agent });
     },
+    addSkill: (agent) => {
+      setError(null);
+      setDialog({ kind: "addSkill", agent });
+    },
+    removeSkill: (agent, slug) => {
+      setError(null);
+      setDialog({ kind: "removeSkill", agent, slug });
+    },
+    setWebResearch: (agent, on) => {
+      setWebBusyId(agent.id);
+      rpc.call("agents.update", { projectId, agentId: agent.id, webResearch: on }).then(
+        () => {
+          setWebBusyId(null);
+          notify(`${oneLine(agent.name)} ${on ? "can now" : "can no longer"} look up skills on vetted sites.`);
+          needs.reload();
+        },
+        (err: unknown) => {
+          setWebBusyId(null);
+          notify(plainError(err));
+        },
+      );
+    },
   };
+
+  // Attaching and detaching report the server's refusal as a toast, since the dialog closes on a click.
+  const skillCall = (call: Promise<unknown>, done: string) => {
+    close();
+    call.then(
+      () => {
+        notify(done);
+        needs.reload();
+        skills.reload();
+      },
+      (err: unknown) => notify(plainError(err)),
+    );
+  };
+  const library = skills.data?.skills ?? [];
 
   return (
     <>
-      <TeamView data={{ agents: snap.agents, tasks: snap.tasks, providers: snap.providers, runtime, usage: usage.data, error: needs.error ?? usage.error }} now={now} actions={actions} focusId={focusId} />
+      <TeamView data={{ agents: snap.agents, tasks: snap.tasks, providers: snap.providers, runtime, usage: usage.data, skills: library, error: needs.error ?? usage.error ?? skills.error }} now={now} actions={actions} focusId={focusId} webBusyId={webBusyId} />
       {dialog?.kind === "edit" ? (
         <EditDialog
           member={dialog.agent}
@@ -499,6 +611,25 @@ export function Team(): ReactNode {
           error={error}
           busy={busy}
           onSave={(patch) => run(rpc.call("agents.update", { projectId, agentId: dialog.agent.id, ...patch }), `Updated ${oneLine(patch.name ?? dialog.agent.name)}.`)}
+          onCancel={close}
+        />
+      ) : null}
+      {dialog?.kind === "addSkill" ? (
+        <Modal title={`Add a skill to ${oneLine(dialog.agent.name)}`} onClose={close}>
+          <SkillPicker member={dialog.agent} library={library} onPick={(slug) => skillCall(rpc.call("agents.attachSkill", { projectId, agentId: dialog.agent.id, slug }), `Added ${oneLine(skillName(slug, library))} to ${oneLine(dialog.agent.name)}.`)} />
+          <div className="modal-actions">
+            <button type="button" className="btn" onClick={close}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+      {dialog?.kind === "removeSkill" ? (
+        <ConfirmDialog
+          title="Remove skill"
+          body={<p>Take {oneLine(skillName(dialog.slug, library))} away from {oneLine(dialog.agent.name)}? It stays in the library. The agent starts its next run without it.</p>}
+          confirmLabel="Remove"
+          onConfirm={() => skillCall(rpc.call("agents.detachSkill", { projectId, agentId: dialog.agent.id, slug: dialog.slug }), `Removed ${oneLine(skillName(dialog.slug, library))} from ${oneLine(dialog.agent.name)}.`)}
           onCancel={close}
         />
       ) : null}

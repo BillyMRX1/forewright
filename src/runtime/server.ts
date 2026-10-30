@@ -209,7 +209,7 @@ export class RpcServer {
         const live = agent.rt.closed ? null : agent.rt.tokens.resolve(conn.agentToken);
         if (!live) throw new RpcError(-32001, "unauthorized", "This agent token is no longer valid.");
         if (method === "agent.tools.list") {
-          conn.write({ jsonrpc: "2.0", id, result: { tools: toolDefinitions(live.scope.kind) } });
+          conn.write({ jsonrpc: "2.0", id, result: { tools: toolDefinitions(live.scope.kind, agent.rt.store.getAgent(live.agentId).role) } });
           return;
         }
         if (method === "agent.tools.call") {

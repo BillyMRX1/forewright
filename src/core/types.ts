@@ -39,7 +39,8 @@ export type EngineId = "claude" | "codex" | "antigravity" | "opencode" | "copilo
 export const LIVE_ENGINES = ["claude", "codex", "antigravity", "opencode", "copilot", "hearthwork"] as const satisfies readonly EngineId[];
 /** Engines that run on a model served by Billy's own hardware: no subscription, never a default, allowed per project only by name. */
 export const LOCAL_ENGINES: readonly EngineId[] = ["hearthwork"];
-export type AgentRole = "cto" | "frontend" | "backend" | "mobile" | "testing" | "review" | "docs" | "integration" | "generalist";
+/** research: a read-only agent that finds skills on vetted sources and proposes them; it never writes code. */
+export type AgentRole = "cto" | "frontend" | "backend" | "mobile" | "testing" | "review" | "docs" | "integration" | "generalist" | "research";
 export type AgentLifecycle = "idle" | "working" | "waiting" | "paused" | "retired";
 
 /** Permission profile, separate from role, engine and model. */

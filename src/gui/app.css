@@ -2947,3 +2947,237 @@ ol.rows {
     row-gap: 6px;
   }
 }
+
+/* Skills: the library view, the skill chips on Team cards, the picker and the Inbox install body. Existing tokens only. */
+.skills {
+  padding: 16px;
+  max-width: 1100px;
+  min-width: 0;
+}
+
+.skills-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.skills-title {
+  font-size: 1.2rem;
+  margin: 0;
+}
+
+.skills-intro {
+  margin: 8px 0 14px;
+}
+
+.skills-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.skill-form {
+  margin-bottom: 16px;
+}
+
+.skill-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.card .skill-name {
+  font-size: 1.05rem;
+  color: var(--text);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-desc {
+  margin: 6px 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.skill-problem {
+  color: var(--attention);
+  border: 1px solid var(--attention);
+  border-radius: 6px;
+  padding: 6px 10px;
+  overflow-wrap: anywhere;
+}
+
+.skill-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 10px;
+}
+
+.skill-facts dt {
+  color: var(--muted);
+}
+
+.skill-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-url {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.skill-tools {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.skill-tool {
+  display: block;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.skill-instructions-wrap {
+  margin-top: 10px;
+}
+
+.skill-instructions {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px 12px;
+  max-height: 320px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.skill-instructions.skill-collapsed {
+  max-height: 120px;
+}
+
+.skill-install {
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+.skill-tools-box {
+  margin: 8px 0;
+}
+
+.skill-warning {
+  color: var(--attention);
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.skill-instr-title {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 12px 0 6px;
+}
+
+.team-skills,
+.team-web {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0;
+}
+
+.team-web {
+  justify-content: space-between;
+}
+
+.team-skills-label {
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+.skill-chip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.skill-chip-x {
+  font: inherit;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 50%;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+
+.skill-chip-x:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.skill-pick {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.skill-pick-btn {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.skill-pick-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.skill-pick-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.skill-pick-name {
+  font-weight: 600;
+}
+
+.skill-pick-why {
+  color: var(--attention);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 759px) {
+  .skills {
+    padding: 12px;
+  }
+
+  .skills-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

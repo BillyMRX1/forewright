@@ -14,9 +14,9 @@ test("fresh migrate is idempotent and creates the expected tables", () => {
   migrate(db);
   migrate(db);
   assert.deepEqual(versions(db), MIGRATIONS.map((m) => m.version));
-  assert.equal(versions(db).at(-1), 13, "the chat migration is the latest");
+  assert.equal(versions(db).at(-1), 14, "the skills migration is the latest");
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name);
-  for (const t of ["project", "requirement_doc", "requirement", "adr", "agent", "task", "task_dependency", "task_requirement", "run", "message", "message_delivery", "decision", "artifact", "verification", "event", "action_receipt", "setting", "draft", "checkpoint", "agent_token", "kickoff_pack", "kickoff_doc", "kickoff_approval", "kickoff_proposal", "budget_hold", "route_decision", "routine", "automation_item", "ask"]) {
+  for (const t of ["project", "requirement_doc", "requirement", "adr", "agent", "task", "task_dependency", "task_requirement", "run", "message", "message_delivery", "decision", "artifact", "verification", "event", "action_receipt", "setting", "draft", "checkpoint", "agent_token", "kickoff_pack", "kickoff_doc", "kickoff_approval", "kickoff_proposal", "budget_hold", "route_decision", "routine", "automation_item", "ask", "agent_skill"]) {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }
   assert.equal((db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode, "wal");
@@ -77,7 +77,7 @@ INSERT INTO agent_session (agent_id, engine, purpose, session_id, created_at, up
 INSERT INTO message (id, project_id, channel, sender_kind, body, created_at) VALUES ('m1', 'p1', 'project', 'human', 'hi', '${at}');
 `);
   migrate(db);
-  assert.equal(versions(db).at(-1), 13);
+  assert.ok(versions(db).includes(13));
   assert.equal((db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys, 1, "foreign keys are back on after the rebuild");
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), [], "no reference to a run (or anything else) is broken");
   const r1 = db.prepare("SELECT * FROM run WHERE id = 'r1'").get() as Record<string, unknown>;
@@ -93,4 +93,28 @@ INSERT INTO message (id, project_id, channel, sender_kind, body, created_at) VAL
   assert.throws(() => db.prepare("INSERT INTO run (id, project_id, agent_id, kind, state, engine, created_at) VALUES ('r4', 'p1', 'a1', 'gossip', 'queued', 'fake', ?)").run(at));
   const m1 = db.prepare("SELECT thread_id, mentions FROM message WHERE id = 'm1'").get() as Record<string, unknown>;
   assert.deepEqual({ ...m1 }, { thread_id: null, mentions: null });
+});
+
+test("migration 14 adds skill attachments and the web research flag to a version 13 database", () => {
+  const db = openDb(path.join(tempDir(), "s.db"));
+  db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
+  for (const m of MIGRATIONS.filter((x) => x.version <= 13)) {
+    tx(db, () => {
+      db.exec(m.sql);
+      db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, 'then')").run(m.version);
+    });
+  }
+  const at = "2026-10-01T00:00:00.000Z";
+  db.exec(`
+INSERT INTO project (id, name, root, created_at) VALUES ('p1', 'demo', '/tmp/demo', '${at}');
+INSERT INTO agent (id, project_id, name, role, engine, permission, created_at) VALUES ('a1', 'p1', 'Ada', 'backend', 'fake', 'workspace_write', '${at}');
+`);
+  migrate(db);
+  assert.equal(versions(db).at(-1), 14);
+  assert.equal((db.prepare("SELECT web_research FROM agent WHERE id = 'a1'").get() as { web_research: number }).web_research, 0, "existing agents may not look things up");
+  const insert = db.prepare("INSERT INTO agent_skill (project_id, agent_id, slug, attached_at, attached_by) VALUES ('p1', ?, 'pdf', ?, 'human')");
+  insert.run("a1", at);
+  assert.throws(() => insert.run("a1", at), "one row per agent and skill");
+  assert.throws(() => insert.run("nobody", at), "the agent must exist");
+  assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });

@@ -60,6 +60,75 @@ export interface Agent {
   retiredAt: string | null;
   lastEventAt: string | null;
   lastEventSummary: string | null;
+  /** Slugs of the library skills attached to this agent in this project, sorted. */
+  skills: string[];
+  /** Research agents only: Billy allowed it to read the vetted skill sources on the web. */
+  webResearch: boolean;
+}
+
+/** The permission a skill needs from the agent that uses it. Tools always need workspace_write. */
+export type SkillPermission = "read_only" | "workspace_write";
+
+/** A tool a skill brings: one MCP server started from a pinned package. Built by Forewright, never written by an agent. */
+export interface SkillTool {
+  /** MCP server name as attached to runs, e.g. "skill-github". */
+  name: string;
+  registry: "npm" | "pypi";
+  /** e.g. "@modelcontextprotocol/server-github" */
+  package: string;
+  /** Exact version, e.g. "2025.4.8". */
+  version: string;
+  command: "npx" | "uvx";
+  /** e.g. ["-y", "@modelcontextprotocol/server-github@2025.4.8"] */
+  args: string[];
+}
+
+/** One skill of the machine's library (<forewrightHome>/skills/<slug>/). */
+export interface SkillInfo {
+  slug: string;
+  name: string;
+  description: string;
+  source: "local" | "external";
+  sourceUrl: string | null;
+  version: string | null;
+  requiredPermission: SkillPermission;
+  tools: SkillTool[];
+  /** The SKILL.md body without frontmatter. */
+  instructions: string;
+  /** sha256 hex of the SKILL.md bytes, a NUL byte, then the canonical JSON of tools. */
+  contentHash: string;
+  installedAt: string | null;
+  /** Why the skill is not loaded into runs, in plain words; null when it is fine. */
+  problem: string | null;
+}
+
+export const SKILL_INSTALL_ACTION = "skill_install";
+export const WEB_RESEARCH_ACTION = "grant_web_research";
+
+/** The bound action of a skill install decision. Forewright fetched every field itself; the proposer only chose what. */
+export interface SkillInstallAction {
+  action: typeof SKILL_INSTALL_ACTION;
+  slug: string;
+  name: string;
+  description: string;
+  sourceUrl: string | null;
+  version: string | null;
+  /** Exactly what will be written to SKILL.md (the body). */
+  instructions: string;
+  tools: SkillTool[];
+  requiredPermission: SkillPermission;
+  /** Why the proposer wants it. */
+  reasoning: string;
+  /** The proposing agent's name. */
+  proposedBy: string;
+  /** Agents to attach it to once installed. */
+  forAgentIds: string[];
+}
+
+/** The bound action of the decision that lets a research agent read the vetted skill sources. */
+export interface WebResearchAction {
+  action: typeof WEB_RESEARCH_ACTION;
+  agentId: string;
 }
 
 export type RunKind = "work" | "review" | "cto" | "integration_check" | "chat";
