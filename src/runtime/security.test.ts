@@ -24,7 +24,7 @@ test("untrusted text never changes state, and a worker token cannot call CTO-onl
           call("send_message", { to: "cto", body: injection }),
           call("submit_work", { summary: injection }),
           call("create_task", { title: "sneaky", requirement_keys: ["R-001"] }),
-          call("hire_agent", { name: "Mallory", role: "backend", engine: "fake" }),
+          call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Mallory", role: "backend", engine: "fake" }),
           call("get_project_state", {}),
           call("approve_prd", { revision: 2 }),
           call("change_authority", { key: "publish", value: "auto" }),

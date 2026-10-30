@@ -492,6 +492,7 @@ test("the task detail has an Evidence tab, and opening it renders the evidence s
     focus: null,
     go: noop,
     openPicker: noop,
+    openTerminal: noop,
   } satisfies ProjectContextValue;
   const opened = renderToStaticMarkup(
     <ProjectContext.Provider value={ctx}>

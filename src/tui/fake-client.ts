@@ -1,7 +1,7 @@
 // In-memory ClientApi for view tests. Records every call so tests can assert on them.
 
 import { ClientError, type ClientApi, type ConnectionState, type Subscription } from "./client.js";
-import type { AutomationsView, ChatStatus, EngineUse, KickoffProposalState, KickoffState, MethodName, Params, Result, RuntimeStatus, ProviderStatus } from "../runtime/protocol.js";
+import type { AutomationsView, ChatStatus, EngineUse, KickoffProposalState, KickoffState, MethodName, Notifications, Params, Result, RuntimeStatus, ProviderStatus, TeamMember, TerminalInfo } from "../runtime/protocol.js";
 import type { BudgetScopeStatus } from "../core/budgets.js";
 import type { Agent, Authority, AutomationSettings, BudgetSettings, ChatSettings, RoutingSettings, Decision, FallbackEntry, ForewrightEvent, Message, RequirementDoc, Run, Settings, Task, Verification } from "../core/store-types.js";
 import { DEFAULT_AUTHORITY, DEFAULT_AUTOMATION, DEFAULT_CHAT, DEFAULT_LIMITS, DEFAULT_ROUTING } from "../core/store-types.js";
@@ -53,6 +53,9 @@ export function makeAgent(over: Partial<Agent> & Pick<Agent, "id" | "name" | "ro
     lastEventSummary: "Started",
     skills: [],
     webResearch: false,
+    employment: "permanent",
+    employmentReason: null,
+    contractEnd: null,
     ...over,
   };
 }
@@ -276,6 +279,8 @@ export class FakeClient implements ClientApi {
   memory: Record<string, string> = {};
   /** Engine actually in use per agent id, as the service reports it in state.team. */
   engineUse: Record<string, EngineUse> = {};
+  /** Employment facts per agent id, as state.team reports them (contract end resolved, milestones). */
+  employment: Record<string, Pick<TeamMember, "employment" | "employmentReason" | "contractEnd" | "milestones">> = {};
   /** When false, the latest PRD revision is already approved (nothing to approve). */
   proposedPrd = true;
   /** When true, the runtime reports no active runs. */
@@ -294,6 +299,13 @@ export class FakeClient implements ClientApi {
   ];
   private eventListeners = new Set<(e: ForewrightEvent) => void>();
   failWith: Error | null = null;
+  /** Why an agent cannot open a terminal, by agent id: state.team reports it and terminal.attach refuses with it. */
+  attachProblems: Record<string, string> = {};
+  /** What terminal.attach returns as the recent output. */
+  terminalReplay = "";
+  /** Terminals opened through terminal.attach, by terminal id. */
+  readonly terminals = new Map<string, TerminalInfo>();
+  private terminalListeners = new Set<(n: Notifications["terminal"]) => void>();
   private connListeners = new Set<(s: ConnectionState) => void>();
   private runtimeListeners = new Set<(p: string, s: RuntimeStatus) => void>();
 
@@ -361,7 +373,35 @@ export class FakeClient implements ClientApi {
           };
         }
         case "state.team":
-          return { agents: d.agents.map((a) => ({ ...a, currentTaskShortId: a.currentTaskId ? "T-2" : null, ...(this.engineUse[a.id] ? { engineUse: this.engineUse[a.id]! } : {}) })) };
+          return {
+            agents: d.agents.map((a) => ({
+              ...a,
+              currentTaskShortId: a.currentTaskId ? "T-2" : null,
+              contractEnd: null,
+              milestones: [],
+              ...(this.employment[a.id] ?? {}),
+              ...(this.engineUse[a.id] ? { engineUse: this.engineUse[a.id]! } : {}),
+              terminalId: [...this.terminals.values()].find((t) => t.agentId === a.id && t.exited === null)?.terminalId ?? null,
+              canAttach: this.attachProblems[a.id] === undefined,
+              attachProblem: this.attachProblems[a.id] ?? null,
+            })),
+          };
+        case "terminal.attach": {
+          const problem = this.attachProblems[String(p["agentId"])];
+          if (problem !== undefined) throw new ClientError("validation", problem);
+          const agent = d.agents.find((a) => a.id === p["agentId"])!;
+          const info: TerminalInfo = { terminalId: `term-${this.terminals.size + 1}`, projectId: "p1", agentId: agent.id, engine: agent.engine, sessionId: null, cols: p["cols"] as number, rows: p["rows"] as number, startedAt: NOW, exited: null };
+          this.terminals.set(info.terminalId, info);
+          return { terminal: info, replay: this.terminalReplay };
+        }
+        case "terminal.input":
+        case "terminal.resize":
+          return { ok: true };
+        case "terminal.detach":
+          this.terminals.delete(String(p["terminalId"]));
+          return { ok: true };
+        case "terminal.list":
+          return { terminals: [...this.terminals.values()] };
         case "state.messages": {
           const ch = p["channel"];
           if (ch === "cto") return { messages: d.messages };
@@ -514,6 +554,12 @@ export class FakeClient implements ClientApi {
         case "agents.attachSkill":
         case "agents.detachSkill":
           return { agent: d.agents[0] };
+        case "milestones.update":
+        case "milestones.cancel": {
+          const m = Object.values(this.employment).flatMap((e) => e.milestones).find((x) => x.id === p["milestoneId"] || x.shortId === p["milestoneId"]);
+          if (!m) throw new ClientError("not_found", `Milestone ${String(p["milestoneId"])} was not found.`, null);
+          return { milestone: method === "milestones.cancel" ? { ...m, state: "cancelled", overdue: false } : { ...m, ...("dueAt" in p ? { dueAt: (p["dueAt"] as string | null) ?? null } : {}) } };
+        }
         default:
           throw new Error(`FakeClient: ${method} is not implemented`);
       }
@@ -536,6 +582,18 @@ export class FakeClient implements ClientApi {
   onRuntime(cb: (p: string, s: RuntimeStatus) => void): () => void {
     this.runtimeListeners.add(cb);
     return () => this.runtimeListeners.delete(cb);
+  }
+  onTerminal(cb: (n: Notifications["terminal"]) => void): () => void {
+    this.terminalListeners.add(cb);
+    return () => this.terminalListeners.delete(cb);
+  }
+  /** Pushes terminal output to the attached views, like the service's "terminal" notification. */
+  emitTerminal(terminalId: string, data: string): void {
+    for (const cb of this.terminalListeners) cb({ terminalId, data });
+  }
+  /** Pushes the end of the CLI process. */
+  emitTerminalExit(terminalId: string, code: number | null = 0, signal: string | null = null): void {
+    for (const cb of this.terminalListeners) cb({ terminalId, exited: { code, signal } });
   }
   onConnection(cb: (s: ConnectionState) => void): () => void {
     this.connListeners.add(cb);

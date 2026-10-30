@@ -42,6 +42,8 @@ export interface ProjectContextValue {
   go: (view: ViewId, focusId?: string) => void;
   /** Open the project picker. */
   openPicker: () => void;
+  /** Open the terminal panel on an agent's own CLI. */
+  openTerminal: (agentId: string, agentName: string) => void;
 }
 
 export const ProjectContext = createContext<ProjectContextValue | null>(null);
@@ -58,8 +60,8 @@ const startsWith = (prefix: string) => (type: string) => type.startsWith(prefix)
 
 export const isTaskEvent = startsWith("task.");
 export const isDecisionEvent = startsWith("decision.");
-/** Agent changes, and engine fallbacks and waits (they change what an agent shows). */
-export const isAgentEvent = (type: string): boolean => type.startsWith("agent.") || type.startsWith("engine.");
+/** Agent changes, engine fallbacks and waits, and terminals opening or closing (they change what an agent shows). */
+export const isAgentEvent = (type: string): boolean => type.startsWith("agent.") || type.startsWith("engine.") || type.startsWith("terminal.");
 export const isRunEvent = startsWith("run.");
 export const isMessageEvent = startsWith("message.");
 export const isPrdEvent = startsWith("requirement_doc.");

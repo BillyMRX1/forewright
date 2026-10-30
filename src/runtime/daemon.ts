@@ -11,6 +11,7 @@ import { initProject, openProject, readRegistry, resolveProject } from "../core/
 import { ensureDir, socketPathFor } from "../core/paths.js";
 import type { EngineId, ProviderAdapter } from "../core/types.js";
 import { processStartTime, sameStartTime } from "../providers/process.js";
+import type { PtyChoice } from "../providers/pty.js";
 import { ClientApi } from "./api.js";
 import { DaemonLockError } from "./errors.js";
 import { ProviderHealthCache } from "./health.js";
@@ -36,6 +37,8 @@ export interface DaemonOptions {
   guiStaticDir?: string;
   /** For tests: the GitHub CLI the triggers run (default gh on PATH). */
   ghBinary?: string;
+  /** For tests: the pseudo-terminal backend of attached terminals (default: node-pty, else the Python helper). */
+  pty?: () => Promise<PtyChoice>;
 }
 
 interface LockRecord {
@@ -93,6 +96,7 @@ export class Daemon {
       watchdogMs: opts.watchdogMs ?? 15_000,
       defaultCtoEngine: opts.defaultCtoEngine ?? "claude",
       ...(opts.ghBinary ? { ghBinary: opts.ghBinary } : {}),
+      ...(opts.pty ? { pty: opts.pty } : {}),
       connectedClients: () => [...this.server.connections].filter((c) => c.kind === "client").length,
     };
     this.api = new ClientApi(this);

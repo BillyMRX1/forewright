@@ -149,14 +149,14 @@ test("CTO tools: hire with skills (unknown slugs refused with the library), atta
     assert.ok(toolDefinitions("cto", "cto").some((t) => t.name === "propose_skill"));
     assert.ok(!toolDefinitions("cto", "cto").some((t) => t.name === "search_skill_sources"));
 
-    let r = await cto.call("hire_agent", { name: "Wren", role: "backend", engine: "fake", skills: ["house-style", "nope"] });
+    let r = await cto.call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Wren", role: "backend", engine: "fake", skills: ["house-style", "nope"] });
     assert.equal(r.isError, true);
     assert.match(r.text, /no skill "nope".*The library has: github, house-style/);
     assert.equal(h.rt.store.listAgents().some((a) => a.name === "Wren"), false, "nothing is hired when a skill is refused");
-    r = await cto.call("hire_agent", { name: "Rex", role: "review", engine: "fake", skills: ["github"] });
+    r = await cto.call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Rex", role: "review", engine: "fake", skills: ["github"] });
     assert.match(r.text, /Rex is read only and this skill needs to write files/);
 
-    r = await cto.call("hire_agent", { name: "Wren", role: "backend", engine: "fake", skills: ["house-style", "github"] });
+    r = await cto.call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Wren", role: "backend", engine: "fake", skills: ["house-style", "github"] });
     assert.equal(r.isError, false, r.text);
     const wren = h.rt.store.listAgents().find((a) => a.name === "Wren")!;
     assert.deepEqual(wren.skills, ["github", "house-style"]);
@@ -167,9 +167,9 @@ test("CTO tools: hire with skills (unknown slugs refused with the library), atta
     const listed = JSON.parse((await cto.call("list_skills", {})).text) as Array<{ slug: string; agents: string[]; tools: string[] }>;
     assert.deepEqual(listed.map((s) => [s.slug, s.agents, s.tools]), [["github", ["Wren"], ["@x/github-mcp@1.2.3"]], ["house-style", ["Wren"], []]]);
 
-    r = await cto.call("hire_agent", { name: "Cora", role: "research", engine: "fake", permission: "workspace_write" });
+    r = await cto.call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Cora", role: "research", engine: "fake", permission: "workspace_write" });
     assert.match(r.text, /always read only/);
-    r = await cto.call("hire_agent", { name: "Cora", role: "research", engine: "fake" });
+    r = await cto.call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Cora", role: "research", engine: "fake" });
     assert.equal(r.isError, false, r.text);
     const cora = h.rt.store.listAgents().find((a) => a.name === "Cora")!;
     assert.equal(cora.permission, "read_only");

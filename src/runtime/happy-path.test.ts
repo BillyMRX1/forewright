@@ -22,8 +22,8 @@ test("happy path: message, PRD via the real MCP bridge, approval, tasks, work, r
         outcome: "succeeded",
         finalText: "Team is hired and tasks are created.",
         toolCalls: [
-          call("hire_agent", { name: "Wren", role: "backend", engine: "fake" }),
-          call("hire_agent", { name: "Rex", role: "review", engine: "fake" }),
+          call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Wren", role: "backend", engine: "fake" }),
+          call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Rex", role: "review", engine: "fake" }),
           call("create_task", { title: "Write hello.txt", description: "Create hello.txt", acceptance: "hello.txt exists", verify_commands: [fileExists("hello.txt")], requirement_keys: ["R-001"], assignee: "Wren" }),
           call("create_task", { title: "Write second.txt", description: "Create second.txt", acceptance: "second.txt exists", verify_commands: [fileExists("second.txt")], requirement_keys: ["R-001"], assignee: "Wren" }),
         ],

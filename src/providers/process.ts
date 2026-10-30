@@ -258,15 +258,31 @@ async function processGroupId(pid: number): Promise<string> {
  * can find and end a tree even when spawnOwned later fails. It also gets the child handle, so a harness can tell
  * from the handle (not the reusable pid) that the root has exited. Never set outside tests.
  */
-let spawnObserver: ((owned: OwnedProcess, child: ChildProcess) => void) | null = null;
-export function setSpawnObserver(fn: ((owned: OwnedProcess, child: ChildProcess) => void) | null): void {
+/** What the observer may read from a spawned root: whether it has exited (a ChildProcess, or a pseudo-terminal's stand-in). */
+export type SpawnHandle = Pick<ChildProcess, "exitCode" | "signalCode">;
+let spawnObserver: ((owned: OwnedProcess, child: SpawnHandle) => void) | null = null;
+export function setSpawnObserver(fn: ((owned: OwnedProcess, child: SpawnHandle) => void) | null): void {
   spawnObserver = fn;
+}
+
+/** Tells the test observer about a process started outside spawnOwned (a pseudo-terminal from node-pty). */
+export function observeSpawn(owned: OwnedProcess, child: SpawnHandle): void {
+  spawnObserver?.(owned, child);
 }
 
 export async function spawnOwned(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: Record<string, string>; stdin: string | "ignore"; windowsVerbatimArguments?: boolean; /** test seam */ readStartTime?: (pid: number) => Promise<StartTimeRead> },
+  opts: {
+    cwd: string;
+    env: Record<string, string>;
+    /** Text written to stdin and then closed, "ignore", or "keep": stdin stays open for the caller (a terminal helper). */
+    stdin: string | "ignore" | "keep";
+    /** A fourth pipe (file descriptor 3) for the caller, as child.stdio[3]. */
+    controlPipe?: boolean;
+    windowsVerbatimArguments?: boolean;
+    /** test seam */ readStartTime?: (pid: number) => Promise<StartTimeRead>;
+  },
 ): Promise<SpawnedProcess> {
   const win = isWindows();
   let launch = { bin, args };
@@ -282,7 +298,7 @@ export async function spawnOwned(
     detached: !win,
     windowsHide: true,
     ...(opts.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-    stdio: [opts.stdin === "ignore" ? "ignore" : "pipe", "pipe", "pipe"],
+    stdio: [opts.stdin === "ignore" ? "ignore" : "pipe", "pipe", "pipe", ...(opts.controlPipe ? (["pipe"] as const) : [])],
   });
   // Resolve on close (stdio drained). If a grandchild keeps the pipes open after
   // the child exited, stop waiting after a short drain window.
@@ -344,7 +360,7 @@ export async function spawnOwned(
     child.stdin.on("error", () => {
       // EPIPE when the child exits before reading; the exit status reports the real failure.
     });
-    child.stdin.end(opts.stdin);
+    if (opts.stdin !== "keep") child.stdin.end(opts.stdin);
   }
   let startedAt = "";
   let readError = "";

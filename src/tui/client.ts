@@ -35,6 +35,8 @@ export interface ClientApi {
   call<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>>;
   subscribe(projectId: string, sinceSeq: number, onEvent: (event: ForewrightEvent) => void): Promise<Subscription>;
   onRuntime(cb: (projectId: string, status: RuntimeStatus) => void): () => void;
+  /** Output and exit of the terminals this client attached to. */
+  onTerminal(cb: (note: Notifications["terminal"]) => void): () => void;
   onConnection(cb: (state: ConnectionState) => void): () => void;
   close(): void;
 }
@@ -67,6 +69,7 @@ export class ForewrightClient implements ClientApi {
   private readonly pending = new Map<number, Pending>();
   private readonly subs = new Map<string, Sub>();
   private readonly runtimeListeners = new Set<(projectId: string, status: RuntimeStatus) => void>();
+  private readonly terminalListeners = new Set<(note: Notifications["terminal"]) => void>();
   private readonly connListeners = new Set<(state: ConnectionState) => void>();
   private buffer = "";
   private closed = false;
@@ -165,6 +168,9 @@ export class ForewrightClient implements ClientApi {
     } else if (msg.method === "runtime") {
       const { projectId, status } = msg.params as Notifications["runtime"];
       for (const cb of this.runtimeListeners) cb(projectId, status);
+    } else if (msg.method === "terminal") {
+      const note = msg.params as Notifications["terminal"];
+      for (const cb of this.terminalListeners) cb(note);
     }
   }
 
@@ -252,6 +258,11 @@ export class ForewrightClient implements ClientApi {
   onRuntime(cb: (projectId: string, status: RuntimeStatus) => void): () => void {
     this.runtimeListeners.add(cb);
     return () => this.runtimeListeners.delete(cb);
+  }
+
+  onTerminal(cb: (note: Notifications["terminal"]) => void): () => void {
+    this.terminalListeners.add(cb);
+    return () => this.terminalListeners.delete(cb);
   }
 
   onConnection(cb: (state: ConnectionState) => void): () => void {

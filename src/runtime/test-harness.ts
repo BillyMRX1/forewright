@@ -10,6 +10,7 @@ import { after, beforeEach } from "node:test";
 import { defaultTreeBackend, setSpawnObserver, terminateGroup, treeGone, type TreeBackend } from "../providers/process.js";
 import type { OwnedProcess } from "../core/types.js";
 import { FakeAdapter, type FakeRule, type FakeScript } from "../providers/fake.js";
+import type { PtyChoice } from "../providers/pty.js";
 import { RpcClient } from "./client.js";
 import { type Daemon, startDaemon } from "./daemon.js";
 import type { ProjectRuntime } from "./project-runtime.js";
@@ -60,6 +61,8 @@ export interface HarnessOptions {
   defaultCtoEngine?: EngineId;
   /** The GitHub CLI the triggers run: a fake for trigger tests. */
   ghBinary?: string;
+  /** The pseudo-terminal backend of attached terminals (default: what this machine has). */
+  pty?: () => Promise<PtyChoice>;
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -76,6 +79,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     watchdogMs: opts.watchdogMs ?? 60_000,
     ...(opts.clock ? { clock: opts.clock } : {}),
     ...(opts.ghBinary ? { ghBinary: opts.ghBinary } : {}),
+    ...(opts.pty ? { pty: opts.pty } : {}),
   });
   const client = await RpcClient.connect(socketPathFor(home), RpcClient.tokenFrom(path.join(home, "client.token")));
   let open = await client.request("projects.open", { cwd: repo });
@@ -248,7 +252,7 @@ interface TrackedTree {
   /** Started by the test itself rather than by the runtime. */
   external: boolean;
   /** The handle of a runtime-spawned root; absent for trees the test spawned itself. */
-  child?: ChildProcess;
+  child?: Pick<ChildProcess, "exitCode" | "signalCode">;
 }
 
 /**

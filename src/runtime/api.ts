@@ -3,7 +3,7 @@
 // rules the agents use, with the human as the actor.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { ValidationError } from "../core/errors.js";
+import { NotFoundError, ValidationError } from "../core/errors.js";
 import { readRegistry } from "../core/identity.js";
 import { forewrightHome, logsDir } from "../core/paths.js";
 import { truncate } from "../core/safety.js";
@@ -12,7 +12,7 @@ import { budgetStatus } from "./budgets.js";
 import { heartbeatStatus, runRoutineNow } from "./automation.js";
 import { automationRows } from "./automation-rows.js";
 import { loadPrices, readUsageRows, summarizeUsage, windowStart } from "../core/usage.js";
-import type { Message, MessageChannel } from "../core/store.js";
+import { type ContractEnd, EMPLOYMENTS, type Employment, type Message, type MessageChannel, type Store } from "../core/store.js";
 import type { EngineId, PermissionProfile } from "../core/types.js";
 import type { Daemon } from "./daemon.js";
 import { RpcError } from "./errors.js";
@@ -83,6 +83,13 @@ export class ClientApi {
     return this.d.runtimeFor(reqStr(p, "projectId", 200));
   }
 
+  /** The runtime of a terminal this connection attached to; another client's terminal is not reachable by id. */
+  private terminalRuntime(terminalId: string, conn: Connection): ProjectRuntime {
+    const rt = conn.terminals.get(terminalId);
+    if (!rt) throw new NotFoundError("That terminal", { terminalId, hint: "Attach to it first (terminal.attach)." });
+    return rt;
+  }
+
   private providerStatuses(rt: ProjectRuntime | null, refresh: boolean): Promise<ProviderStatus[]> {
     return this.d.health.get(refresh).then((list) =>
       list.map((health) => {
@@ -135,7 +142,13 @@ export class ClientApi {
       "state.task": async (p) => this.taskDetail(await this.rt(p), reqStr(p, "taskId", 200)),
       "state.team": async (p) => {
         const rt = await this.rt(p);
-        return { agents: rt.store.teamView().map((a) => (a.retiredAt ? a : { ...a, engineUse: rt.engineUse(a) })) };
+        return {
+          agents: rt.store.teamView().map((a) => {
+            const attachProblem = rt.terminals.attachProblem(a);
+            const terminal = { terminalId: rt.terminals.openFor(a.id), canAttach: attachProblem === null, attachProblem };
+            return a.retiredAt ? { ...a, ...terminal } : { ...a, engineUse: rt.engineUse(a), ...terminal };
+          }),
+        };
       },
       "state.inbox": async (p) => (await this.rt(p)).store.inbox(),
       "state.messages": async (p) => {
@@ -362,9 +375,14 @@ export class ClientApi {
         }
         const name = "name" in p ? validAgentName(rt, reqStr(p, "agentId", 200), p["name"]) : undefined;
         if ("webResearch" in p && typeof p["webResearch"] !== "boolean") throw new RpcError(-32602, "invalid_params", '"webResearch" must be true or false.', { key: "webResearch" });
-        if (typeof p["webResearch"] === "boolean") {
-          rt.store.setWebResearch(reqStr(p, "agentId", 200), p["webResearch"], HUMAN);
-          if (name === undefined && !engine && !("model" in p) && !p["permission"]) return { agent: rt.store.getAgent(reqStr(p, "agentId", 200)) };
+        const employment = employmentPatch(rt.store, p);
+        if (typeof p["webResearch"] === "boolean") rt.store.setWebResearch(reqStr(p, "agentId", 200), p["webResearch"], HUMAN);
+        if (employment) {
+          rt.store.setEmployment(reqStr(p, "agentId", 200), employment, HUMAN);
+          rt.scheduler.wake("employment"); // a contract whose end already holds retires on the next pass
+        }
+        if (name === undefined && !engine && !("model" in p) && !p["permission"] && (typeof p["webResearch"] === "boolean" || employment)) {
+          return { agent: rt.store.getAgent(reqStr(p, "agentId", 200)) };
         }
         const agent = rt.store.updateAgent(
           reqStr(p, "agentId", 200),
@@ -402,9 +420,33 @@ export class ClientApi {
         removeLibrarySkill(await this.rt(p), reqStr(p, "slug", 100));
         return { ok: true as const };
       },
+      "milestones.update": async (p) => {
+        const rt = await this.rt(p);
+        const id = reqStr(p, "milestoneId", 200);
+        if ("dueAt" in p && p["dueAt"] !== null && typeof p["dueAt"] !== "string") throw new RpcError(-32602, "invalid_params", '"dueAt" must be a date or null.', { key: "dueAt" });
+        const milestone = rt.store.updateMilestone(
+          id,
+          {
+            ...(optStr(p, "title") !== undefined ? { title: optStr(p, "title")! } : {}),
+            ...("dueAt" in p ? { dueAt: (p["dueAt"] as string | null) ?? null } : {}),
+            ...("taskIds" in p ? { taskIds: strArray(p, "taskIds") } : {}),
+            ...("requirementKeys" in p ? { requirementKeys: strArray(p, "requirementKeys") } : {}),
+          },
+          HUMAN,
+        );
+        rt.scheduler.wake("milestone");
+        return { milestone };
+      },
+      "milestones.cancel": async (p) => {
+        const rt = await this.rt(p);
+        const milestone = rt.store.cancelMilestone(reqStr(p, "milestoneId", 200), HUMAN);
+        rt.notifyCto(`milestone-cancelled:${milestone.id}`, `Billy cancelled milestone ${milestone.shortId} "${milestone.title}". Its tasks stay as they are.`);
+        return { milestone };
+      },
       "agents.retire": async (p) => {
         const rt = await this.rt(p);
         const agent = rt.store.getAgent(reqStr(p, "agentId", 200));
+        if (rt.terminals.isOpen(agent.id)) throw new ValidationError(`${agent.name} has a terminal open. Close it first, then retire ${agent.name}.`, { agentId: agent.id });
         rt.store.retireAgent(agent.id, HUMAN);
         rt.notifyCto(`retire:${agent.id}`, `Billy retired ${agent.name} (${agent.role}). It will not get new work.`);
         rt.publish();
@@ -441,6 +483,34 @@ export class ClientApi {
       "control.resumeTask": async (p) => ({ task: (await this.rt(p)).resumeTask(reqStr(p, "taskId", 200)) }),
       "control.cancelTask": async (p) => ({ task: await (await this.rt(p)).cancelTask(reqStr(p, "taskId", 200)) }),
       "control.terminateTeam": async (p) => (await this.rt(p)).terminateTeam(),
+
+      // attached terminals (issue #11)
+      "terminal.attach": async (p, conn) => {
+        const rt = await this.rt(p);
+        const res = await rt.terminals.attach(reqStr(p, "agentId", 200), reqInt(p, "cols"), reqInt(p, "rows"), conn);
+        conn.terminals.set(res.terminal.terminalId, rt);
+        return res;
+      },
+      "terminal.input": (p, conn) => {
+        const id = reqStr(p, "terminalId", 200);
+        const data = p["data"];
+        if (typeof data !== "string") throw new RpcError(-32602, "invalid_params", '"data" must be text.', { key: "data" });
+        this.terminalRuntime(id, conn).terminals.input(id, data, conn);
+        return { ok: true };
+      },
+      "terminal.resize": (p, conn) => {
+        const id = reqStr(p, "terminalId", 200);
+        this.terminalRuntime(id, conn).terminals.resize(id, reqInt(p, "cols"), reqInt(p, "rows"), conn);
+        return { ok: true };
+      },
+      "terminal.detach": async (p, conn) => {
+        const id = reqStr(p, "terminalId", 200);
+        const rt = conn.terminals.get(id);
+        conn.terminals.delete(id);
+        if (rt) await rt.terminals.detach(id, conn); // detaching twice, or from a terminal that ended, is fine
+        return { ok: true };
+      },
+      "terminal.list": async (p) => ({ terminals: (await this.rt(p)).terminals.list() }),
 
       "gui.settings": () => ({ editorSshHost: readGuiConfig().editorSshHost }),
       "gui.start": (p) => {
@@ -525,6 +595,37 @@ export class ClientApi {
     const raw = gitTry(rt.root, ["diff", t.state === "done" ? `${base}..${head}` : `${base}...${head}`]).stdout;
     return { base, head, diff: truncate(raw, 200_000), truncated: raw.length > 200_000 };
   }
+}
+
+function strArray(p: P, key: string): string[] {
+  const v = p[key];
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) throw new RpcError(-32602, "invalid_params", `"${key}" must be a list of text values.`, { key });
+  return v as string[];
+}
+
+/** agents.update's employment fields, or null when it has none. The contract end's task or milestone may be a short id. */
+function employmentPatch(store: Store, p: P): { employment?: Employment; employmentReason?: string | null; contractEnd?: ContractEnd | null } | null {
+  if (!("employment" in p) && !("employmentReason" in p) && !("contractEnd" in p)) return null;
+  const out: { employment?: Employment; employmentReason?: string | null; contractEnd?: ContractEnd | null } = {};
+  if ("employment" in p) {
+    if (typeof p["employment"] !== "string" || !(EMPLOYMENTS as readonly string[]).includes(p["employment"])) {
+      throw new RpcError(-32602, "invalid_params", `"employment" must be one of ${EMPLOYMENTS.join(", ")}.`, { key: "employment" });
+    }
+    out.employment = p["employment"] as Employment;
+  }
+  if ("employmentReason" in p) {
+    const r = p["employmentReason"];
+    if (r !== null && typeof r !== "string") throw new RpcError(-32602, "invalid_params", '"employmentReason" must be text or null.', { key: "employmentReason" });
+    out.employmentReason = r;
+  }
+  if ("contractEnd" in p) {
+    const e = p["contractEnd"] as { kind?: unknown; taskId?: unknown; milestoneId?: unknown } | null;
+    if (e === null) out.contractEnd = null;
+    else if (typeof e === "object" && e.kind === "task" && typeof e.taskId === "string") out.contractEnd = { kind: "task", taskId: store.getTask(e.taskId).id };
+    else if (typeof e === "object" && e.kind === "milestone" && typeof e.milestoneId === "string") out.contractEnd = { kind: "milestone", milestoneId: store.getMilestone(e.milestoneId).id };
+    else throw new RpcError(-32602, "invalid_params", '"contractEnd" must be null, { kind: "task", taskId } or { kind: "milestone", milestoneId }.', { key: "contractEnd" });
+  }
+  return out;
 }
 
 /** An agent's new name: trimmed, 1 to 40 characters of letters, digits, space, dot, dash and underscore, unique among the project's active agents. */

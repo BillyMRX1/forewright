@@ -11,7 +11,7 @@ import type { TeamActions, TeamData } from "./views/Team.js";
 
 const NOW = Date.parse("2026-01-01T01:00:00.000Z");
 const noop = () => undefined;
-const actions: TeamActions = { go: noop, edit: noop, retire: noop, addSkill: noop, removeSkill: noop, setWebResearch: noop };
+const actions: TeamActions = { go: noop, edit: noop, retire: noop, addSkill: noop, removeSkill: noop, setWebResearch: noop, openTerminal: noop };
 const sf = skillsFixture();
 const people = [
   { id: "a1", name: "Ada" },

@@ -13,7 +13,7 @@ import { blockingHold } from "./budgets.js";
 import { approvalGate } from "./gates.js";
 import { git, gitTry, isDirty, revParse } from "./git.js";
 import { asRunning, noteEngineChoice, noteQuotaHit, resolveFor, type Resolution } from "./fallback.js";
-import { buildEngineHandoff, buildSessionHandoff, buildWorkerPrompt, formatMessage, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
+import { buildEngineHandoff, buildSessionHandoff, buildWorkerPrompt, formatMessage, milestonesPromptSection, readInstructionFiles, workerSystemPrompt } from "./prompts.js";
 import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import { INTEGRATION_BRANCH } from "./workspace.js";
 import { type ActiveRun, acquireLease, adapterFor, launchRun, releaseLease } from "./runs.js";
@@ -221,6 +221,7 @@ export function startWork(rt: ProjectRuntime, task: Task, primary: Agent, resolu
       ...(canResume ? {} : { memory: memoryPromptSection(rt.projectId, agent.id), kickoff: kickoffPromptSection(store, current) }),
       handoff,
       ...(engineHandoff ? { engineHandoff } : {}),
+      milestones: milestonesPromptSection(store, agent.id),
       feedback: [...shownFeedback.values()].map((m) => `- ${truncate(m.body, 3000)}`),
       messages: messages.map((m) => formatMessage(m, nameOf, taskShort)),
       instructions: readInstructionFiles([rt.root, ws.worktreePath], agent.engine),

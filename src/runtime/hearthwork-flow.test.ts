@@ -24,12 +24,12 @@ function setup(mode: FakeHearthworkMode) {
   });
   const cto = new FakeAdapter({
     rules: [
-      rule((r) => isCto(r) && r.prompt.includes("Hire a local worker"), { outcome: "succeeded", finalText: "tried", toolCalls: [call("hire_agent", { name: "Early", role: "backend", engine: "hearthwork" })] }),
+      rule((r) => isCto(r) && r.prompt.includes("Hire a local worker"), { outcome: "succeeded", finalText: "tried", toolCalls: [call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Early", role: "backend", engine: "hearthwork" })] }),
       rule((r) => isCto(r) && r.prompt.includes("Please build hello"), {
         outcome: "succeeded",
         finalText: "Hired a local worker and planned the task.",
         toolCalls: [
-          call("hire_agent", { name: "Hearth", role: "backend", engine: "hearthwork" }),
+          call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Hearth", role: "backend", engine: "hearthwork" }),
           call("create_task", { title: "Write hello.txt", description: "Create hello.txt", acceptance: "hello.txt exists", verify_commands: [fileExists("hello.txt")], requirement_keys: ["R-001"], assignee: "Hearth" }),
         ],
       }),

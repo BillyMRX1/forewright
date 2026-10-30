@@ -3,13 +3,15 @@ import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ProviderCapabilities, ProviderHealth } from "../core/types.js";
 import type { ProviderStatus } from "../runtime/protocol.js";
+import { attachState } from "./attach-button.js";
 import { agent, emptyUsage, fixture, usage } from "./fixtures.js";
-import { EditDialog, RetireDialog, TeamView, agentUsageText, canRetire, editPatch, engineChoices, engineWords, formFor, modelSuggestions, permissionChoices, permissionWords, splitTeam } from "./views/Team.js";
+import { EditDialog, RetireDialog, TeamView, agentUsageText, canRetire, editPatch, employmentFormFor, employmentPatch, employmentWords, engineChoices, engineWords, formFor, milestoneProgress, milestoneStateWord, modelSuggestions, permissionChoices, permissionWords, splitTeam } from "./views/Team.js";
+import type { Milestone } from "../core/store-types.js";
 import type { TeamActions, TeamData } from "./views/Team.js";
 
 const NOW = Date.parse("2026-01-01T01:00:00.000Z");
 const noop = () => undefined;
-const actions: TeamActions = { go: noop, edit: noop, retire: noop, addSkill: noop, removeSkill: noop, setWebResearch: noop };
+const actions: TeamActions = { go: noop, edit: noop, retire: noop, addSkill: noop, removeSkill: noop, setWebResearch: noop, openTerminal: noop };
 
 const caps = (coordinationTools: "mcp" | "none"): ProviderCapabilities => ({
   streaming: true,
@@ -157,10 +159,67 @@ test("the edit dialog offers the role's fields, the note, and Save only after a 
   assert.match(renderToStaticMarkup(<EditDialog member={cto} providers={providers} error={null} busy={false} onSave={noop} onCancel={noop} />), /The CTO&#x27;s permission cannot be changed\./);
 });
 
+test("the Open terminal button: enabled, disabled with the reason shown, and Return to terminal", () => {
+  const d = data();
+  d.agents = d.agents.map((a) =>
+    a.id === "a1" ? { ...a, terminalId: "term-1" } : a.id === "a2" ? { ...a, canAttach: false, attachProblem: "Bo runs on OpenCode, which Forewright cannot open interactively yet." } : a,
+  );
+  const out = renderToStaticMarkup(<TeamView data={d} now={NOW} actions={actions} />);
+  assert.match(out, /aria-label="Open terminal for CTO"[^>]*>Open terminal</, "an attachable agent can be opened");
+  assert.doesNotMatch(out, /<button[^>]*disabled=""[^>]*aria-label="Open terminal for CTO"/);
+  assert.match(out, /aria-label="Return to terminal for Ada"[^>]*>Return to terminal</, "an open terminal says Return");
+  assert.match(out, /<button type="button" class="btn" disabled="" title="Bo runs on OpenCode[^"]*"[^>]*aria-label="Open terminal for Bo"/);
+  assert.match(out, /class="muted attach-why">Bo runs on OpenCode, which Forewright cannot open interactively yet\.</, "the reason is visible, not only a tooltip");
+  assert.equal(attachState({ terminalId: null, canAttach: false, attachProblem: null }).reason, "This agent cannot be opened in a terminal.");
+});
+
 test("the retire dialog warns that active work must be reassigned and shows the service's refusal", () => {
   const m = agent({ id: "w", name: "Wren" });
   const out = renderToStaticMarkup(<RetireDialog member={m} error="Wren still has active work (T-2); reassign it first." busy={false} onConfirm={noop} onCancel={noop} />);
   assert.match(out, /reassign that work to another agent first/);
   assert.match(out, /role="alert">Wren still has active work \(T-2\); reassign it first\./);
   assert.match(out, />Retire</);
+});
+
+const ms = (over: Partial<Milestone> & Pick<Milestone, "id" | "shortId" | "title">): Milestone => ({
+  agentId: "a1", requirementKeys: [], taskIds: [], dueAt: null, state: "open", overdue: false, tasksDone: 0, tasksTotal: 0, createdAt: "2026-01-01T00:00:00.000Z", deliveredAt: null, ...over,
+});
+
+test("employment wording, milestone states and progress", () => {
+  assert.equal(employmentWords(agent({ id: "x", name: "X" })), "Permanent");
+  assert.equal(employmentWords(agent({ id: "x", name: "X", employment: "contract", contractEnd: { kind: "task", taskId: "t4", shortId: "T-4" } })), "Contract, ends with T-4");
+  assert.equal(employmentWords(agent({ id: "x", name: "X", employment: "contract", contractEnd: { kind: "milestone", milestoneId: "m2", shortId: "M-2" } })), "Contract, ends with M-2");
+  assert.deepEqual((["open", "in_review", "delivered", "cancelled"] as const).map(milestoneStateWord), ["open", "in review", "delivered", "cancelled"]);
+  assert.equal(milestoneProgress({ tasksDone: 2, tasksTotal: 3 }), "2 of 3 tasks done");
+  assert.equal(milestoneProgress({ tasksDone: 0, tasksTotal: 0 }), "No tasks yet");
+});
+
+test("a Team card shows the employment with its reason and the milestones, overdue in the warning color", () => {
+  const base = data();
+  const temp = agent({
+    id: "k1", name: "Cleo", employment: "contract", employmentReason: "Only the login screen", contractEnd: { kind: "task", taskId: "t4", shortId: "T-4" },
+    milestones: [ms({ id: "m1", shortId: "M-1", title: "Sign in", state: "in_review", tasksDone: 2, tasksTotal: 3, overdue: true }), ms({ id: "m2", shortId: "M-2", title: "Export", state: "delivered", tasksDone: 1, tasksTotal: 1 })],
+  });
+  const out = renderToStaticMarkup(<TeamView data={{ ...base, agents: [...base.agents, temp] }} now={NOW} actions={actions} />);
+  assert.match(out, /<dt>Employment<\/dt><dd>Contract, ends with T-4<span class="muted"> Only the login screen<\/span><\/dd>/);
+  assert.match(out, /<dd>Permanent<\/dd>/, "the others are permanent");
+  assert.match(out, /M-1<\/span> Sign in <span class="chip">in review<\/span><span class="team-overdue"> overdue<\/span><span class="muted"> 2 of 3 tasks done<\/span>/);
+  assert.match(out, /M-2<\/span> Export <span class="chip">delivered<\/span><span class="muted"> 1 of 1 task done<\/span>/);
+});
+
+test("the Edit dialog offers the employment controls, except for the CTO, and sends only what changed", () => {
+  const f = fixture();
+  const worker = f.snapshot.agents.find((a) => a.role !== "cto")!;
+  const out = renderToStaticMarkup(<EditDialog member={worker} providers={providers} error={null} busy={false} onSave={noop} onCancel={noop} />);
+  assert.match(out, /<span>Employment<\/span>/);
+  assert.match(out, /Contract: retires once its task or milestone is finished/);
+  assert.match(out, /Why \(one line\)/);
+  const cto = f.snapshot.agents.find((a) => a.role === "cto")!;
+  assert.doesNotMatch(renderToStaticMarkup(<EditDialog member={cto} providers={providers} error={null} busy={false} onSave={noop} onCancel={noop} />), /<span>Employment<\/span>/);
+  const form = employmentFormFor(worker);
+  assert.deepEqual(employmentPatch(worker, form), {});
+  assert.deepEqual(employmentPatch(worker, { ...form, employment: "contract", endsWith: "t-4", reason: " One task " }), { employment: "contract", employmentReason: "One task", contractEnd: { kind: "task", taskId: "T-4" } });
+  assert.deepEqual(employmentPatch(worker, { ...form, employment: "contract", endsWith: "M-2" }).contractEnd, { kind: "milestone", milestoneId: "M-2" });
+  const contract = { ...worker, employment: "contract" as const, contractEnd: { kind: "task" as const, taskId: "t4", shortId: "T-4" } };
+  assert.deepEqual(employmentPatch(contract, { ...employmentFormFor(contract), employment: "permanent" }), { employment: "permanent", contractEnd: null });
 });

@@ -7,7 +7,7 @@ import { VIEW, clip, oneLine, wrapText } from "./format.js";
 import type { AgentAttention } from "./attention.js";
 import { countStatuses, summarize, summaryText } from "./attention.js";
 import { workerRows } from "./home-model.js";
-import { SIDEBAR_COLOR, statusGlyph, sym, type DisplayStatus } from "./theme.js";
+import { SIDEBAR_COLOR, palette, statusGlyph, sym, type DisplayStatus } from "./theme.js";
 import { engineLabel, resetTimePhrase } from "./toasts.js";
 import type { ProviderStatus, RuntimeStatus } from "../runtime/protocol.js";
 import type { Decision, Task } from "../core/store-types.js";
@@ -66,6 +66,7 @@ export function buildSidebar(input: SidebarInput): SidebarEntry[] {
     ctoRight = { text: word, ...(ctoStatus === "idle" ? { dim: true } : { color: SIDEBAR_COLOR[ctoStatus].color, bold: ctoStatus === "needs_you" }) };
     const use = cto?.a.agent.engineUse;
     if (use?.viaFallback) ctoDetail.push(`using ${engineLabel(use.engine).toLowerCase()}`);
+    if (cto?.a.agent.terminalId) ctoRight = { text: "term", color: palette.accent, bold: true };
   }
   const live = input.tasks.filter((t) => t.state !== "cancelled");
   const done = live.filter((t) => t.state === "done").length;
@@ -106,7 +107,8 @@ export function buildSidebar(input: SidebarInput): SidebarEntry[] {
     const use = r.a.agent.engineUse;
     const engine = use?.viaFallback ? `using ${engineLabel(use.engine).toLowerCase()}` : r.engine.toLowerCase();
     const detail = r.status === "idle" && r.task === "idle" ? [] : [r.status === "waiting" || r.status === "needs_you" ? r.activity : r.task];
-    push({ key: `agent:${r.a.agent.id}`, view: VIEW.agent, agentId: r.a.agent.id, label: r.name, status: r.status, right: { text: engine, dim: true }, detail, section: "agents" });
+    const right = r.a.agent.terminalId ? { text: "term", color: palette.accent, bold: true } : { text: engine, dim: true };
+    push({ key: `agent:${r.a.agent.id}`, view: VIEW.agent, agentId: r.a.agent.id, label: r.name, status: r.status, right, detail, section: "agents" });
   }
   push({ key: "settings", view: VIEW.settings, label: "Settings", mark: sym().bullet === "*" ? "%" : "⚙", detail: [], section: "bottom" });
   let n = 0;

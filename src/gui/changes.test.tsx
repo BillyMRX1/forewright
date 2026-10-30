@@ -83,7 +83,7 @@ test("without tools the diff has no request or editor buttons", () => {
 });
 
 test("the dialog shows what the request is about and needs a note before it can be sent", () => {
-  const ctx = { rpc: {} as RpcClient, projectId: "p1", root: "/r", name: "demo", connected: true, runtime: null, notify: noop, reloadKey: 0, focus: null, go: noop, openPicker: noop } satisfies ProjectContextValue;
+  const ctx = { rpc: {} as RpcClient, projectId: "p1", root: "/r", name: "demo", connected: true, runtime: null, notify: noop, reloadKey: 0, focus: null, go: noop, openPicker: noop, openTerminal: noop } satisfies ProjectContextValue;
   const t = task({ id: "t1", shortId: "T-1", title: "Greeting" });
   const html = renderToStaticMarkup(
     <ProjectContext.Provider value={ctx}>

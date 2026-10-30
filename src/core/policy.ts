@@ -35,7 +35,9 @@ export type ActionName =
   | "read_state"
   | "read_skills"
   | "propose_skill"
-  | "manage_skills";
+  | "manage_skills"
+  | "manage_milestones"
+  | "change_employment";
 
 export type AuthorityMode = "ask" | "auto" | "deny";
 
@@ -66,7 +68,8 @@ export interface ActionContext {
 
 export type AuthDecision = { allowed: true };
 
-const HUMAN_ONLY: ReadonlySet<ActionName> = new Set(["approve_prd", "approve_kickoff", "resolve_decision", "change_authority"]);
+// Employment (permanent or contract) is chosen when hiring; changing it later is Billy's call.
+const HUMAN_ONLY: ReadonlySet<ActionName> = new Set(["approve_prd", "approve_kickoff", "resolve_decision", "change_authority", "change_employment"]);
 const GATED: Readonly<Record<string, keyof Authority>> = {
   merge_to_user_branch: "mergeToUserBranch",
   publish: "publish",
@@ -90,6 +93,8 @@ const CTO_ACTIONS: ReadonlySet<ActionName> = new Set([
   "read_skills",
   "propose_skill",
   "manage_skills",
+  // Milestones per agent: create, change and cancel. Delivery is never an action: it follows reviewed, merged tasks.
+  "manage_milestones",
   // Only the first, empty commit of a repository with none; the tool refuses otherwise.
   "create_initial_commit",
   "merge_to_user_branch",

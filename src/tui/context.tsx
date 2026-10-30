@@ -107,6 +107,8 @@ export interface AppCtx {
   jumpTo(target: Omit<JumpTarget, "nonce">): void;
   /** Marks finished work as looked at, for one task or every task an agent finished. */
   markSeen(sel: { taskId?: string; agentId?: string }): void;
+  /** Opens the terminal pane for an agent: its own engine CLI, drawn in the main area. */
+  openTerminal(agentId: string): void;
 }
 
 /** Keeps a claim for as long as `active` is true. */

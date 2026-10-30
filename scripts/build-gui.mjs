@@ -1,7 +1,8 @@
 // Builds the web app: bundles src/gui/main.tsx into dist/gui/app.js, the lazily loaded views into dist/gui/chunks/,
 // and copies the static files next to them.
 import { build } from "esbuild";
-import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,6 +38,11 @@ try {
 }
 
 for (const f of ["index.html", "app.css", "favicon.svg"]) copyFileSync(path.join(src, f), path.join(out, f));
+
+// The terminal panel's xterm.js needs its own stylesheet. Chunks cannot carry CSS and the page loads one stylesheet
+// under a strict CSP, so the rules are appended to app.css (about 7 KB).
+const xtermCss = createRequire(import.meta.url).resolve("@xterm/xterm/css/xterm.css");
+appendFileSync(path.join(out, "app.css"), `\n/* @xterm/xterm */\n${readFileSync(xtermCss, "utf8")}`);
 
 const kb = (file) => (statSync(file).size / 1024).toFixed(1);
 const chunks = readdirSync(path.join(out, "chunks"));

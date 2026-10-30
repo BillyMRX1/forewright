@@ -153,7 +153,7 @@ describe("Overview", () => {
     assert.match(f, /Now\s+Started/);
     assert.match(f, /Live output, run run-abcd/);
     assert.match(f, /line one red/);
-    assert.match(hints(h), /enter message · e edit · t task · l log · esc sidebar/);
+    assert.match(hints(h), /enter message · e edit · t open terminal · g task · l log/);
     await esc(h);
     assert.match(hints(h), /↑↓ move/);
     assert.match(h.frame(), /Live output/, "the pane stays while the sidebar has the keyboard");
@@ -195,7 +195,7 @@ describe("Overview", () => {
     assert.match(h.frame(), /Message Cy directly/);
   });
 
-  it("t opens the agent's task and l its raw log", async () => {
+  it("g opens the agent's task and l its raw log", async () => {
     const { h } = await mount({ cols: 100, rows: 30 });
     for (let i = 0; i < 3; i++) await down(h);
     await enter(h);
@@ -204,7 +204,7 @@ describe("Overview", () => {
     await h.settle(200);
     assert.match(h.frame(), /Log · run run-abcd/);
     await esc(h);
-    await h.send("t");
+    await h.send("g");
     await h.settle(250);
     assert.match(h.frame(), /Tasks > T-2 Implement tip calculation/);
   });

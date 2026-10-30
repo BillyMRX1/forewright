@@ -85,6 +85,13 @@ import {
   type ChatSettings,
   DEFAULT_AUTOMATION,
   type Routine,
+  type ContractEnd,
+  type ContractEndView,
+  type Employment,
+  EMPLOYMENTS,
+  EMPLOYMENT_REASON_MAX,
+  type Milestone,
+  type MilestoneState,
 } from "./store-types.js";
 import { nextRunAfter, parseSchedule } from "./schedule.js";
 import {
@@ -455,6 +462,7 @@ export class Store {
       if (to === "cancelled") {
         this.freeAgentFor(t.id);
         this.clearPurposeSessions(t.id);
+        this.settleMilestonesOfTask(t.id); // the rest of a milestone may be done already
       }
       return this.getTask(t.id);
     });
@@ -739,6 +747,7 @@ export class Store {
       this.appendEvent("task.completed", "task", t.id, "system", { candidateCommit: t.candidateCommit });
       this.clearPurposeSessions(t.id); // nobody resumes a finished task
       this.freeAgentFor(t.id);
+      this.settleMilestonesOfTask(t.id);
       this.refreshReadiness();
       return this.getTask(t.id);
     });
@@ -1089,6 +1098,13 @@ export class Store {
       lastEventSummary: (r["last_event_summary"] as string | null) ?? null,
       skills: this.agentSkills(r["id"] as string),
       webResearch: r["web_research"] === 1,
+      employment: (r["employment"] as Employment | undefined) ?? "permanent",
+      employmentReason: (r["employment_reason"] as string | null | undefined) ?? null,
+      contractEnd: r["contract_end_task_id"]
+        ? { kind: "task", taskId: r["contract_end_task_id"] as string }
+        : r["contract_end_milestone_id"]
+          ? { kind: "milestone", milestoneId: r["contract_end_milestone_id"] as string }
+          : null,
     };
   }
 
@@ -1109,18 +1125,45 @@ export class Store {
     return r ? this.agentFromRow(r) : null;
   }
 
-  hireAgent(input: { name: string; role: AgentRole; engine: EngineId; model?: string | null; permission: PermissionProfile; actor?: Actor }): Agent {
+  hireAgent(input: {
+    name: string;
+    role: AgentRole;
+    engine: EngineId;
+    model?: string | null;
+    permission: PermissionProfile;
+    /** Permanent unless said otherwise; a contract needs `contractEnd`. */
+    employment?: Employment;
+    employmentReason?: string | null;
+    contractEnd?: ContractEnd | null;
+    actor?: Actor;
+  }): Agent {
     if (input.role === "cto") throw new ValidationError("The CTO is created with ensureCto, not hired.");
     if (input.permission === "coordinator") throw new ValidationError("Only the CTO has the coordinator permission profile.");
     if (input.name.trim().length === 0) throw new ValidationError("An agent needs a name.");
     if (input.role === "research" && input.permission !== "read_only") throw new ValidationError("A research agent is always read only.");
-    return tx(this.db, () => this.insertAgent(input, input.actor ?? { kind: "system" }));
+    return tx(this.db, () => {
+      const actor = input.actor ?? { kind: "system" };
+      const e = this.checkEmployment({ employment: input.employment ?? "permanent", reason: input.employmentReason ?? null, end: input.contractEnd ?? null }, null);
+      const hired = this.insertAgent({ ...input, employment: e }, actor);
+      // A contract hired for a milestone takes the milestone over: it is the work the new agent is hired to deliver.
+      if (e.end?.kind === "milestone") {
+        const m = this.getMilestone(e.end.milestoneId);
+        this.run("UPDATE milestone SET agent_id = ?, updated_at = ? WHERE id = ?", hired.id, this.nowIso(), m.id);
+        this.appendEvent("milestone.updated", "milestone", m.id, actorLabel(actor), { shortId: m.shortId, agentId: { from: m.agentId, to: hired.id } });
+      }
+      return this.getAgent(hired.id);
+    });
   }
 
-  private insertAgent(input: { name: string; role: AgentRole; engine: EngineId; model?: string | null; permission: PermissionProfile }, actor: Actor): Agent {
+  private insertAgent(
+    input: { name: string; role: AgentRole; engine: EngineId; model?: string | null; permission: PermissionProfile; employment?: CheckedEmployment },
+    actor: Actor,
+  ): Agent {
     const id = newId("agt");
+    const e: CheckedEmployment = input.employment ?? { employment: "permanent", reason: null, end: null };
     this.run(
-      "INSERT INTO agent (id, project_id, name, role, engine, model, permission, created_at) VALUES (?,?,?,?,?,?,?,?)",
+      `INSERT INTO agent (id, project_id, name, role, engine, model, permission, created_at, employment, employment_reason, contract_end_task_id, contract_end_milestone_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       this.projectId,
       input.name,
@@ -1129,9 +1172,282 @@ export class Store {
       input.model ?? null,
       input.permission,
       this.nowIso(),
+      e.employment,
+      e.reason,
+      e.end?.kind === "task" ? e.end.taskId : null,
+      e.end?.kind === "milestone" ? e.end.milestoneId : null,
     );
-    this.appendEvent("agent.hired", "agent", id, actorLabel(actor), { name: input.name, role: input.role, engine: input.engine, model: input.model ?? null, permission: input.permission });
+    this.appendEvent("agent.hired", "agent", id, actorLabel(actor), {
+      name: input.name,
+      role: input.role,
+      engine: input.engine,
+      model: input.model ?? null,
+      permission: input.permission,
+      employment: e.employment,
+      employmentReason: e.reason,
+      contractEnd: e.end,
+    });
     return this.getAgent(id);
+  }
+
+  /**
+   * Validates an employment: the reason is one line of at most 200 characters, a contract has exactly one end (an
+   * unfinished task, or a milestone that is neither delivered nor cancelled) and a permanent agent has none.
+   * `agentId` is the agent being changed (null while hiring): a contract of an existing agent may only end with
+   * one of its own milestones.
+   */
+  private checkEmployment(e: { employment: Employment; reason: string | null; end: ContractEnd | null }, agentId: string | null): CheckedEmployment {
+    if (!EMPLOYMENTS.includes(e.employment)) throw new ValidationError(`Employment must be one of ${EMPLOYMENTS.join(", ")}.`, { employment: e.employment });
+    const trimmed = e.reason === null ? null : e.reason.trim();
+    if (trimmed !== null) {
+      if (/[\r\n]/.test(trimmed)) throw new ValidationError("The employment reason is one line.", { reason: trimmed });
+      if (trimmed.length > EMPLOYMENT_REASON_MAX) throw new ValidationError(`The employment reason is too long (${trimmed.length} characters, limit ${EMPLOYMENT_REASON_MAX}).`, { length: trimmed.length });
+    }
+    const reason = trimmed === "" ? null : trimmed;
+    if (e.employment === "permanent") {
+      if (e.end !== null) throw new ValidationError("A permanent agent has no contract end.", { end: e.end });
+      return { employment: "permanent", reason, end: null };
+    }
+    if (e.end === null) throw new ValidationError("A contract needs an end: the task or the milestone it is hired for.");
+    if (e.end.kind === "task") {
+      const t = this.getTask(e.end.taskId);
+      if (TERMINAL.includes(t.state)) throw new ValidationError(`${t.shortId} is already ${t.state}, so a contract cannot end with it.`, { taskId: t.id });
+      return { employment: "contract", reason, end: { kind: "task", taskId: t.id } };
+    }
+    if (e.end.kind === "milestone") {
+      const m = this.getMilestone(e.end.milestoneId);
+      if (m.state === "delivered" || m.state === "cancelled") throw new ValidationError(`${m.shortId} is already ${m.state}, so a contract cannot end with it.`, { milestoneId: m.id });
+      if (agentId !== null && m.agentId !== agentId) {
+        throw new ValidationError(`${m.shortId} belongs to ${this.getAgent(m.agentId).name}; a contract ends with one of the agent's own milestones.`, { milestoneId: m.id });
+      }
+      return { employment: "contract", reason, end: { kind: "milestone", milestoneId: m.id } };
+    }
+    throw new ValidationError("A contract end is a task or a milestone.", { end: e.end });
+  }
+
+  /** Billy changes an agent's employment, its reason or what ends its contract. Human only; the CTO stays permanent. */
+  setEmployment(agentId: string, patch: { employment?: Employment; employmentReason?: string | null; contractEnd?: ContractEnd | null }, actor: Actor): Agent {
+    if (actor.kind !== "human") throw new PolicyDeniedError("Only Billy can change an agent's employment.", { agentId });
+    return tx(this.db, () => {
+      const a = this.getAgent(agentId);
+      if (a.retiredAt) throw new ValidationError(`${a.name} has been retired.`);
+      const employment = patch.employment ?? a.employment;
+      if (a.role === "cto" && employment !== "permanent") throw new ValidationError("The CTO is always permanent.");
+      const end = patch.contractEnd !== undefined ? patch.contractEnd : employment === "permanent" ? null : a.contractEnd;
+      const reason = patch.employmentReason !== undefined ? patch.employmentReason : a.employmentReason;
+      const e = this.checkEmployment({ employment, reason, end }, a.id);
+      this.run(
+        "UPDATE agent SET employment = ?, employment_reason = ?, contract_end_task_id = ?, contract_end_milestone_id = ? WHERE id = ?",
+        e.employment,
+        e.reason,
+        e.end?.kind === "task" ? e.end.taskId : null,
+        e.end?.kind === "milestone" ? e.end.milestoneId : null,
+        a.id,
+      );
+      this.appendEvent("agent.employment_changed", "agent", a.id, actorLabel(actor), { from: a.employment, to: e.employment, reason: e.reason, contractEnd: e.end });
+      return this.getAgent(a.id);
+    });
+  }
+
+  /** Whether a contract agent's end condition holds: its task is done, or its milestone delivered. False for a permanent agent. */
+  contractEndMet(agent: Agent): boolean {
+    const end = agent.contractEnd;
+    if (agent.employment !== "contract" || end === null) return false;
+    if (end.kind === "task") return this.getTask(end.taskId).state === "done";
+    return this.getMilestone(end.milestoneId).state === "delivered";
+  }
+
+  /** A contract end with the task or milestone short id (T-4, M-2) for display. */
+  contractEndView(end: ContractEnd): ContractEndView {
+    return end.kind === "task" ? { ...end, shortId: this.getTask(end.taskId).shortId } : { ...end, shortId: this.getMilestone(end.milestoneId).shortId };
+  }
+
+  /** Unfinished tasks (planned, ready, working, review) assigned to an agent. */
+  openTasksOf(agentId: string): Task[] {
+    return this.listTasks({ states: ["planned", "ready", "working", "review"] }).filter((t) => t.assigneeAgentId === agentId);
+  }
+
+  /**
+   * Retires a contract agent whose end condition is met, through the usual retire path (which refuses active work and
+   * drops the agent's sessions). The runtime checks for a live run and other open tasks first, and clears the memory notes.
+   */
+  endContract(agentId: string, actor: Actor = { kind: "system" }): Agent {
+    return tx(this.db, () => {
+      const a = this.getAgent(agentId);
+      if (a.retiredAt) throw new ValidationError(`${a.name} has been retired.`);
+      if (!this.contractEndMet(a)) throw new ValidationError(`${a.name}'s contract has not ended yet.`, { agentId: a.id });
+      const end = this.contractEndView(a.contractEnd!);
+      this.retireAgent(a.id, actor);
+      this.appendEvent("agent.contract_ended", "agent", a.id, actorLabel(actor), { name: a.name, contractEnd: end });
+      return this.getAgent(a.id);
+    });
+  }
+
+  // ------------------------------------------------------------ milestones
+
+  private milestoneFromRow(r: Row): Milestone {
+    const id = r["id"] as string;
+    const taskIds = this.all("SELECT task_id FROM milestone_task WHERE milestone_id = ? ORDER BY position", id).map((x) => x["task_id"] as string);
+    const live = taskIds.map((t) => this.getTask(t)).filter((t) => t.state !== "cancelled");
+    const done = live.filter((t) => t.state === "done").length;
+    let state: MilestoneState;
+    if (r["cancelled_at"]) state = "cancelled";
+    else if (r["delivered_at"] || (live.length > 0 && done === live.length)) state = "delivered";
+    else if (live.some((t) => t.state === "review")) state = "in_review";
+    else state = "open";
+    const dueAt = (r["due_at"] as string | null) ?? null;
+    return {
+      id,
+      shortId: r["short_id"] as string,
+      agentId: r["agent_id"] as string,
+      title: r["title"] as string,
+      requirementKeys: JSON.parse(r["requirement_keys"] as string) as string[],
+      taskIds,
+      dueAt,
+      state,
+      overdue: dueAt !== null && state !== "delivered" && state !== "cancelled" && dueAt < this.nowIso(),
+      tasksDone: done,
+      tasksTotal: live.length,
+      createdAt: r["created_at"] as string,
+      deliveredAt: (r["delivered_at"] as string | null) ?? null,
+    };
+  }
+
+  /** Accepts an internal id (mst_...) or a short id (M-2). */
+  getMilestone(idOrShort: string): Milestone {
+    const r = this.one("SELECT * FROM milestone WHERE project_id = ? AND (id = ? OR short_id = ?)", this.projectId, idOrShort, idOrShort);
+    if (!r) throw new NotFoundError(`Milestone ${idOrShort}`, { milestoneId: idOrShort });
+    return this.milestoneFromRow(r);
+  }
+
+  listMilestones(filter: { agentId?: string } = {}): Milestone[] {
+    const order = "ORDER BY CAST(SUBSTR(short_id, 3) AS INTEGER)";
+    const rows = filter.agentId
+      ? this.all(`SELECT * FROM milestone WHERE project_id = ? AND agent_id = ? ${order}`, this.projectId, filter.agentId)
+      : this.all(`SELECT * FROM milestone WHERE project_id = ? ${order}`, this.projectId);
+    return rows.map((r) => this.milestoneFromRow(r));
+  }
+
+  /** Task refs (ids or short ids) to task ids, each once, in the order given. */
+  private milestoneTaskIds(refs: string[]): string[] {
+    return [...new Set(refs.map((ref) => this.getTask(ref).id))];
+  }
+
+  /** Requirement keys must exist in the approved PRD, like a task's. */
+  private milestoneRequirementKeys(keys: string[]): string[] {
+    const unique = [...new Set(keys.map((k) => k.trim()).filter((k) => k !== ""))];
+    if (unique.length === 0) return [];
+    const doc = this.currentApprovedDoc();
+    if (!doc) throw new ValidationError("A milestone can only name requirements once a PRD revision is approved.", { keys: unique });
+    const known = new Set(doc.requirements.map((q) => q.key));
+    const unknown = unique.filter((k) => !known.has(k));
+    if (unknown.length > 0) throw new ValidationError(`Unknown requirement keys in the approved PRD: ${unknown.join(", ")}.`, { unknown, revision: doc.revision });
+    return unique;
+  }
+
+  private milestoneTitle(title: string): string {
+    const t = title.trim();
+    if (t === "") throw new ValidationError("A milestone needs a title.");
+    if (t.length > 200) throw new ValidationError(`The milestone title is too long (${t.length} characters, limit 200).`);
+    return t;
+  }
+
+  private writeMilestoneTasks(milestoneId: string, taskIds: string[]): void {
+    this.run("DELETE FROM milestone_task WHERE milestone_id = ?", milestoneId);
+    taskIds.forEach((t, i) => this.run("INSERT INTO milestone_task (milestone_id, task_id, position) VALUES (?,?,?)", milestoneId, t, i));
+  }
+
+  createMilestone(input: { agentId: string; title: string; taskIds?: string[]; requirementKeys?: string[]; dueAt?: string | null; actor: Actor }): Milestone {
+    return tx(this.db, () => {
+      const a = this.getAgent(input.agentId);
+      if (a.retiredAt) throw new ValidationError(`${a.name} has been retired.`);
+      if (a.role === "cto") throw new ValidationError("Milestones belong to the agents who do the work, not to the CTO.");
+      const title = this.milestoneTitle(input.title);
+      const taskIds = this.milestoneTaskIds(input.taskIds ?? []);
+      const keys = this.milestoneRequirementKeys(input.requirementKeys ?? []);
+      const dueAt = dueIso(input.dueAt ?? null);
+      const id = newId("mst");
+      const n = (this.one("SELECT COALESCE(MAX(CAST(SUBSTR(short_id, 3) AS INTEGER)), 0) AS n FROM milestone WHERE project_id = ?", this.projectId)?.["n"] as number | undefined) ?? 0;
+      const shortId = `M-${n + 1}`;
+      const now = this.nowIso();
+      this.run(
+        "INSERT INTO milestone (id, project_id, short_id, agent_id, title, requirement_keys, due_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        id,
+        this.projectId,
+        shortId,
+        a.id,
+        title,
+        JSON.stringify(keys),
+        dueAt,
+        now,
+        now,
+      );
+      this.writeMilestoneTasks(id, taskIds);
+      this.appendEvent("milestone.created", "milestone", id, actorLabel(input.actor), { shortId, agentId: a.id, title, taskIds, requirementKeys: keys, dueAt });
+      this.settleMilestone(id);
+      return this.getMilestone(id);
+    });
+  }
+
+  /** Changes a milestone's title, due date, tasks or requirement keys. Refused once it is delivered or cancelled. */
+  updateMilestone(ref: string, patch: { title?: string; dueAt?: string | null; taskIds?: string[]; requirementKeys?: string[] }, actor: Actor): Milestone {
+    return tx(this.db, () => {
+      const m = this.getMilestone(ref);
+      if (m.state === "delivered" || m.state === "cancelled") throw new ValidationError(`${m.shortId} is ${m.state} and cannot change.`, { milestoneId: m.id });
+      const title = patch.title !== undefined ? this.milestoneTitle(patch.title) : undefined;
+      const dueAt = patch.dueAt !== undefined ? dueIso(patch.dueAt) : undefined;
+      const taskIds = patch.taskIds !== undefined ? this.milestoneTaskIds(patch.taskIds) : undefined;
+      const keys = patch.requirementKeys !== undefined ? this.milestoneRequirementKeys(patch.requirementKeys) : undefined;
+      this.run(
+        "UPDATE milestone SET title = ?, due_at = ?, requirement_keys = ?, updated_at = ? WHERE id = ?",
+        title ?? m.title,
+        dueAt !== undefined ? dueAt : m.dueAt,
+        JSON.stringify(keys ?? m.requirementKeys),
+        this.nowIso(),
+        m.id,
+      );
+      if (taskIds !== undefined) this.writeMilestoneTasks(m.id, taskIds);
+      this.appendEvent("milestone.updated", "milestone", m.id, actorLabel(actor), {
+        shortId: m.shortId,
+        ...(title !== undefined ? { title } : {}),
+        ...(dueAt !== undefined ? { dueAt } : {}),
+        ...(taskIds !== undefined ? { taskIds } : {}),
+        ...(keys !== undefined ? { requirementKeys: keys } : {}),
+      });
+      this.settleMilestone(m.id);
+      return this.getMilestone(m.id);
+    });
+  }
+
+  cancelMilestone(ref: string, actor: Actor): Milestone {
+    return tx(this.db, () => {
+      const m = this.getMilestone(ref);
+      if (m.state === "delivered" || m.state === "cancelled") throw new ValidationError(`${m.shortId} is already ${m.state}.`, { milestoneId: m.id });
+      const now = this.nowIso();
+      this.run("UPDATE milestone SET cancelled_at = ?, updated_at = ? WHERE id = ?", now, now, m.id);
+      this.appendEvent("milestone.cancelled", "milestone", m.id, actorLabel(actor), { shortId: m.shortId, title: m.title });
+      return this.getMilestone(m.id);
+    });
+  }
+
+  /**
+   * The one place a milestone becomes delivered. Its state is computed from its tasks on every read; this stamps the
+   * delivery time and records milestone.delivered the first time that computed state says delivered. Called inside the
+   * transaction of every change that can deliver a milestone: a task completed (after review and checks) or cancelled,
+   * and the milestone created or changed.
+   */
+  private settleMilestone(milestoneId: string): void {
+    const r = this.one("SELECT * FROM milestone WHERE id = ?", milestoneId);
+    if (!r || r["delivered_at"] || r["cancelled_at"]) return;
+    const m = this.milestoneFromRow(r);
+    if (m.state !== "delivered") return;
+    const now = this.nowIso();
+    this.run("UPDATE milestone SET delivered_at = ?, updated_at = ? WHERE id = ?", now, now, m.id);
+    this.appendEvent("milestone.delivered", "milestone", m.id, "system", { shortId: m.shortId, title: m.title, agentId: m.agentId, taskIds: m.taskIds });
+  }
+
+  private settleMilestonesOfTask(taskId: string): void {
+    for (const r of this.all("SELECT milestone_id FROM milestone_task WHERE task_id = ?", taskId)) this.settleMilestone(r["milestone_id"] as string);
   }
 
   ensureCto(defaults: { name?: string; engine: EngineId; model?: string | null }): Agent {
@@ -2974,6 +3290,15 @@ export class Store {
     this.run("DELETE FROM agent_session WHERE purpose = ?", purpose);
   }
 
+  /** An agent's sessions on one engine, newest first (an attached terminal picks the one to resume from these). */
+  agentSessions(agentId: string, engine: EngineId): Array<{ purpose: string; sessionId: string; updatedAt: string }> {
+    return this.all("SELECT purpose, session_id, updated_at FROM agent_session WHERE agent_id = ? AND engine = ? ORDER BY updated_at DESC, purpose", agentId, engine).map((r) => ({
+      purpose: r["purpose"] as string,
+      sessionId: r["session_id"] as string,
+      updatedAt: r["updated_at"] as string,
+    }));
+  }
+
   /** The agent's newest session on an engine, whatever its purpose. For display only, never for resuming. */
   private latestAgentSession(agentId: string, engine: EngineId): string | null {
     return (
@@ -3125,10 +3450,12 @@ export class Store {
   }
 
   /** Every agent, retired ones included, so history can still name them; callers hide the retired. */
-  teamView(): Array<Agent & { currentTaskShortId: string | null }> {
+  teamView(): Array<Omit<Agent, "contractEnd"> & { currentTaskShortId: string | null; contractEnd: ContractEndView | null; milestones: Milestone[] }> {
     return this.listAgents({ includeRetired: true }).map((a) => ({
       ...a,
       currentTaskShortId: a.currentTaskId ? this.getTask(a.currentTaskId).shortId : null,
+      contractEnd: a.contractEnd ? this.contractEndView(a.contractEnd) : null,
+      milestones: this.listMilestones({ agentId: a.id }),
     }));
   }
 
@@ -3143,6 +3470,18 @@ function kickoffReadyCount(docs: KickoffDoc[]): string {
   const wireframes = docs.filter((d) => d.key.startsWith("wireframe:")).length;
   const n = docs.length - wireframes;
   return `${n} documents${wireframes > 0 ? ` and ${wireframes} ${wireframes === 1 ? "wireframe" : "wireframes"}` : ""}`;
+}
+
+type CheckedEmployment = { employment: Employment; reason: string | null; end: ContractEnd | null };
+
+/** A due date as an ISO time: an ISO date (2026-11-03, end of that day in UTC) or time; null clears it. */
+function dueIso(value: string | null): string | null {
+  if (value === null) return null;
+  const v = value.trim();
+  if (v === "") return null;
+  const ms = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T23:59:59.999Z` : v);
+  if (Number.isNaN(ms)) throw new ValidationError(`"${value}" is not a date. Use a date like 2026-11-03 or an ISO time.`, { dueAt: value });
+  return new Date(ms).toISOString();
 }
 
 /** Roles a routing pin may name: every worker role (the CTO does not take work or review runs). */

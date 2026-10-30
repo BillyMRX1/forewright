@@ -2,8 +2,9 @@
 // simulate providers. The Settings view labels it "Test double".
 import { fileURLToPath } from "node:url";
 import type {
-  EngineId, NormalizedEvent, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
+  EngineId, InteractiveCommand, InteractiveRequest, NormalizedEvent, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
+import { INTERACTIVE_TERM_ENV } from "./isolation.js";
 import { childEnv, type StartTimeRead } from "./process.js";
 import { decideOutcome, makeEmitter, runPlan, StderrTail, type EngineParser, type ExitInfo, type EventInput } from "./runner.js";
 
@@ -55,6 +56,7 @@ export interface FakeAdapterOptions {
 }
 
 const CHILD = fileURLToPath(new URL("./fake-child.js", import.meta.url));
+const TERMINAL_CHILD = fileURLToPath(new URL("./fake-terminal.js", import.meta.url));
 
 export class FakeAdapter implements ProviderAdapter {
   /** Which engine this double stands in for. Tests register several to exercise fallback between engines. */
@@ -67,6 +69,9 @@ export class FakeAdapter implements ProviderAdapter {
   private readonly readStartTime: FakeAdapterOptions["readStartTime"];
   /** Every request this adapter has been asked to run, in order (for test assertions). */
   readonly requests: RunRequest[] = [];
+  /** Every interactive CLI it was asked for, in order, and how many of their cleanups ran. */
+  readonly interactiveRequests: InteractiveRequest[] = [];
+  interactiveCleanups = 0;
 
   private readonly signedOut: boolean;
   private readonly authMethod: string;
@@ -99,6 +104,27 @@ export class FakeAdapter implements ProviderAdapter {
       if (hit) return typeof r.script === "function" ? r.script(req) : r.script;
     }
     return this.defaultScript;
+  }
+
+  /** A local process that prints its request and echoes input lines (see fake-terminal.ts). */
+  interactive(req: InteractiveRequest): InteractiveCommand {
+    this.interactiveRequests.push(req);
+    const shown = {
+      resume: req.resumeSessionId ?? null,
+      model: req.model ?? null,
+      permission: req.permission,
+      mcp: req.mcpServers.map((m) => m.name),
+      systemPrompt: req.systemPrompt ?? null,
+    };
+    const { env } = childEnv(process.env, INTERACTIVE_TERM_ENV, { allowApiBilling: false });
+    return {
+      bin: process.execPath,
+      args: [TERMINAL_CHILD, JSON.stringify(shown)],
+      env,
+      cleanup: () => {
+        this.interactiveCleanups++;
+      },
+    };
   }
 
   start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {

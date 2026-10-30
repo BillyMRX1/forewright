@@ -147,6 +147,25 @@ export interface RunRequest {
   env?: Record<string, string>; // extra, already-sanitized env
 }
 
+/** An interactive CLI that Billy attaches to (issue #11): the engine's own terminal UI, resuming the agent's session. */
+export interface InteractiveRequest {
+  cwd: string;
+  resumeSessionId?: string;
+  model?: string;
+  permission: PermissionProfile;
+  mcpServers: McpServerSpec[];
+  systemPrompt?: string;
+}
+
+export interface InteractiveCommand {
+  bin: string;
+  args: string[];
+  /** The complete environment of the CLI, with the same isolation as a headless run. */
+  env: Record<string, string>;
+  /** Removes the temporary files of this command (an MCP config); called once the CLI has ended. */
+  cleanup(): void;
+}
+
 export type NormalizedEventKind =
   | "session_started" // carries sessionId
   | "assistant_text"
@@ -235,4 +254,6 @@ export interface ProviderAdapter {
   readonly minVersion?: string;
   probe(): Promise<ProviderHealth>;
   start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle;
+  /** The command line of the engine's interactive CLI. Engines without it cannot be attached to. */
+  interactive?(req: InteractiveRequest): InteractiveCommand;
 }

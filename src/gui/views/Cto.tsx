@@ -6,7 +6,8 @@ import type { Message, RequirementDoc } from "../../core/store-types.js";
 import { Markdown } from "../markdown.js";
 import { PrdCard, PrdReader } from "../prd.js";
 import { plainError } from "../Picker.js";
-import { useProject } from "../live.js";
+import { AttachButton } from "../attach-button.js";
+import { useNeeds, useProject } from "../live.js";
 import { ConfirmDialog, Modal, relTime, useInterval } from "../ui.js";
 
 export { PrdCard, PrdReader };
@@ -57,6 +58,18 @@ export function EmptyState() {
 }
 
 type Dialog = { kind: "approve" } | { kind: "pause" } | { kind: "resume" } | { kind: "prd" } | { kind: "help" } | null;
+
+/** The CTO view's header: the button that opens the CTO's own CLI. It waits for the team list, which also says whether attaching works. */
+export function CtoBar() {
+  const { openTerminal } = useProject();
+  const cto = useNeeds().snapshot?.agents.find((a) => a.role === "cto" && a.retiredAt === null);
+  if (!cto) return null;
+  return (
+    <div className="cto-bar">
+      <AttachButton member={cto} name="the CTO" onOpen={() => openTerminal(cto.id, "CTO")} />
+    </div>
+  );
+}
 
 export function Cto() {
   const { rpc, projectId, connected, runtime, notify, reloadKey } = useProject();
@@ -272,6 +285,7 @@ export function Cto() {
 
   return (
     <div className="cto">
+      <CtoBar />
       <div className="messages-wrap">
         <div className="messages" ref={scroller} onScroll={onScroll} tabIndex={0} aria-label="Conversation with the CTO">
           {messages === null ? (

@@ -56,7 +56,7 @@ describe("key table", () => {
   it("hint lines always end with help and never exceed the width", () => {
     for (const width of [24, 40, 80, 140]) {
       for (const [scope] of SCOPE_TITLES) {
-        if (["help", "confirm", "palette", "prd", "kickoff.empty", "kickoff", "kickoff.doc", "log", "outcome"].includes(scope)) continue;
+        if (["help", "confirm", "palette", "prd", "kickoff.empty", "kickoff", "kickoff.doc", "log", "outcome", "terminal"].includes(scope)) continue;
         for (const typing of [false, true]) {
           const f = footerHints(scope, width, { needs: 2, toast: true, typing });
           assert.ok([...f].length <= width, `hint too wide at ${width} for ${scope}: ${f}`);

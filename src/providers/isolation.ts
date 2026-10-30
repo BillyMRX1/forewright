@@ -37,6 +37,9 @@ export function isolatedCodexHome(forewrightHome: string, realHome: string = os.
   return { dir, auth };
 }
 
+/** An attached terminal (issue #11) gets a real terminal type instead of the `TERM=dumb` of headless runs, so the CLI draws its full interface. */
+export const INTERACTIVE_TERM_ENV: Record<string, string> = { TERM: "xterm-256color", COLORTERM: "truecolor" };
+
 /**
  * Claude keeps its subscription login in the macOS keychain and only finds it
  * with the default config dir, so CLAUDE_CONFIG_DIR cannot be used. Instead:

@@ -14,9 +14,9 @@ test("fresh migrate is idempotent and creates the expected tables", () => {
   migrate(db);
   migrate(db);
   assert.deepEqual(versions(db), MIGRATIONS.map((m) => m.version));
-  assert.equal(versions(db).at(-1), 14, "the skills migration is the latest");
+  assert.equal(versions(db).at(-1), 15, "the employment migration is the latest");
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name);
-  for (const t of ["project", "requirement_doc", "requirement", "adr", "agent", "task", "task_dependency", "task_requirement", "run", "message", "message_delivery", "decision", "artifact", "verification", "event", "action_receipt", "setting", "draft", "checkpoint", "agent_token", "kickoff_pack", "kickoff_doc", "kickoff_approval", "kickoff_proposal", "budget_hold", "route_decision", "routine", "automation_item", "ask", "agent_skill"]) {
+  for (const t of ["project", "requirement_doc", "requirement", "adr", "agent", "task", "task_dependency", "task_requirement", "run", "message", "message_delivery", "decision", "artifact", "verification", "event", "action_receipt", "setting", "draft", "checkpoint", "agent_token", "kickoff_pack", "kickoff_doc", "kickoff_approval", "kickoff_proposal", "budget_hold", "route_decision", "routine", "automation_item", "ask", "agent_skill", "milestone", "milestone_task"]) {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }
   assert.equal((db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode, "wal");
@@ -110,11 +110,43 @@ INSERT INTO project (id, name, root, created_at) VALUES ('p1', 'demo', '/tmp/dem
 INSERT INTO agent (id, project_id, name, role, engine, permission, created_at) VALUES ('a1', 'p1', 'Ada', 'backend', 'fake', 'workspace_write', '${at}');
 `);
   migrate(db);
-  assert.equal(versions(db).at(-1), 14);
+  assert.ok(versions(db).includes(14));
   assert.equal((db.prepare("SELECT web_research FROM agent WHERE id = 'a1'").get() as { web_research: number }).web_research, 0, "existing agents may not look things up");
   const insert = db.prepare("INSERT INTO agent_skill (project_id, agent_id, slug, attached_at, attached_by) VALUES ('p1', ?, 'pdf', ?, 'human')");
   insert.run("a1", at);
   assert.throws(() => insert.run("a1", at), "one row per agent and skill");
   assert.throws(() => insert.run("nobody", at), "the agent must exist");
+  assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+});
+
+test("migration 15 makes every agent of a version 14 database permanent and adds milestones", () => {
+  const db = openDb(path.join(tempDir(), "s.db"));
+  db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
+  for (const m of MIGRATIONS.filter((x) => x.version <= 14)) {
+    tx(db, () => {
+      db.exec(m.sql);
+      db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, 'then')").run(m.version);
+    });
+  }
+  const at = "2026-10-01T00:00:00.000Z";
+  db.exec(`
+INSERT INTO project (id, name, root, created_at) VALUES ('p1', 'demo', '/tmp/demo', '${at}');
+INSERT INTO agent (id, project_id, name, role, engine, permission, created_at) VALUES ('a0', 'p1', 'CTO', 'cto', 'fake', 'coordinator', '${at}');
+INSERT INTO agent (id, project_id, name, role, engine, permission, created_at) VALUES ('a1', 'p1', 'Ada', 'backend', 'fake', 'workspace_write', '${at}');
+INSERT INTO task (id, project_id, short_id, title, state, created_at, updated_at) VALUES ('t1', 'p1', 'T-1', 'Do it', 'ready', '${at}', '${at}');
+`);
+  migrate(db);
+  assert.equal(versions(db).at(-1), 15);
+  const rows = (db.prepare("SELECT id, employment, employment_reason, contract_end_task_id, contract_end_milestone_id FROM agent ORDER BY id").all() as Array<Record<string, unknown>>).map((r) => ({ ...r }));
+  assert.deepEqual(rows, [
+    { id: "a0", employment: "permanent", employment_reason: null, contract_end_task_id: null, contract_end_milestone_id: null },
+    { id: "a1", employment: "permanent", employment_reason: null, contract_end_task_id: null, contract_end_milestone_id: null },
+  ]);
+  assert.throws(() => db.prepare("UPDATE agent SET employment = 'freelance' WHERE id = 'a1'").run(), "only permanent or contract");
+  db.prepare("INSERT INTO milestone (id, project_id, short_id, agent_id, title, created_at, updated_at) VALUES ('m1', 'p1', 'M-1', 'a1', 'Ship', ?, ?)").run(at, at);
+  db.prepare("INSERT INTO milestone_task (milestone_id, task_id, position) VALUES ('m1', 't1', 0)").run();
+  assert.throws(() => db.prepare("INSERT INTO milestone_task (milestone_id, task_id, position) VALUES ('m1', 'nope', 1)").run(), "the task must exist");
+  assert.throws(() => db.prepare("INSERT INTO milestone (id, project_id, short_id, agent_id, title, created_at, updated_at) VALUES ('m2', 'p1', 'M-1', 'a1', 'Dup', ?, ?)").run(at, at), "short ids are unique per project");
+  db.prepare("UPDATE agent SET employment = 'contract', contract_end_milestone_id = 'm1' WHERE id = 'a1'").run();
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
