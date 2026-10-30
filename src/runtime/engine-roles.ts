@@ -6,8 +6,8 @@ import type { AgentRole, ProviderAdapter } from "../core/types.js";
  * those roles. Returns a plain reason, or null when the engine fits the role.
  */
 export function engineRoleProblem(adapter: Pick<ProviderAdapter, "engine" | "capabilities">, role: AgentRole): string | null {
-  if ((role === "cto" || role === "review") && adapter.capabilities.coordinationTools !== "mcp") {
-    const what = role === "cto" ? "be the CTO" : "review work";
+  if ((role === "cto" || role === "review" || role === "research") && adapter.capabilities.coordinationTools !== "mcp") {
+    const what = role === "cto" ? "be the CTO" : role === "review" ? "review work" : "do skill research";
     return `${adapter.engine} cannot ${what}: it cannot call Forewright's coordination tools. Pick an engine with MCP support.`;
   }
   return null;

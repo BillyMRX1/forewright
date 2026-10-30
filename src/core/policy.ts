@@ -32,7 +32,10 @@ export type ActionName =
   | "change_authority"
   | "approve_prd"
   | "resolve_decision"
-  | "read_state";
+  | "read_state"
+  | "read_skills"
+  | "propose_skill"
+  | "manage_skills";
 
 export type AuthorityMode = "ask" | "auto" | "deny";
 
@@ -83,6 +86,10 @@ const CTO_ACTIONS: ReadonlySet<ActionName> = new Set([
   "request_decision",
   "request_integration",
   "read_state",
+  // Skills: read the library, attach or detach library skills, propose a new one (Billy installs it).
+  "read_skills",
+  "propose_skill",
+  "manage_skills",
   // Only the first, empty commit of a repository with none; the tool refuses otherwise.
   "create_initial_commit",
   "merge_to_user_branch",
@@ -126,6 +133,11 @@ export function authorize(actor: Actor, action: ActionName, context: ActionConte
     case "send_message":
     case "update_memory":
       return { allowed: true };
+    case "read_skills":
+    case "propose_skill":
+      // A research agent finds and proposes skills; proposing never installs anything (Billy decides).
+      if (actor.role === "research") return { allowed: true };
+      return deny("Only the CTO or a research agent can look at or propose skills.", { action });
     case "read_state":
       if (context.taskId !== undefined && context.taskId === context.agentCurrentTaskId) return { allowed: true };
       if (actor.role === "review" && context.taskId !== undefined) return { allowed: true };

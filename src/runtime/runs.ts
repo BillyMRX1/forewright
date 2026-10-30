@@ -12,6 +12,8 @@ import { billingProblem, billingUnconfirmed } from "./billing.js";
 import { BillingBlockedError, ProviderUnavailableError } from "./errors.js";
 import { LEASE_MS, type ProjectRuntime } from "./project-runtime.js";
 import type { TokenScope } from "./tokens.js";
+import { researchSystemPrompt } from "./prompts.js";
+import { skillsForRun } from "./skills.js";
 
 export type StopKind = "stop_run" | "cancel" | "reassign" | "change_request" | "terminate" | "shutdown";
 
@@ -102,6 +104,7 @@ function syntheticFailure(spec: RunSpec, error: string, detail: string): RunOutc
 export function launchRun(rt: ProjectRuntime, spec: RunSpec): ActiveRun {
   const { run, agent } = spec;
   const adapter = adapterFor(rt, agent);
+  const skills = skillsForRun(rt, agent, run.id, spec.permission, adapter);
   const settings = rt.store.getSettings();
   const ttl = settings.runTimeoutMs + 10 * 60 * 1000;
   const token = rt.tokens.issue({ agentId: agent.id, runId: run.id, generation: run.generation, scope: spec.scope, ttlMs: ttl });
@@ -153,8 +156,9 @@ export function launchRun(rt: ProjectRuntime, spec: RunSpec): ActiveRun {
     }
   };
 
-  const mcp: McpServerSpec[] =
-    adapter.capabilities.coordinationTools === "mcp"
+  // Forewright's bridge stays first; skill tools (already approved and pinned) follow it.
+  const mcp: McpServerSpec[] = [
+    ...(adapter.capabilities.coordinationTools === "mcp"
       ? [
           {
             name: "forewright",
@@ -163,7 +167,11 @@ export function launchRun(rt: ProjectRuntime, spec: RunSpec): ActiveRun {
             env: { FOREWRIGHT_SOCKET: rt.deps.socketPath, FOREWRIGHT_AGENT_TOKEN: token },
           },
         ]
-      : [];
+      : []),
+    ...skills.mcpServers,
+  ];
+  // Skill text goes after the run's own rules, in its own delimited section (see skillsForRun).
+  const systemPrompt = [spec.systemPrompt, agent.role === "research" && run.kind !== "cto" ? researchSystemPrompt() : "", skills.systemPromptSection].filter((x) => x !== "").join("\n\n");
 
   if (rt.stopping) {
     // Shutdown already began and took its list of running runs: a late launch would start a child nobody stops.
@@ -180,7 +188,7 @@ export function launchRun(rt: ProjectRuntime, spec: RunSpec): ActiveRun {
         generation: run.generation,
         cwd: spec.cwd,
         prompt: spec.prompt,
-        systemPrompt: spec.systemPrompt,
+        systemPrompt,
         ...(agent.model ? { model: agent.model } : {}),
         permission: spec.permission,
         ...(spec.resumeSessionId ? { resumeSessionId: spec.resumeSessionId } : {}),

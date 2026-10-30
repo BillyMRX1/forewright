@@ -28,6 +28,8 @@ import { nudgeKickoff, resolveKickoffProposal } from "./kickoff.js";
 import { reconcileOnOpen } from "./recovery.js";
 import { type ActiveRun, type StopKind } from "./runs.js";
 import { Scheduler } from "./scheduler.js";
+import type { SourceGet } from "./skill-sources.js";
+import { onSkillDecision } from "./skills.js";
 import { GithubTriggers, ghRunner } from "./github.js";
 import { TokenRepo } from "./tokens.js";
 import { INTEGRATION_BRANCH, WorkspaceManager } from "./workspace.js";
@@ -53,6 +55,8 @@ export interface RuntimeDeps {
   notifySend?: Omit<SendOptions, "home">;
   /** The GitHub CLI the triggers run (default "gh" on PATH); tests point it at a fake. */
   ghBinary?: string;
+  /** For tests: the GET that reads the vetted skill sources (default: Node's https client through the proxy settings). */
+  skillSourceGet?: SourceGet;
 }
 
 export interface Notifier {
@@ -357,6 +361,7 @@ export class ProjectRuntime {
       if ((decision.boundAction as { action?: string } | null)?.action === "kickoff_revise") resolveKickoffProposal(this, decision, approved);
       if ((decision.boundAction as { action?: string } | null)?.action === BUDGET_ACTION) onBudgetDecision(this, decision, approved);
       if (action === LOOP_ACTION) onLoopDecision(this, decision, approved);
+      onSkillDecision(this, decision, approved); // skill installs and web research grants; ignores other decisions
     } catch (err) {
       if (err instanceof ForewrightError) {
         this.store.recordEvent(`${decision.kind}.refused`, "decision", decision.id, { kind: "system" }, { code: err.code, message: err.message });

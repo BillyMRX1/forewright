@@ -22,6 +22,7 @@ import type {
   Task,
   Verification,
   RouteDecision,
+  SkillInfo,
 } from "../core/store-types.js";
 import type { Store } from "../core/store.js";
 import type { BudgetScopeStatus } from "../core/budgets.js";
@@ -230,9 +231,19 @@ export interface Methods {
   "decisions.resolve": { params: { projectId: string; decisionId: string; option: string; note?: string }; result: { decision: Decision } };
   "settings.set": { params: { projectId: string; key: string; value: unknown }; result: { settings: Settings } };
   "agents.update": {
-    params: { projectId: string; agentId: string; name?: string; engine?: Agent["engine"]; model?: string | null; permission?: Agent["permission"] };
+    /** webResearch: research agents only, Billy's yes or no to reading the vetted skill sources. */
+    params: { projectId: string; agentId: string; name?: string; engine?: Agent["engine"]; model?: string | null; permission?: Agent["permission"]; webResearch?: boolean };
     result: { agent: Agent };
   };
+  /** Gives an agent a library skill. Refused when the skill has a problem or needs more permission than the agent has. */
+  "agents.attachSkill": { params: { projectId: string; agentId: string; slug: string }; result: { agent: Agent } };
+  "agents.detachSkill": { params: { projectId: string; agentId: string; slug: string }; result: { agent: Agent } };
+  /** The machine's skill library and which agents of this project have which skill. */
+  "skills.list": { params: { projectId: string }; result: { skills: SkillInfo[]; attached: Array<{ agentId: string; slug: string; attachedAt: string; attachedBy: string }> } };
+  /** Billy writes a local skill (instructions only, no tools). */
+  "skills.create": { params: { projectId: string; name: string; description: string; instructions: string }; result: { skill: SkillInfo } };
+  /** Deletes the library folder and detaches the skill from every agent of this project. */
+  "skills.remove": { params: { projectId: string; slug: string }; result: { ok: true } };
   /** Billy retires an agent. Refused for the CTO and for an agent with active work; the CTO is told. */
   "agents.retire": { params: { projectId: string; agentId: string }; result: { ok: true } };
   /** An agent's memory notes (empty text when it has none) and the size limit. */

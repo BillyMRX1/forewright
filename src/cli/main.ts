@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The `forewright` command: `forewright` (interface), `forewright serve`, `forewright mcp-bridge`,
-// `forewright doctor`, `forewright status`, `forewright report`, `forewright gui`, `forewright service install|uninstall|status`.
+// `forewright doctor`, `forewright status`, `forewright report`, `forewright skills`, `forewright gui`, `forewright service install|uninstall|status`.
 import { ForewrightError } from "../core/errors.js";
 import { forewrightHome, migrateLegacyHome, socketPath } from "../core/paths.js";
 import { createAdapters } from "../providers/registry.js";
@@ -10,6 +10,7 @@ import { runConfig, runNotifyTest } from "./config.js";
 import { runGui } from "./gui.js";
 import { queryService, runDoctor } from "./doctor.js";
 import { runReport } from "./report.js";
+import { runSkills } from "./skills.js";
 import { serviceInstall, serviceStatus, serviceUninstall } from "./service.js";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +23,7 @@ Usage:
   forewright status                say whether the service is running
   forewright doctor                check the service, data folder and every engine (--verbose, --json)
   forewright report                what your agents used: tokens and estimated cost (--days N, --json)
+  forewright skills                list, add or remove skills in the library on this computer (forewright skills --help)
   forewright config                show or set the company proxy, certificate file and GUI settings (forewright config --help)
   forewright service install       start the service at login (macOS launchd, Linux systemd user unit)
   forewright service uninstall     remove the login service
@@ -108,6 +110,8 @@ async function main(argv: string[]): Promise<number> {
       return runReport(argv.slice(1));
     case "config":
       return argv[1] === "notify" && argv[2] === "test" && argv.length === 3 ? runNotifyTest() : runConfig(argv.slice(1));
+    case "skills":
+      return runSkills(argv.slice(1));
     case "gui":
       return runGui(argv.slice(1));
     case "service": {

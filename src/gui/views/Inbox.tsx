@@ -3,13 +3,15 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import type { Decision, DecisionKind, DecisionOption, RequirementDoc, Task } from "../../core/store-types.js";
+import type { Decision, DecisionKind, DecisionOption, RequirementDoc, SkillInstallAction, Task } from "../../core/store-types.js";
 import type { TeamMember } from "../../runtime/protocol.js";
 import type { NeedItem } from "../../tui/attention.js";
 import { oneLine } from "../../tui/format.js";
 import { isDecisionEvent, isPrdEvent, isTaskEvent, useLive, useNeeds, useProject } from "../live.js";
 import { plainError } from "../Picker.js";
 import { PrdReader } from "../prd.js";
+import { forAgentNames, skillInstallOf, skillPermissionWords, skillSourceWords } from "../skills-model.js";
+import { InstructionsBox, SourceLink, ToolLines } from "../skills-parts.js";
 import { ConfirmDialog, relTime, useInterval } from "../ui.js";
 
 // ---------------------------------------------------------------- pure helpers
@@ -70,8 +72,9 @@ export function needsConfirm(d: Decision, option: DecisionOption): boolean {
 /** What the confirmation names: the choice and what will happen. */
 export function confirmText(d: Decision, option: DecisionOption): string {
   const what = option.approves === true ? "This approves the action the agent asked for. " : "";
+  const programs = option.approves === true && (skillInstallOf(d.boundAction)?.tools.length ?? 0) > 0 ? "It installs tools that run as programs on this computer. " : "";
   const consequence = option.consequence ? `What happens: ${option.consequence}` : "";
-  return `${what}You are choosing "${oneLine(option.label)}" for "${oneLine(d.title)}" (${KIND_LABEL[d.kind].toLowerCase()}). ${consequence}`.trim();
+  return `${what}${programs}You are choosing "${oneLine(option.label)}" for "${oneLine(d.title)}" (${KIND_LABEL[d.kind].toLowerCase()}). ${consequence}`.trim();
 }
 
 export interface QuestionLine {
@@ -117,6 +120,53 @@ export function Question({ text }: { text: string }) {
           {l.text === "" ? " " : l.text}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Tools run as programs, so Billy is told plainly before he installs them. */
+export const TOOLS_WARNING = "These tools run as programs on this computer.";
+
+/** The body of a skill install decision: who proposed it, why, the source, the permission, the tools and the exact instructions. */
+export function SkillInstallBody({ action, agents }: { action: SkillInstallAction; agents: Array<{ id: string; name: string }> }) {
+  const forNames = forAgentNames(action.forAgentIds, agents);
+  return (
+    <div className="skill-install">
+      <p>
+        <strong>{oneLine(action.proposedBy)}</strong> proposes the skill <strong>{oneLine(action.name)}</strong>: {oneLine(action.description)}
+      </p>
+      {action.reasoning ? (
+        <p>
+          <strong>Why:</strong> {action.reasoning}
+        </p>
+      ) : null}
+      <dl className="skill-facts">
+        <dt>Source</dt>
+        <dd>
+          {action.sourceUrl ? <SourceLink url={action.sourceUrl} /> : skillSourceWords({ source: "local", version: null })}
+          {action.version ? <span className="muted"> version {action.version}</span> : null}
+        </dd>
+        <dt>Needs</dt>
+        <dd>{skillPermissionWords(action.requiredPermission)}</dd>
+        {forNames.length > 0 ? (
+          <>
+            <dt>For</dt>
+            <dd>{forNames.map(oneLine).join(", ")}</dd>
+          </>
+        ) : null}
+      </dl>
+      {action.tools.length > 0 ? (
+        <div className="skill-tools-box">
+          <p className="skill-warning" role="note">
+            {TOOLS_WARNING}
+          </p>
+          <ToolLines tools={action.tools} />
+        </div>
+      ) : (
+        <p className="muted">No tools. Instructions only.</p>
+      )}
+      <h3 className="skill-instr-title">Instructions the agent will receive</h3>
+      <InstructionsBox text={action.instructions} collapsible />
     </div>
   );
 }
@@ -205,6 +255,7 @@ export function DecisionDetail({
   const groupId = useId();
   const open = d.status === "open";
   const chosen = d.options.find((o) => o.key === (open ? choice : d.resolutionOption)) ?? null;
+  const install = skillInstallOf(d.boundAction);
   const affected = d.affectedTaskIds.map((id) => ({ id, task: tasks.find((t) => t.id === id) }));
   return (
     <div className="inbox-detail-body">
@@ -212,7 +263,7 @@ export function DecisionDetail({
       <p className="muted">
         {KIND_LABEL[d.kind]} from {sourceOf(d, agents)}, asked {relTime(d.createdAt, now)}
       </p>
-      <Question text={d.question} />
+      {install ? <SkillInstallBody action={install} agents={agents} /> : <Question text={d.question} />}
       {d.impact ? (
         <p className="inbox-impact">
           <strong>If you wait:</strong> {d.impact}

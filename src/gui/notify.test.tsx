@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanTitle } from "../runtime/notify.js";
-import { type DesktopContext, desktopNotice, enableDesktop, parseHash, permissionProblem, permissionState } from "./notify.js";
+import { type DesktopContext, desktopNotice, enableDesktop, parseHash, permissionProblem, permissionState, showDesktop, tauriNotification } from "./notify.js";
 
 const g = globalThis as unknown as { Notification?: unknown };
 afterEach(() => {
@@ -61,6 +61,32 @@ test("permission is asked only by enableDesktop, and a denial or missing support
   assert.equal(asked, 1);
   assert.match(permissionProblem("denied") ?? "", /blocked/);
   assert.equal(permissionProblem("granted"), null);
+});
+
+test("inside the desktop app the injected Tauri API is used instead of the browser Notification", async () => {
+  assert.equal(tauriNotification({}), null);
+  assert.equal(tauriNotification({ __TAURI__: { notification: { sendNotification: () => undefined } } }), null, "a partial API is not used");
+  const sent: Array<{ title: string; body?: string }> = [];
+  let granted = false;
+  const api = {
+    isPermissionGranted: () => Promise.resolve(granted),
+    requestPermission: () => Promise.resolve("granted"),
+    sendNotification: (o: { title: string; body?: string }) => void sent.push(o),
+  };
+  const t = globalThis as unknown as { __TAURI__?: unknown };
+  t.__TAURI__ = { notification: api };
+  try {
+    assert.ok(tauriNotification());
+    g.Notification = { permission: "denied", requestPermission: () => assert.fail("the browser API must not be asked") };
+    assert.equal(permissionState(), "default");
+    assert.equal(await enableDesktop(), "granted");
+    assert.equal(permissionState(), "granted");
+    showDesktop({ title: "Forewright: Shop", body: "Decision needed", tag: "decision:dec_1" }, () => assert.fail("no click callback in the app"));
+    assert.deepEqual(sent, [{ title: "Forewright: Shop", body: "Decision needed" }]);
+  } finally {
+    delete t.__TAURI__;
+  }
+  assert.equal(tauriNotification(), null);
 });
 
 test("deep links in the address bar", () => {

@@ -1,6 +1,6 @@
 // Test fixtures for the Home view and the live layer: a busy project and an empty one.
 
-import type { Decision, ForewrightEvent, Message, RequirementDoc, Task } from "../core/store-types.js";
+import type { Decision, ForewrightEvent, Message, RequirementDoc, SkillInfo, Task } from "../core/store-types.js";
 import type { UsageSummary, UsageTotals } from "../core/usage.js";
 import type { ChatStatus, RuntimeStatus, TeamMember } from "../runtime/protocol.js";
 import type { ChannelEntry } from "./chat-model.js";
@@ -51,6 +51,8 @@ export function agent(over: Partial<TeamMember> & Pick<TeamMember, "id" | "name"
     lastEventAt: null,
     lastEventSummary: null,
     currentTaskShortId: null,
+    skills: [],
+    webResearch: false,
     ...over,
   };
 }
@@ -175,4 +177,42 @@ export function chatFixture() {
     ...over,
   });
   return { people, channels, status, message };
+}
+
+/** The skills view's data: a local skill, an external one with a tool and a problem, and who has what. */
+export function skillsFixture() {
+  const local: SkillInfo = {
+    slug: "code-review-notes",
+    name: "Code review notes",
+    description: "How Billy likes pull requests reviewed.",
+    source: "local",
+    sourceUrl: null,
+    version: null,
+    requiredPermission: "read_only",
+    tools: [],
+    instructions: "## Review\n\nRead the diff first. **Be kind.**",
+    contentHash: "a".repeat(64),
+    installedAt: at,
+    problem: null,
+  };
+  const external: SkillInfo = {
+    slug: "github",
+    name: "GitHub",
+    description: "Read issues and pull requests.",
+    source: "external",
+    sourceUrl: "https://github.com/example/skills/tree/main/github",
+    version: "1.2.0",
+    requiredPermission: "workspace_write",
+    tools: [{ name: "skill-github", registry: "npm", package: "@modelcontextprotocol/server-github", version: "2025.4.8", command: "npx", args: ["-y", "@modelcontextprotocol/server-github@2025.4.8"] }],
+    instructions: "Use the GitHub tools to read issues.\n\n<script>alert(1)</script>",
+    contentHash: "b".repeat(64),
+    installedAt: at,
+    problem: null,
+  };
+  const broken: SkillInfo = { ...local, slug: "broken", name: "Broken skill", description: "Has a problem.", problem: "The skill file is missing." };
+  const attached = [
+    { agentId: "a1", slug: "code-review-notes", attachedAt: at, attachedBy: "billy" },
+    { agentId: "a2", slug: "code-review-notes", attachedAt: at, attachedBy: "billy" },
+  ];
+  return { local, external, broken, skills: [local, external, broken], attached };
 }

@@ -31,6 +31,8 @@ import { readGuiConfig, validateGuiPort } from "../core/gui-config.js";
 import { NOTE_MAX, requestChange } from "./change-request.js";
 import { taskCheckpoints, undoTaskTo } from "./checkpoints.js";
 import { chatStatus, humanRecipients } from "./chat.js";
+import { createLocalSkill, listSkills } from "../core/skills.js";
+import { attachSkillChecked, removeLibrarySkill, skillHome } from "./skills.js";
 
 type P = Record<string, unknown>;
 type Handler = (p: P, conn: Connection) => unknown | Promise<unknown>;
@@ -359,6 +361,11 @@ export class ClientApi {
           if (problem) throw new ValidationError(problem, { engine });
         }
         const name = "name" in p ? validAgentName(rt, reqStr(p, "agentId", 200), p["name"]) : undefined;
+        if ("webResearch" in p && typeof p["webResearch"] !== "boolean") throw new RpcError(-32602, "invalid_params", '"webResearch" must be true or false.', { key: "webResearch" });
+        if (typeof p["webResearch"] === "boolean") {
+          rt.store.setWebResearch(reqStr(p, "agentId", 200), p["webResearch"], HUMAN);
+          if (name === undefined && !engine && !("model" in p) && !p["permission"]) return { agent: rt.store.getAgent(reqStr(p, "agentId", 200)) };
+        }
         const agent = rt.store.updateAgent(
           reqStr(p, "agentId", 200),
           {
@@ -370,6 +377,30 @@ export class ClientApi {
           HUMAN,
         );
         return { agent };
+      },
+      // Skills: the library is per machine (on disk), attachments are per project. Only Billy reaches these methods.
+      "agents.attachSkill": async (p) => {
+        const rt = await this.rt(p);
+        const agent = attachSkillChecked(rt, rt.store.getAgent(reqStr(p, "agentId", 200)), reqStr(p, "slug", 100), HUMAN);
+        return { agent };
+      },
+      "agents.detachSkill": async (p) => {
+        const rt = await this.rt(p);
+        return { agent: rt.store.detachSkill(reqStr(p, "agentId", 200), reqStr(p, "slug", 100), HUMAN) };
+      },
+      "skills.list": async (p) => {
+        const rt = await this.rt(p);
+        return { skills: listSkills(skillHome(rt)), attached: rt.store.listSkillAttachments() };
+      },
+      "skills.create": async (p) => {
+        const rt = await this.rt(p);
+        const skill = createLocalSkill({ name: reqStr(p, "name", 200), description: reqStr(p, "description", 2000), instructions: reqStr(p, "instructions", 64 * 1024) }, skillHome(rt));
+        rt.store.recordEvent("skill.created", "skill", skill.slug, HUMAN, { slug: skill.slug, name: skill.name });
+        return { skill };
+      },
+      "skills.remove": async (p) => {
+        removeLibrarySkill(await this.rt(p), reqStr(p, "slug", 100));
+        return { ok: true as const };
       },
       "agents.retire": async (p) => {
         const rt = await this.rt(p);

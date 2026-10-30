@@ -1087,6 +1087,8 @@ export class Store {
       retiredAt: (r["retired_at"] as string | null) ?? null,
       lastEventAt: (r["last_event_at"] as string | null) ?? null,
       lastEventSummary: (r["last_event_summary"] as string | null) ?? null,
+      skills: this.agentSkills(r["id"] as string),
+      webResearch: r["web_research"] === 1,
     };
   }
 
@@ -1111,6 +1113,7 @@ export class Store {
     if (input.role === "cto") throw new ValidationError("The CTO is created with ensureCto, not hired.");
     if (input.permission === "coordinator") throw new ValidationError("Only the CTO has the coordinator permission profile.");
     if (input.name.trim().length === 0) throw new ValidationError("An agent needs a name.");
+    if (input.role === "research" && input.permission !== "read_only") throw new ValidationError("A research agent is always read only.");
     return tx(this.db, () => this.insertAgent(input, input.actor ?? { kind: "system" }));
   }
 
@@ -1150,6 +1153,7 @@ export class Store {
       if (a.role !== "cto" && (next.role === "cto" || next.permission === "coordinator")) {
         throw new ValidationError("Only the CTO can have the cto role or coordinator permission.");
       }
+      if (next.role === "research" && next.permission !== "read_only") throw new ValidationError("A research agent is always read only.");
       this.run(
         "UPDATE agent SET name = ?, model = ?, engine = ?, permission = ?, role = ?, lifecycle = ? WHERE id = ?",
         next.name,
@@ -1162,6 +1166,72 @@ export class Store {
       );
       this.appendEvent("agent.updated", "agent", id, actorLabel(actor), { ...patch });
       return this.getAgent(id);
+    });
+  }
+
+  // ------------------------------------------------------------ skills (the library itself is on disk, see skills.ts)
+
+  /** Slugs of the skills attached to an agent, sorted. */
+  agentSkills(agentId: string): string[] {
+    return this.all("SELECT slug FROM agent_skill WHERE agent_id = ? AND project_id = ? ORDER BY slug", agentId, this.projectId).map((r) => r["slug"] as string);
+  }
+
+  listSkillAttachments(): Array<{ agentId: string; slug: string; attachedAt: string; attachedBy: string }> {
+    return this.all("SELECT agent_id, slug, attached_at, attached_by FROM agent_skill WHERE project_id = ? ORDER BY slug, attached_at, agent_id", this.projectId).map((r) => ({
+      agentId: r["agent_id"] as string,
+      slug: r["slug"] as string,
+      attachedAt: r["attached_at"] as string,
+      attachedBy: r["attached_by"] as string,
+    }));
+  }
+
+  /**
+   * Records that the agent has the skill. The runtime checks the library and the permission rule first (see
+   * runtime/skills.ts); this only refuses a retired agent and a malformed slug. Attaching twice changes nothing.
+   */
+  attachSkill(agentId: string, slug: string, actor: Actor): Agent {
+    return tx(this.db, () => {
+      const a = this.getAgent(agentId);
+      if (a.retiredAt) throw new ValidationError(`${a.name} has been retired.`);
+      if (!/^[a-z0-9](?:[a-z0-9-]{0,59})$/.test(slug)) throw new ValidationError(`"${slug}" is not a skill name.`, { slug });
+      if (a.skills.includes(slug)) return a;
+      this.run("INSERT INTO agent_skill (project_id, agent_id, slug, attached_at, attached_by) VALUES (?,?,?,?,?)", this.projectId, a.id, slug, this.nowIso(), actorLabel(actor));
+      this.appendEvent("skill.attached", "agent", a.id, actorLabel(actor), { slug, agentName: a.name });
+      return this.getAgent(a.id);
+    });
+  }
+
+  detachSkill(agentId: string, slug: string, actor: Actor): Agent {
+    return tx(this.db, () => {
+      const a = this.getAgent(agentId);
+      if (!a.skills.includes(slug)) throw new ValidationError(`${a.name} does not have the skill "${slug}".`, { slug });
+      this.run("DELETE FROM agent_skill WHERE agent_id = ? AND slug = ? AND project_id = ?", a.id, slug, this.projectId);
+      this.appendEvent("skill.detached", "agent", a.id, actorLabel(actor), { slug, agentName: a.name });
+      return this.getAgent(a.id);
+    });
+  }
+
+  /** Detaches a skill from every agent of this project (the skill was removed from the library). Returns the agent ids. */
+  detachSkillEverywhere(slug: string, actor: Actor): string[] {
+    return tx(this.db, () => {
+      const ids = this.all("SELECT agent_id FROM agent_skill WHERE slug = ? AND project_id = ?", slug, this.projectId).map((r) => r["agent_id"] as string);
+      this.run("DELETE FROM agent_skill WHERE slug = ? AND project_id = ?", slug, this.projectId);
+      for (const id of ids) this.appendEvent("skill.detached", "agent", id, actorLabel(actor), { slug, removed: true });
+      return ids;
+    });
+  }
+
+  /** Billy's yes (or no) to a research agent reading the vetted skill sources on the web. Human only. */
+  setWebResearch(agentId: string, on: boolean, actor: Actor): Agent {
+    if (actor.kind !== "human") throw new PolicyDeniedError("Only Billy can allow an agent to look things up on the web.", { agentId });
+    return tx(this.db, () => {
+      const a = this.getAgent(agentId);
+      if (a.retiredAt) throw new ValidationError(`${a.name} has been retired.`);
+      if (a.role !== "research") throw new ValidationError(`Only a research agent looks things up on the web; ${a.name} is a ${a.role} agent.`);
+      if (a.webResearch === on) return a;
+      this.run("UPDATE agent SET web_research = ? WHERE id = ?", on ? 1 : 0, a.id);
+      this.appendEvent("agent.web_research_changed", "agent", a.id, actorLabel(actor), { on });
+      return this.getAgent(a.id);
     });
   }
 

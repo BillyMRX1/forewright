@@ -51,6 +51,8 @@ export function makeAgent(over: Partial<Agent> & Pick<Agent, "id" | "name" | "ro
     retiredAt: null,
     lastEventAt: NOW,
     lastEventSummary: "Started",
+    skills: [],
+    webResearch: false,
     ...over,
   };
 }
@@ -507,6 +509,11 @@ export class FakeClient implements ClientApi {
         case "agents.clearMemory":
           delete this.memory[String(p["agentId"])];
           return { ok: true };
+        case "skills.list":
+          return { skills: [], attached: [] };
+        case "agents.attachSkill":
+        case "agents.detachSkill":
+          return { agent: d.agents[0] };
         default:
           throw new Error(`FakeClient: ${method} is not implemented`);
       }

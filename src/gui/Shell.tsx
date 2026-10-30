@@ -19,12 +19,13 @@ const Cto = lazy(() => import("./views/Cto.js").then((m) => ({ default: m.Cto })
 const Chat = lazy(() => import("./views/Chat.js").then((m) => ({ default: m.Chat })));
 const Home = lazy(() => import("./views/Home.js").then((m) => ({ default: m.Home })));
 const Tasks = lazy(() => import("./views/Tasks.js").then((m) => ({ default: m.Tasks })));
+const Skills = lazy(() => import("./views/Skills.js").then((m) => ({ default: m.Skills })));
 const Inbox = lazy(() => import("./views/Inbox.js").then((m) => ({ default: m.Inbox })));
 const Team = lazy(() => import("./views/Team.js").then((m) => ({ default: m.Team })));
 const Settings = lazy(() => import("./views/Settings.js").then((m) => ({ default: m.Settings })));
 const Kickoff = lazy(() => import("./views/Kickoff.js").then((m) => ({ default: m.Kickoff })));
 
-export type ViewId = "home" | "cto" | "chat" | "tasks" | "team" | "inbox" | "kickoff" | "settings";
+export type ViewId = "home" | "cto" | "chat" | "tasks" | "team" | "skills" | "inbox" | "kickoff" | "settings";
 
 export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> = [
   { id: "home", label: "Home", soon: "An overview of the project: what needs you, what is running and what is done." },
@@ -32,6 +33,7 @@ export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> =
   { id: "chat", label: "Chat", soon: "" },
   { id: "tasks", label: "Tasks", soon: "The task board, with each task's state, owner and evidence." },
   { id: "team", label: "Team", soon: "Your agents, what each one is doing, and their engines." },
+  { id: "skills", label: "Skills", soon: "" },
   { id: "inbox", label: "Inbox", soon: "Decisions that wait for you, such as approvals and questions." },
   { id: "kickoff", label: "Kickoff", soon: "" },
   { id: "settings", label: "Settings", soon: "Engines, limits and project settings." },
@@ -43,6 +45,7 @@ export const HINTS: Record<ViewId, string[]> = {
   home: ["Click a row under Needs you to open it", "Esc close dialogs"],
   tasks: ["Arrow keys move between tasks", "Enter opens a task", "Esc back to the list", "Esc close dialogs"],
   team: ["Tab moves between cards and buttons", "Space or Enter opens Memory notes", "Esc close dialogs"],
+  skills: ["Tab moves between cards and buttons", "Enter opens a button", "Esc close dialogs"],
   inbox: ["Arrow keys move through the list", "Enter opens an item", "Esc goes back", "Esc close dialogs"],
   settings: ["Changes save as you make them", "Enter saves a number or model", "Esc close dialogs"],
   kickoff: ["Arrow keys move through the documents", "Enter opens a document", "Click a wireframe to see it large", "Esc goes back", "Esc close dialogs"],
@@ -368,6 +371,8 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     body = <Tasks key={project.projectId} />;
   } else if (view === "team" && project) {
     body = <Team key={project.projectId} />;
+  } else if (view === "skills" && project) {
+    body = <Skills key={project.projectId} />;
   } else if (view === "inbox" && project) {
     body = <Inbox key={project.projectId} />;
   } else if (view === "settings" && project) {
