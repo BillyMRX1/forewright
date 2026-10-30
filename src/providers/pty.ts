@@ -3,7 +3,8 @@
 //   dynamic import only when a terminal is opened, so a machine without it still runs everything else.
 // - A small Python 3 helper (pty-helper.py, standard library only) for macOS and Linux when node-pty is missing.
 // Either way the CLI is an owned process tree: the test observer sees it, and closing ends the whole tree.
-import { existsSync } from "node:fs";
+import { accessSync, chmodSync, constants as fsConstants, existsSync, statSync } from "node:fs";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { Writable } from "node:stream";
@@ -182,6 +183,40 @@ export function loadNodePty(): Promise<{ mod: NodePtyModule | null; error: strin
   return nodePtyLoad;
 }
 
+/**
+ * macOS: node-pty starts every CLI through its prebuilt `spawn-helper`, and package installs can drop that file's
+ * execute bit, which makes every spawn fail with "posix_spawnp failed". Restores the bit; false when the helper is
+ * there but cannot be made executable (then the Python helper is used instead).
+ */
+export function ensureSpawnHelper(moduleDir: string, arch: string = process.arch): boolean {
+  for (const rel of [`prebuilds/darwin-${arch}/spawn-helper`, "build/Release/spawn-helper"]) {
+    const file = path.join(moduleDir, rel);
+    if (!existsSync(file)) continue;
+    try {
+      accessSync(file, fsConstants.X_OK);
+      return true;
+    } catch {
+      try {
+        chmodSync(file, statSync(file).mode | 0o111);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+  return true; // no helper file to fix: node-pty reports its own error at spawn
+}
+
+/** The folder of the installed node-pty package, or null when it cannot be resolved. */
+function nodePtyDir(): string | null {
+  try {
+    const entry = fileURLToPath(import.meta.resolve("node-pty"));
+    return path.dirname(path.dirname(entry)); // <pkg>/lib/index.js
+  } catch {
+    return null;
+  }
+}
+
 export function nodePtyBackend(mod: NodePtyModule, platform: Platform = process.platform): PtyBackend {
   return {
     name: "node-pty",
@@ -227,16 +262,26 @@ export function nodePtyBackend(mod: NodePtyModule, platform: Platform = process.
         resize(cols, rows) {
           if (!done) p.resize(cols, rows);
         },
-        kill: (graceMs = 2000) =>
-          endTree(
+        kill: async (graceMs = 2000) => {
+          // Windows: node-pty's own kill lists the console's processes through a helper that fails without an attached
+          // console ("AttachConsole failed") and then never reports the exit, so the tree is ended with taskkill instead.
+          await endTree(
             owned,
             () => {
-              if (!done) p.kill(); // POSIX: a hangup; Windows: closes the console, which ends what runs in it
+              if (!done && !isWindows(platform)) p.kill(); // a hangup, as closing a terminal sends
             },
             exited,
             () => done,
-            graceMs,
-          ),
+            isWindows(platform) ? 0 : graceMs,
+          );
+          if (!done) {
+            // The tree is confirmed gone (endTree throws otherwise); node-pty may never call onExit for it.
+            done = true;
+            handle.signalCode = "SIGKILL";
+            exit.push({ code: null, signal: "SIGKILL" });
+            resolveExited();
+          }
+        },
       };
     },
   };
@@ -255,7 +300,9 @@ export interface PtyChoiceDeps {
 export async function choosePty(deps: PtyChoiceDeps = {}): Promise<PtyChoice> {
   const platform = deps.platform ?? process.platform;
   const loaded = await (deps.loadNodePty ?? loadNodePty)();
-  if (loaded.mod) return { backend: nodePtyBackend(loaded.mod, platform), problem: null };
+  const dir = platform === "darwin" && loaded.mod ? nodePtyDir() : null;
+  const usable = loaded.mod !== null && (dir === null || ensureSpawnHelper(dir));
+  if (loaded.mod && usable) return { backend: nodePtyBackend(loaded.mod, platform), problem: null };
   if (isWindows(platform)) {
     return {
       backend: null,

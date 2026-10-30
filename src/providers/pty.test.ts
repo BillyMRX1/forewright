@@ -33,17 +33,17 @@ function collect(p: PtyProcess): { text: () => string; exit: () => PtyExit | nul
   return { text: () => out, exit: () => exit };
 }
 
-// The CLI prints, echoes one line, reports its size after a resize (SIGWINCH), then exits with 7.
+// The CLI prints, echoes each line with the terminal size read fresh (Windows does not reliably send resize events
+// to a console program, so the size is checked on the next line instead), then exits with 7.
 const ECHO_CLI = `
 process.stdout.write("hello from the cli\\n");
 process.stdout.write("size " + process.stdout.columns + "x" + process.stdout.rows + "\\n");
-process.stdout.on("resize", () => process.stdout.write("resized " + process.stdout.columns + "x" + process.stdout.rows + "\\n"));
 process.stdin.setEncoding("utf8");
 let buf = "";
 process.stdin.on("data", (d) => {
   buf += d;
   if (buf.includes("bye")) process.exit(7);
-  if (buf.includes("\\r") || buf.includes("\\n")) { process.stdout.write("echo:" + buf.trim() + "\\n"); buf = ""; }
+  if (buf.includes("\\r") || buf.includes("\\n")) { const [c, r] = process.stdout.getWindowSize(); process.stdout.write("echo:" + buf.trim() + " " + c + "x" + r + "\\n"); buf = ""; }
 });
 `;
 
@@ -57,7 +57,9 @@ async function exerciseBackend(backend: PtyBackend): Promise<void> {
     p.write("abc\r");
     await waitFor(() => c.text().includes("echo:abc"), "the echoed input");
     p.resize(100, 30);
-    await waitFor(() => c.text().includes("resized 100x30"), "the CLI to see the resize");
+    await new Promise((r) => setTimeout(r, 100));
+    p.write("def\r");
+    await waitFor(() => c.text().includes("echo:def 100x30"), "the CLI to see the resize");
     p.write("bye\r"); // the terminal is in line mode: input reaches the CLI at the end of a line
     await waitFor(() => c.exit() !== null, "the exit");
     assert.deepEqual(c.exit(), { code: 7, signal: null });
