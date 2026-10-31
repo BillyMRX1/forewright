@@ -3110,6 +3110,31 @@ ol.rows {
   margin-right: 4px;
 }
 
+.team-milestones {
+  margin: 8px 0;
+}
+
+.team-milestone-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.team-milestone {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.team-milestone-id {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.team-overdue {
+  color: var(--attention);
+  font-weight: 600;
+}
+
 .skill-chip {
   white-space: normal;
   overflow-wrap: anywhere;
@@ -3180,4 +3205,196 @@ ol.rows {
   .skills-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Terminal panel (lazy chunk; the xterm rules are appended to this file by the build) */
+
+.term-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.term-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.term-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.term-note {
+  margin: 0;
+  padding: 6px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.term-body {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 8px 0 12px;
+  background: var(--bg);
+}
+
+.term-body-hidden {
+  display: none;
+}
+
+.term-host {
+  width: 100%;
+  height: 100%;
+}
+
+.term-foot {
+  margin: 0;
+  padding: 6px 16px;
+  font-size: 0.8rem;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.cto-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.attach-why {
+  font-size: 0.85rem;
+  flex-basis: 100%;
+}
+
+/* Map view */
+
+.map {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 16px;
+}
+
+.map-hint {
+  margin: 0 0 8px;
+}
+
+.map-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.map-svg {
+  display: block;
+  font-family: var(--sans);
+  font-size: 12px;
+}
+
+.map-col-label {
+  fill: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.map-col-done .map-col-label {
+  opacity: 0.6;
+}
+
+.map-line {
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.map-node,
+.map-card {
+  cursor: pointer;
+}
+
+.map-node rect {
+  fill: var(--surface-2);
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.map-node text {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.map-card rect {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.map-card:hover rect {
+  stroke: var(--accent);
+}
+
+.map-card-blocked rect {
+  stroke: var(--error);
+  stroke-width: 2;
+}
+
+.map-card-done {
+  opacity: 0.55;
+}
+
+.map-card-id {
+  fill: var(--muted);
+  font-weight: 600;
+}
+
+.map-card-title {
+  fill: var(--text);
+}
+
+.map-card-sub {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.map-card-glyph {
+  fill: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.map-card-blocked .map-card-glyph {
+  fill: var(--error);
+}
+
+.map-card-done .map-card-glyph {
+  fill: var(--done);
+}
+
+.map-node:focus-visible,
+.map-card:focus-visible {
+  outline: none;
+}
+
+.map-node:focus-visible rect,
+.map-card:focus-visible rect {
+  stroke: var(--focus);
+  stroke-width: 3;
 }

@@ -44,6 +44,11 @@ test("the built web app has its four files and index.html has no inline script o
   const chunks = readdirSync(path.join(distDir, "chunks"));
   assert.ok(chunks.some((f) => f.startsWith("Home-")), "the views are split into chunks");
   for (const f of chunks) assert.match(f, /^[A-Za-z0-9_-]+\.js$/, "chunk names match what the web bridge serves");
-  const total = chunks.reduce((n, f) => n + statSync(path.join(distDir, "chunks", f)).size, statSync(path.join(distDir, "app.js")).size);
-  assert.ok(total < 600 * 1024, "the whole web app stays under 600 KB");
+  // The terminal panel bundles xterm.js and loads only when a terminal opens, so it has its own cap.
+  const size = (f: string) => statSync(path.join(distDir, "chunks", f)).size;
+  const terminal = chunks.filter((f) => f.startsWith("terminal"));
+  assert.ok(terminal.length > 0, "the terminal panel is its own chunk");
+  assert.ok(terminal.reduce((n, f) => n + size(f), 0) < 450 * 1024, "the terminal chunk stays under 450 KB");
+  const total = chunks.filter((f) => !f.startsWith("terminal")).reduce((n, f) => n + size(f), statSync(path.join(distDir, "app.js")).size);
+  assert.ok(total < 600 * 1024, "the whole web app, apart from the terminal chunk, stays under 600 KB");
 });

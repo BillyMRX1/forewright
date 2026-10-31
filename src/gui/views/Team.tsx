@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import type { SkillInfo, Task } from "../../core/store-types.js";
+import { type ContractEnd, EMPLOYMENT_REASON_MAX, type Employment, type Milestone, type MilestoneState, type SkillInfo, type Task } from "../../core/store-types.js";
 import type { EngineId, PermissionProfile } from "../../core/types.js";
 import type { UsageSummary } from "../../core/usage.js";
 import { compactTokens, costText } from "../../core/usage-format.js";
@@ -22,6 +22,7 @@ import { attachChoices, isSkillEvent, skillName } from "../skills-model.js";
 import { plainError } from "../Picker.js";
 import { ConfirmDialog, Modal, relTime } from "../ui.js";
 import { statusWords } from "./Home.js";
+import { AttachButton } from "../attach-button.js";
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -117,6 +118,65 @@ export function editPatch(m: TeamMember, f: EditForm): { name?: string; engine?:
 
 /** Whether Retire is offered: never for the CTO. */
 export const canRetire = (m: TeamMember): boolean => m.role !== "cto";
+
+/** "Permanent", or "Contract, ends with T-4" (a task) or "Contract, ends with M-2" (a milestone). */
+export function employmentWords(m: Pick<TeamMember, "employment" | "contractEnd">): string {
+  if (m.employment === "permanent") return "Permanent";
+  return m.contractEnd ? `Contract, ends with ${m.contractEnd.shortId}` : "Contract";
+}
+
+const MILESTONE_WORDS: Record<MilestoneState, string> = { open: "open", in_review: "in review", delivered: "delivered", cancelled: "cancelled" };
+
+/** A milestone's state in words. */
+export const milestoneStateWord = (s: MilestoneState): string => MILESTONE_WORDS[s];
+
+/** "2 of 3 tasks done" (cancelled tasks are left out). */
+export function milestoneProgress(m: Pick<Milestone, "tasksDone" | "tasksTotal">): string {
+  return m.tasksTotal === 0 ? "No tasks yet" : `${m.tasksDone} of ${m.tasksTotal} ${m.tasksTotal === 1 ? "task" : "tasks"} done`;
+}
+
+export interface EmploymentForm {
+  employment: Employment;
+  reason: string;
+  /** A task or milestone short id (T-4, M-2) a contract ends with; empty for a permanent agent. */
+  endsWith: string;
+}
+
+export function employmentFormFor(m: TeamMember): EmploymentForm {
+  return { employment: m.employment, reason: m.employmentReason ?? "", endsWith: m.contractEnd?.shortId ?? "" };
+}
+
+/** Only the employment fields that changed, for agents.update. The end is sent by short id; the service resolves it. */
+export function employmentPatch(m: TeamMember, f: EmploymentForm): { employment?: Employment; employmentReason?: string | null; contractEnd?: ContractEnd | null } {
+  const patch: { employment?: Employment; employmentReason?: string | null; contractEnd?: ContractEnd | null } = {};
+  if (f.employment !== m.employment) patch.employment = f.employment;
+  const reason = f.reason.trim() === "" ? null : f.reason.trim();
+  if (reason !== (m.employmentReason ?? null)) patch.employmentReason = reason;
+  const ends = f.employment === "contract" ? f.endsWith.trim().toUpperCase() : "";
+  if (ends !== (m.contractEnd?.shortId ?? "") || f.employment !== m.employment) {
+    patch.contractEnd = ends === "" ? null : ends.startsWith("M-") ? { kind: "milestone", milestoneId: ends } : { kind: "task", taskId: ends };
+  }
+  return patch;
+}
+
+/** One agent's milestones: short id, title, state, overdue in the warning color, and progress. */
+export function MilestoneList({ milestones }: { milestones: Milestone[] }) {
+  if (milestones.length === 0) return null;
+  return (
+    <div className="team-milestones">
+      <span className="team-skills-label">Milestones</span>
+      <ul className="team-milestone-list">
+        {milestones.map((m) => (
+          <li key={m.id} className="team-milestone">
+            <span className="team-milestone-id">{m.shortId}</span> {oneLine(m.title)} <span className="chip">{milestoneStateWord(m.state)}</span>
+            {m.overdue ? <span className="team-overdue"> overdue</span> : null}
+            <span className="muted"> {milestoneProgress(m)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------- pieces
 
@@ -224,6 +284,8 @@ export interface TeamActions {
   /** Asks to take a skill off an agent (the view confirms first). */
   removeSkill: (m: TeamMember, slug: string) => void;
   setWebResearch: (m: TeamMember, on: boolean) => void;
+  /** Opens the terminal panel on the agent's own CLI. */
+  openTerminal: (m: TeamMember) => void;
 }
 
 /** The skills of one agent as chips, each with a remove button, and the "Add skill" button. */
@@ -294,6 +356,15 @@ function AgentCard({ row, usage, actions, highlight, library, webBusy }: { row: 
         </dd>
         <dt>Permission</dt>
         <dd>{permissionWords(m.permission)}</dd>
+        {m.role !== "cto" ? (
+          <>
+            <dt>Employment</dt>
+            <dd>
+              {employmentWords(m)}
+              {m.employmentReason ? <span className="muted"> {oneLine(m.employmentReason)}</span> : null}
+            </dd>
+          </>
+        ) : null}
         <dt>Task</dt>
         <dd>
           {row.a.taskId ? (
@@ -309,6 +380,7 @@ function AgentCard({ row, usage, actions, highlight, library, webBusy }: { row: 
         <dt>Last 7 days</dt>
         <dd>{agentUsageText(usage, m.id)}</dd>
       </dl>
+      <MilestoneList milestones={m.milestones} />
       <SkillChips member={m} library={library} actions={actions} />
       {hasWebResearchSwitch(m) ? (
         <div className="team-web">
@@ -321,6 +393,7 @@ function AgentCard({ row, usage, actions, highlight, library, webBusy }: { row: 
         {memoryOpen ? <MemoryNotes agent={m} /> : null}
       </details>
       <div className="actions">
+        <AttachButton member={m} name={name} onOpen={() => actions.openTerminal(m)} />
         <button type="button" className="btn" onClick={() => actions.edit(m)} aria-label={`Edit ${name}`}>
           Edit
         </button>
@@ -404,14 +477,15 @@ export function EditDialog({
   providers: ProviderStatus[];
   error: string | null;
   busy: boolean;
-  onSave: (patch: ReturnType<typeof editPatch>) => void;
+  onSave: (patch: ReturnType<typeof editPatch> & ReturnType<typeof employmentPatch>) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<EditForm>(() => formFor(member));
+  const [emp, setEmp] = useState<EmploymentForm>(() => employmentFormFor(member));
   const choices = engineChoices(member, providers);
   const perms = permissionChoices(member.role);
   const suggestions = modelSuggestions(form.engine, providers);
-  const patch = editPatch(member, form);
+  const patch = { ...editPatch(member, form), ...(member.role === "cto" ? {} : employmentPatch(member, emp)) };
   const changed = Object.keys(patch).length > 0;
   const nameOk = form.name.trim().length > 0;
   const listId = "team-models";
@@ -455,6 +529,27 @@ export function EditDialog({
             ))}
           </select>
         </label>
+        {member.role !== "cto" ? (
+          <>
+            <label className="field">
+              <span>Employment</span>
+              <select value={emp.employment} onChange={(e) => setEmp({ ...emp, employment: e.target.value as Employment })}>
+                <option value="permanent">Permanent: a long-lived owner of an area</option>
+                <option value="contract">Contract: retires once its task or milestone is finished</option>
+              </select>
+            </label>
+            {emp.employment === "contract" ? (
+              <label className="field">
+                <span>Ends with (a task like T-4 or a milestone like M-2)</span>
+                <input type="text" value={emp.endsWith} maxLength={20} onChange={(e) => setEmp({ ...emp, endsWith: e.target.value })} placeholder="T-4" />
+              </label>
+            ) : null}
+            <label className="field">
+              <span>Why (one line)</span>
+              <input type="text" value={emp.reason} maxLength={EMPLOYMENT_REASON_MAX} onChange={(e) => setEmp({ ...emp, reason: e.target.value })} />
+            </label>
+          </>
+        ) : null}
         {member.role === "review" ? <p className="muted">A reviewer always stays read only.</p> : null}
         {member.role === "cto" ? <p className="muted">The CTO's permission cannot be changed.</p> : null}
         <p className="muted">Takes effect from the agent's next run.</p>
@@ -500,7 +595,7 @@ export function RetireDialog({ member, error, busy, onConfirm, onCancel }: { mem
 type Dialog = { kind: "edit" | "retire" | "addSkill"; agent: TeamMember } | { kind: "removeSkill"; agent: TeamMember; slug: string } | null;
 
 export function Team(): ReactNode {
-  const { rpc, projectId, runtime, go, notify, focus } = useProject();
+  const { rpc, projectId, runtime, go, notify, focus, openTerminal } = useProject();
   const needs = useNeeds();
   const usage = useLive(() => rpc.call("state.usage", { projectId, days: 7 }), { events: isUsageEvent });
   const skills = useLive(() => rpc.call("skills.list", { projectId }), { events: isSkillEvent });
@@ -555,6 +650,7 @@ export function Team(): ReactNode {
 
   const actions: TeamActions = {
     go: (_view, taskId) => go("tasks", taskId),
+    openTerminal: (agent) => openTerminal(agent.id, oneLine(agent.name)),
     edit: (agent) => {
       setError(null);
       setDialog({ kind: "edit", agent });

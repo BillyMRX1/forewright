@@ -52,7 +52,8 @@ interface Pending {
 
 export type NotificationEvent =
   | { method: "event"; params: Notifications["event"] }
-  | { method: "runtime"; params: Notifications["runtime"] };
+  | { method: "runtime"; params: Notifications["runtime"] }
+  | { method: "terminal"; params: Notifications["terminal"] };
 
 interface Attached {
   projectId: string;
@@ -213,6 +214,8 @@ export class RpcClient {
       for (const cb of this.notifyListeners) cb({ method: "event", params });
     } else if (msg.method === "runtime") {
       for (const cb of this.notifyListeners) cb({ method: "runtime", params: msg.params as Notifications["runtime"] });
+    } else if (msg.method === "terminal") {
+      for (const cb of this.notifyListeners) cb({ method: "terminal", params: msg.params as Notifications["terminal"] });
     }
   }
 

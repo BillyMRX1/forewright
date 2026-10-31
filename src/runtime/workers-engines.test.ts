@@ -57,12 +57,12 @@ test("hire_agent rejects engines outside workers.engines with a plain reason; an
       rule((r) => isCto(r) && r.prompt.includes("hire three"), {
         outcome: "succeeded",
         finalText: "done",
-        toolCalls: [call("hire_agent", { name: "Wren", role: "backend", engine: "fake" }), call("hire_agent", { name: "Cody", role: "backend", engine: "codex" })],
+        toolCalls: [call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Wren", role: "backend", engine: "fake" }), call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Cody", role: "backend", engine: "codex" })],
       }),
       rule((r) => isCto(r) && r.prompt.includes("hire again"), {
         outcome: "succeeded",
         finalText: "done",
-        toolCalls: [call("hire_agent", { name: "Fay", role: "backend", engine: "fake" })],
+        toolCalls: [call("hire_agent", { employment: "permanent", employment_reason: "Owns its area", name: "Fay", role: "backend", engine: "fake" })],
       }),
     ],
     defaultScript: { outcome: "succeeded", finalText: "ok" },

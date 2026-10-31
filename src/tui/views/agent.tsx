@@ -12,12 +12,36 @@ import { LogPeek, runIdFor } from "../peek.js";
 import { messageLines } from "./cto.js";
 import { STATUS_LABEL, SIDEBAR_COLOR, statusGlyph, sym, type DisplayStatus } from "../theme.js";
 import type { EngineId, PermissionProfile } from "../../core/types.js";
+import type { TeamMember } from "../../runtime/protocol.js";
 
 const PERMISSIONS: PermissionProfile[] = ["read_only", "workspace_write", "coordinator"];
 const FIELDS = ["Engine", "Model", "Permission"] as const;
 
 function cycle<T>(list: T[], value: T, dir: 1 | -1): T {
   return list[(Math.max(0, list.indexOf(value)) + dir + list.length) % list.length]!;
+}
+
+const MILESTONE_WORDS = { open: "open", in_review: "in review", delivered: "delivered", cancelled: "cancelled" } as const;
+
+/**
+ * The agent's employment and milestones as text lines: "Employment  Contract, ends with T-4  <reason>", then one line
+ * per milestone (at most `maxMilestones`, the rest counted) with its state, "overdue" and progress.
+ */
+export function employmentLines(m: Pick<TeamMember, "employment" | "employmentReason" | "contractEnd" | "milestones">, maxMilestones: number): DLine[] {
+  const words = m.employment === "permanent" ? "Permanent" : m.contractEnd ? `Contract, ends with ${m.contractEnd.shortId}` : "Contract";
+  const reason = m.employmentReason ? oneLine(m.employmentReason) : "";
+  const lines: DLine[] = [{ text: `Employment  ${words}${reason ? `  ${reason}` : ""}`, segs: [{ text: `Employment  ${words}` }, ...(reason ? [{ text: `  ${reason}`, dim: true }] : [])] }];
+  const shown = m.milestones.slice(0, Math.max(0, maxMilestones));
+  for (const ms of shown) {
+    const head = `Milestone   ${ms.shortId} ${oneLine(ms.title)}  ${MILESTONE_WORDS[ms.state]}`;
+    const progress = ms.tasksTotal === 0 ? "no tasks yet" : `${ms.tasksDone} of ${ms.tasksTotal} ${ms.tasksTotal === 1 ? "task" : "tasks"} done`;
+    lines.push({
+      text: `${head}${ms.overdue ? "  overdue" : ""}  ${progress}`,
+      segs: [{ text: head }, ...(ms.overdue ? [{ text: "  overdue", color: "yellow" }] : []), { text: `  ${progress}`, dim: true }],
+    });
+  }
+  if (m.milestones.length > shown.length) lines.push({ text: `            and ${m.milestones.length - shown.length} more milestones`, dim: true });
+  return lines;
 }
 
 export function AgentView() {
@@ -118,6 +142,9 @@ export function AgentView() {
       setField(0);
       setMode("edit");
     } else if (input === "t") {
+      if (!member.canAttach) ctx.notify(member.attachProblem ?? `${member.name} cannot open a terminal.`);
+      else ctx.openTerminal(member.id);
+    } else if (input === "g") {
       if (member.currentTaskId) ctx.jumpTo({ view: VIEW.tasks, taskId: member.currentTaskId, focus: "main" });
       else ctx.notify(`${member.name} has no task right now.`);
     } else if (input === "l") {
@@ -192,6 +219,7 @@ export function AgentView() {
   const info: DLine[] = [header];
   if (h >= 12) info.push({ text: `Task  ${taskText}`, ...(taskText === "idle" ? { dim: true } : {}) });
   if (h >= 16) info.push({ text: `Now   ${row?.activity ?? ""}`, ...(status === "needs_you" || status === "waiting" ? { color: "yellow" } : { dim: true }) });
+  if (h >= 14 && member.role !== "cto") info.push(...employmentLines(member, h >= 24 ? 3 : h >= 18 ? 1 : 0));
   // Direct messages: the last few lines, only when there is room.
   const list = msgs.data?.messages ?? [];
   const msgBudget = h >= 22 ? 3 : h >= 17 ? 2 : 0;

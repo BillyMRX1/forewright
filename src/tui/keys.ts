@@ -42,6 +42,7 @@ export const SCOPE_TITLES: Array<[KeyScope, string]> = [
   ["chat.input.empty", "Team chat, empty message box"],
   ["agent", "Agent, session"],
   ["agent.memory", "Agent, memory notes"],
+  ["terminal", "Terminal, an agent's own CLI"],
   ["agent.input", "Agent, message box"],
   ["agent.input.empty", "Agent, empty message box"],
   ["slash", "Slash command suggestions"],
@@ -109,6 +110,7 @@ export const BINDINGS: Binding[] = [
 
   { id: "cto.scroll", keys: ["up", "down", "pgup", "pgdn"], label: "↑↓", action: "scroll", description: "scroll the conversation (page up and page down too); in an empty chat, choose an example", scope: "cto", footer: true },
   { id: "cto.type", keys: ["enter", "i"], label: "enter", action: "type", description: "go to the message box (also i); with an example chosen, fills the box with it", scope: "cto", footer: true },
+  { id: "cto.terminal", keys: ["t"], label: "t", action: "open terminal", description: "open the CTO's own CLI in a terminal, resuming its session (ctrl+b then d leaves it)", scope: "cto", footer: "low" },
   { id: "cto.approve", keys: ["a"], label: "a", action: "approve prd", description: "approve the proposed PRD (asks first)", scope: "cto", footer: "prd" },
   { id: "cto.prd", keys: ["r", "d"], label: "r", action: "read prd", description: "full PRD and changes against the approved one", scope: "cto", footer: true },
   { id: "cto.back", keys: ["esc"], label: "esc", action: "sidebar", description: "back to the sidebar", scope: "cto", footer: true },
@@ -146,7 +148,8 @@ export const BINDINGS: Binding[] = [
   { id: "agent.memory.scroll", keys: ["up", "down", "pgup", "pgdn"], label: "↑↓", action: "scroll", description: "scroll the memory notes", scope: "agent.memory", footer: true },
   { id: "agent.memory.clear", keys: ["c"], label: "c", action: "clear", description: "clear the agent's memory (asks first)", scope: "agent.memory", footer: true },
   { id: "agent.memory.back", keys: ["esc"], label: "esc", action: "back", description: "back to the agent", scope: "agent.memory", footer: true },
-  { id: "agent.task", keys: ["t"], label: "t", action: "task", description: "open the agent's task", scope: "agent", footer: true },
+  { id: "agent.terminal", keys: ["t"], label: "t", action: "open terminal", description: "open the agent's own CLI in a terminal, resuming its session (ctrl+b then d leaves it)", scope: "agent", footer: true },
+  { id: "agent.task", keys: ["g"], label: "g", action: "task", description: "go to the agent's task", scope: "agent", footer: true },
   { id: "agent.log", keys: ["l"], label: "l", action: "log", description: "raw log of the agent's run", scope: "agent", footer: true },
   { id: "agent.back", keys: ["esc"], label: "esc", action: "sidebar", description: "back to the sidebar", scope: "agent", footer: true },
   { id: "agent.send", keys: ["enter"], label: "enter", action: "send", description: "send a direct message to this agent", scope: "agent.input", footer: true },
@@ -253,6 +256,9 @@ export const BINDINGS: Binding[] = [
   { id: "help.close", keys: ["esc", "?", "q"], label: "esc", action: "close", description: "close this help", scope: "help", footer: true },
   { id: "help.scroll", keys: ["up", "down", "pgup", "pgdn"], label: "↑↓", action: "scroll", description: "scroll the help", scope: "help", footer: true },
 
+  { id: "terminal.detach", keys: ["ctrl+b d"], label: "ctrl+b d", action: "detach", description: "leave the terminal; when the last viewer leaves, the CLI ends and the agent's automatic runs continue from the same session", scope: "terminal", footer: true },
+  { id: "terminal.keys", keys: ["any"], label: "other keys", action: "go to the cli", description: "every other key, including ctrl+c and esc, goes to the CLI (ctrl+b followed by another key sends both)", scope: "terminal", footer: true },
+
   { id: "confirm.yes", keys: ["y"], label: "y", action: "yes", description: "confirm", scope: "confirm", footer: true },
   { id: "confirm.no", keys: ["n", "esc"], label: "n", action: "no", description: "cancel (esc works too)", scope: "confirm", footer: true },
 
@@ -288,7 +294,7 @@ export function keyLabel(label: string): string {
 }
 
 /** Scopes of overlays: they show only their own keys. */
-const MODAL_SCOPES = new Set<KeyScope>(["help", "confirm", "palette", "prd", "kickoff.empty", "kickoff", "kickoff.doc", "log", "outcome"]);
+const MODAL_SCOPES = new Set<KeyScope>(["help", "confirm", "palette", "prd", "kickoff.empty", "kickoff", "kickoff.doc", "log", "outcome", "terminal"]);
 
 export interface FooterFlags {
   needs: number;

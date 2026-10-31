@@ -109,7 +109,7 @@ test("the unauthorized screen tells Billy to run forewright gui again", () => {
 });
 
 test("the shell: sidebar views, coming-soon panel, status badges, hint bar limits", () => {
-  assert.deepEqual(VIEWS.map((v) => v.label), ["Home", "CTO", "Chat", "Tasks", "Team", "Skills", "Inbox", "Kickoff", "Settings"]);
+  assert.deepEqual(VIEWS.map((v) => v.label), ["Home", "CTO", "Chat", "Tasks", "Map", "Team", "Skills", "Inbox", "Kickoff", "Settings"]);
   assert.match(renderToStaticMarkup(<ComingSoon title="Tasks" text="The board." />), /Coming soon\. Use the terminal UI for this for now\./);
   for (const hints of Object.values(HINTS)) assert.ok(hints.length <= 6);
   assert.equal((renderToStaticMarkup(<HintBar hints={["a", "b", "c", "d", "e", "f", "g"]} />).match(/<span/g) ?? []).length, 6);

@@ -53,6 +53,13 @@ export function agent(over: Partial<TeamMember> & Pick<TeamMember, "id" | "name"
     currentTaskShortId: null,
     skills: [],
     webResearch: false,
+    employment: "permanent",
+    employmentReason: null,
+    contractEnd: null,
+    milestones: [],
+    terminalId: null,
+    canAttach: true,
+    attachProblem: null,
     ...over,
   };
 }

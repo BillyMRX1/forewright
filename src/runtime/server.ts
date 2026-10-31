@@ -18,6 +18,8 @@ export const MAX_LINE_BYTES = 4 * 1024 * 1024;
 export class Connection implements Notifier {
   kind: "pending" | "client" | "agent" = "pending";
   readonly subscriptions = new Map<string, ProjectRuntime>();
+  /** Terminals this connection attached to (terminal id to runtime); closing the connection detaches from each. */
+  readonly terminals = new Map<string, ProjectRuntime>();
   agent: { rt: ProjectRuntime; record: TokenRecord } | null = null;
   agentToken = "";
   private buffer = "";
@@ -28,7 +30,7 @@ export class Connection implements Notifier {
     if (!this.socket.destroyed && this.socket.writable) this.socket.write(`${JSON.stringify(obj)}\n`);
   }
 
-  notify(method: "event" | "runtime", params: unknown): void {
+  notify(method: "event" | "runtime" | "terminal", params: unknown): void {
     this.write({ jsonrpc: "2.0", method, params });
   }
 
@@ -140,6 +142,11 @@ export class RpcServer {
       this.connections.delete(conn);
       for (const rt of conn.subscriptions.values()) rt.subscribers.delete(conn);
       conn.subscriptions.clear();
+      // A client that went away (a closed browser tab, a TUI that exited) has stopped viewing its terminals.
+      for (const [terminalId, rt] of conn.terminals) {
+        rt.terminals.detach(terminalId, conn).catch((err: unknown) => rt.reportInternalError(`detaching a closed connection from terminal ${terminalId}`, err));
+      }
+      conn.terminals.clear();
     });
   }
 

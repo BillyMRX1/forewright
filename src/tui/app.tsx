@@ -26,6 +26,7 @@ import { TasksView } from "./views/tasks.js";
 import { InboxView } from "./views/inbox.js";
 import { SettingsView } from "./views/settings.js";
 import { LogViewer } from "./views/log.js";
+import { TerminalPane, type TerminalTarget } from "./views/terminal.js";
 import { SetupWizard } from "./setup.js";
 import { hasCommitsOf } from "./compat.js";
 
@@ -168,6 +169,8 @@ export function App(props: AppProps) {
   const [outcomeOpen, setOutcomeOpen] = useState(false);
   const [outcomeMinutes, setOutcomeMinutes] = useState("");
   const [logRun, setLogRun] = useState<string | null>(null);
+  /** The agent whose CLI is open in the terminal pane. The pane owns the whole keyboard until it closes. */
+  const [term, setTerm] = useState<TerminalTarget | null>(null);
   const [jump, setJump] = useState<JumpTarget | null>(null);
   const [confirm, setConfirm] = useState<{ text: string; onYes: () => Promise<void> | void; quit?: boolean } | null>(null);
   const inputCount = useRef(0);
@@ -437,7 +440,7 @@ export function App(props: AppProps) {
 
   // ---- focus
   const focus: Zone = rawFocus === "input" && !viewHasInput(view) ? "main" : rawFocus;
-  const overlay = help || outcomeOpen || confirm !== null || logRun !== null || paletteOpen || prdOpen || kickoffOpen || wizard;
+  const overlay = help || outcomeOpen || confirm !== null || logRun !== null || paletteOpen || prdOpen || kickoffOpen || wizard || term !== null;
   const modal = overlay || offer;
 
   const ask = useCallback((text: string, onYes: () => Promise<void> | void) => setConfirm({ text, onYes }), []);
@@ -484,6 +487,10 @@ export function App(props: AppProps) {
     },
     [openView],
   );
+  const openTerminal = useCallback((id: string) => {
+    const a = snapRef.current.agents.find((x) => x.id === id);
+    setTerm({ agentId: id, name: a?.name ?? "Agent", engine: a?.engine ?? "claude" });
+  }, []);
   const markSeen = useCallback((sel: { taskId?: string; agentId?: string }) => {
     setUnseen((u) => {
       const next = u.filter((x) => x.taskId !== sel.taskId && (sel.agentId === undefined || x.agentId !== sel.agentId));
@@ -699,6 +706,7 @@ export function App(props: AppProps) {
   );
 
   useInput((input, key) => {
+    if (term !== null) return; // the terminal pane sends every key to the CLI
     if (key.ctrl && input === "c") {
       if (confirm?.quit) {
         exit();
@@ -829,8 +837,9 @@ export function App(props: AppProps) {
       jump,
       jumpTo,
       markSeen,
+      openTerminal,
     }),
-    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, bodyWidth, focus, back, claim, run, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, selectNumber, agentId, ctoLimitUntil, attention, needs, snap, latest, jump, jumpTo, markSeen],
+    [api, projectId, props.projectName, props.root, props.isGit, tick, cols, rows, bodyHeight, bodyWidth, focus, back, claim, run, runtime, providers, modal, fail, notify, ask, claimInput, setSelection, goto, selectNumber, agentId, ctoLimitUntil, attention, needs, snap, latest, jump, jumpTo, markSeen, openTerminal],
   );
   const overlayCtx = useMemo(() => ({ ...ctx, modal: false, focus: "main" as Zone }), [ctx]);
 
@@ -847,7 +856,7 @@ export function App(props: AppProps) {
   const paused = runtime?.paused === true;
   const cardMode = shown !== null && cols >= 70 && rows >= 20;
   const sidebarOnly = !showSide && focus === "sidebar" && !overlay;
-  const scope = outcomeOpen ? "outcome" : confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : kickoffOpen ? kickoffScope : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
+  const scope = term !== null ? "terminal" : outcomeOpen ? "outcome" : confirm ? "confirm" : paletteOpen ? "palette" : help ? "help" : prdOpen ? "prd" : kickoffOpen ? kickoffScope : logRun !== null ? "log" : focus === "sidebar" ? "sidebar" : hintScope;
   const hintText = footerHints(scope, cols - 2, { needs: needs.length, toast: shown?.target != null, typing, prd: snap.proposedPrd, outcome: outcomeAsk !== null });
   const showView = !overlay && !sidebarOnly;
   const titleName = view === VIEW.agent ? (snap.agents.find((a) => a.id === agentId)?.name ?? "Agent") : VIEW_NAMES[view]!;
@@ -911,6 +920,11 @@ export function App(props: AppProps) {
               {kickoffOpen ? (
                 <Ctx.Provider value={overlayCtx}>
                   <KickoffViewer onClose={() => setKickoffOpen(false)} onScope={setKickoffScope} />
+                </Ctx.Provider>
+              ) : null}
+              {term !== null ? (
+                <Ctx.Provider value={overlayCtx}>
+                  <TerminalPane key={term.agentId} target={term} onClose={() => setTerm(null)} />
                 </Ctx.Provider>
               ) : null}
               {logRun !== null ? (

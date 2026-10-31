@@ -31,6 +31,8 @@ import { Scheduler } from "./scheduler.js";
 import type { SourceGet } from "./skill-sources.js";
 import { onSkillDecision } from "./skills.js";
 import { GithubTriggers, ghRunner } from "./github.js";
+import { TerminalManager } from "./terminals.js";
+import type { PtyChoice } from "../providers/pty.js";
 import { TokenRepo } from "./tokens.js";
 import { INTEGRATION_BRANCH, WorkspaceManager } from "./workspace.js";
 
@@ -57,10 +59,12 @@ export interface RuntimeDeps {
   ghBinary?: string;
   /** For tests: the GET that reads the vetted skill sources (default: Node's https client through the proxy settings). */
   skillSourceGet?: SourceGet;
+  /** For tests: which pseudo-terminal backend attached terminals use (default: node-pty, else the Python helper). */
+  pty?: () => Promise<PtyChoice>;
 }
 
 export interface Notifier {
-  notify(method: "event" | "runtime", params: unknown): void;
+  notify(method: "event" | "runtime" | "terminal", params: unknown): void;
 }
 
 export interface QuotaState {
@@ -78,6 +82,7 @@ export class ProjectRuntime {
   readonly cto: CtoDriver;
   readonly chat: ChatDriver;
   readonly triggers: GithubTriggers;
+  readonly terminals: TerminalManager;
   readonly active = new Map<string, ActiveRun>();
   readonly subscribers = new Set<Notifier>();
   readonly ownerId = `daemon:${process.pid}:${randomUUID().slice(0, 8)}`;
@@ -103,6 +108,7 @@ export class ProjectRuntime {
     this.workspace = new WorkspaceManager(root, projectId, store);
     this.cto = new CtoDriver(this);
     this.chat = new ChatDriver(this);
+    this.terminals = new TerminalManager(this);
     this.triggers = new GithubTriggers(this, ghRunner(deps.ghBinary));
     this.scheduler = new Scheduler(this, deps.watchdogMs);
     this.notify = new NotifyPipeline({ store, projectName: name, home: deps.forewrightHome, ...(deps.notifySend ? { send: deps.notifySend } : {}) });
@@ -199,9 +205,12 @@ export class ProjectRuntime {
     return undefined;
   }
 
-  /** Whether the agent has a live run. The lease in the database decides; `active` only covers runs of this process. */
+  /**
+   * Whether the agent may not start an automatic run now: it has a live run (the lease in the database decides;
+   * `active` only covers runs of this process), or Billy has its CLI open in a terminal. Every driver asks this.
+   */
   agentBusy(agentId: string): boolean {
-    return this.store.agentLeaseHeld(agentId) || this.activeForAgent(agentId) !== undefined;
+    return this.store.agentLeaseHeld(agentId) || this.activeForAgent(agentId) !== undefined || this.terminals.isOpen(agentId);
   }
 
   activeForTask(taskId: string): ActiveRun[] {
@@ -490,6 +499,7 @@ export class ProjectRuntime {
     this.stopping = true;
     this.scheduler.stop();
     this.abort.abort();
+    await this.terminals.closeAll(); // an attached CLI never outlives the service
     // Includes runs still inside adapter.start (the OS start-time read): cancel is remembered and the child is
     // ended as soon as it exists. A finishing run can hand work to another launch, so repeat until none are left.
     for (let pass = 0; this.active.size > 0; pass++) {

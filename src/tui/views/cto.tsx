@@ -162,6 +162,11 @@ function ConversationView({ mode }: { mode: Mode }) {
       }
     }
     if (key.return || input === "i") return ctx.setFocus("input");
+    if (toCto && input === "t") {
+      if (!cto) return ctx.notify("The CTO is not on the team yet.");
+      if (!cto.canAttach) return ctx.notify(cto.attachProblem ?? "The CTO cannot open a terminal.");
+      return ctx.openTerminal(cto.id);
+    }
     if (toCto && input === "a") return ctx.run("approve");
     if (toCto && (input === "r" || input === "d")) return ctx.run("prd");
     if (!toCto && input === "m") return cycleRecipient(1);

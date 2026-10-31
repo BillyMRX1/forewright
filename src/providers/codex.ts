@@ -2,10 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
-  EngineId, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
+  EngineId, InteractiveCommand, InteractiveRequest, McpServerSpec, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth,
+  RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
 import { ProviderError } from "./errors.js";
-import { isolatedCodexHome } from "./isolation.js";
+import { INTERACTIVE_TERM_ENV, isolatedCodexHome } from "./isolation.js";
 import { LinkManager, type LinkOps, type LinkResult } from "./links.js";
 import { isWindows, type Platform } from "../core/platform.js";
 import { WINDOWS_COMMAND_LINE_BUDGET, windowsCommandLineLength } from "./launch.js";
@@ -112,14 +113,36 @@ export class CodexAdapter implements ProviderAdapter {
     return health;
   }
 
-  start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {
+  /**
+   * What a headless run and an attached terminal share: the private CODEX_HOME (its auth link verified before the
+   * CLI starts) and the environment, MCP secrets included. Pair it with `this.links.afterRun()` once the CLI ended.
+   */
+  private prepareLaunch(mcpServers: readonly McpServerSpec[] | undefined, extraEnv: Record<string, string>): {
+    bin: string; iso: ReturnType<typeof isolatedCodexHome>; unisolated: boolean; env: Record<string, string>; secrets: string[]; mcpEnv: Record<string, string>;
+  } {
     const bin = this.resolveBin() ?? "codex";
     const iso = isolatedCodexHome(this.opts.forewrightHome, this.opts.realHome, this.links);
     this.links.beforeRun();
     const unisolated = iso.auth.mode === "none";
     const mcpEnv: Record<string, string> = {};
-    for (const s of req.mcpServers ?? []) Object.assign(mcpEnv, s.env);
-    const { env, secrets } = childEnv(this.baseEnv, { ...mcpEnv, ...(req.env ?? {}), ...(unisolated ? {} : { CODEX_HOME: iso.dir }) }, { allowApiBilling: this.opts.allowApiBilling ?? false });
+    for (const s of mcpServers ?? []) Object.assign(mcpEnv, s.env);
+    const { env, secrets } = childEnv(this.baseEnv, { ...mcpEnv, ...extraEnv, ...(unisolated ? {} : { CODEX_HOME: iso.dir }) }, { allowApiBilling: this.opts.allowApiBilling ?? false });
+    return { bin, iso, unisolated, env, secrets, mcpEnv };
+  }
+
+  /** `codex resume <id>` (or plain `codex` without a session) in the private CODEX_HOME, with the MCP and approval settings of a run. */
+  interactive(req: InteractiveRequest): InteractiveCommand {
+    const { bin, unisolated, env } = this.prepareLaunch(req.mcpServers, INTERACTIVE_TERM_ENV);
+    return {
+      bin,
+      args: buildCodexInteractiveArgs(req, { unisolated }),
+      env,
+      cleanup: () => this.links.afterRun(), // a token Codex refreshed meanwhile goes back to the real auth file
+    };
+  }
+
+  start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {
+    const { bin, iso, unisolated, env, secrets, mcpEnv } = this.prepareLaunch(req.mcpServers, req.env ?? {});
 
     const runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "forewright-codex-run-"));
     fs.chmodSync(runDir, 0o700);
@@ -189,7 +212,16 @@ export function buildCodexArgs(req: RunRequest, lastMessageFile: string, o: Code
   // and the working directory is the spawn cwd.
   if (resume) args.push("-c", `sandbox_mode=${tomlString(SANDBOX[req.permission])}`);
   else args.push("-C", req.cwd, "-s", SANDBOX[req.permission]);
-  for (const s of req.mcpServers ?? []) {
+  args.push(...codexMcpArgs(req.mcpServers ?? []));
+  args.push("--");
+  if (resume) args.push(req.resumeSessionId as string);
+  args.push(o.promptViaStdin ? "-" : prompt);
+  return args;
+}
+
+function codexMcpArgs(servers: readonly McpServerSpec[]): string[] {
+  const args: string[] = [];
+  for (const s of servers) {
     if (!/^[A-Za-z0-9_-]+$/.test(s.name)) throw new ProviderError("Invalid MCP server name", { name: s.name });
     const key = `mcp_servers.${s.name}`;
     args.push("-c", `${key}.command=${tomlString(s.command)}`);
@@ -201,9 +233,23 @@ export function buildCodexArgs(req: RunRequest, lastMessageFile: string, o: Code
     // Pre-approve only the servers Forewright supplies; the daemon authorizes each call itself.
     args.push("-c", `${key}.default_tools_approval_mode="approve"`);
   }
-  args.push("--");
-  if (resume) args.push(req.resumeSessionId as string);
-  args.push(o.promptViaStdin ? "-" : prompt);
+  return args;
+}
+
+/**
+ * The interactive CLI: `codex resume <id>` takes -s and -C like a fresh session. The system prompt goes into
+ * developer_instructions (Codex has no flag for it). --no-daemon keeps Codex from starting a shared background
+ * server that would outlive the terminal.
+ */
+export function buildCodexInteractiveArgs(req: InteractiveRequest, o: { unisolated?: boolean } = {}): string[] {
+  const args = req.resumeSessionId ? ["resume"] : [];
+  if (req.model) args.push("-m", req.model);
+  if (o.unisolated) args.push("-c", 'approval_policy="never"');
+  args.push("-C", req.cwd, "-s", SANDBOX[req.permission]);
+  if (req.systemPrompt) args.push("-c", `developer_instructions=${tomlString(req.systemPrompt)}`);
+  args.push(...codexMcpArgs(req.mcpServers));
+  args.push("--no-daemon");
+  if (req.resumeSessionId) args.push("--", req.resumeSessionId);
   return args;
 }
 

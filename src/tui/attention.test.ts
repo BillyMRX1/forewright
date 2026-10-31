@@ -4,7 +4,7 @@ import { compareAttention, countStatuses, deriveAttention, needsYouItems, nextNe
 import { baseData, makeAgent, makeTask } from "./fake-client.js";
 import type { TeamMember } from "../runtime/protocol.js";
 
-const member = (over: Parameters<typeof makeAgent>[0] & { currentTaskShortId?: string | null }): TeamMember => ({ ...makeAgent(over), currentTaskShortId: over.currentTaskShortId ?? null });
+const member = (over: Parameters<typeof makeAgent>[0] & { currentTaskShortId?: string | null }): TeamMember => ({ ...makeAgent(over), currentTaskShortId: over.currentTaskShortId ?? null, contractEnd: null, milestones: [], terminalId: null, canAttach: true, attachProblem: null });
 
 function input(over: Partial<AttentionInput> = {}): AttentionInput {
   return { agents: [], tasks: [], decisions: [], runtime: null, proposedPrd: false, unseenDone: [], ...over };

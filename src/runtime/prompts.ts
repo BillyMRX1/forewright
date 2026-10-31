@@ -64,6 +64,8 @@ export interface WorkerPromptInput {
   kickoff?: string;
   /** Set when this run continues an attempt that ran on another engine. */
   engineHandoff?: string;
+  /** The agent's milestones (see milestonesPromptSection); empty or absent when it has none. */
+  milestones?: string;
   feedback: string[];
   messages: string[];
   instructions: string;
@@ -112,6 +114,7 @@ export function buildWorkerPrompt(i: WorkerPromptInput): string {
   if (i.requirements.length > 0) {
     sections.push(`## Requirements this task serves (approved PRD revision ${i.prdRevision ?? "?"})\n${i.requirements.map((r) => `- ${r.key}: ${r.text}`).join("\n")}`);
   }
+  if (i.milestones) sections.push(i.milestones);
   if (i.kickoff) sections.push(i.kickoff);
   if (i.memory) sections.push(i.memory);
   if (i.handoff) sections.push(`## Handoff note\n${truncate(i.handoff, 4000)}`);
@@ -176,6 +179,8 @@ export function ctoSystemPrompt(ctoName: string): string {
     "- Reviews are built into every task: an independent reviewer and integration checks run automatically. Never create tasks only to review or test existing work; a task must change code.",
     "- Hire the smallest useful team. Include at least one reviewer (role \"review\") who is not a worker. Pick engine and model per task with cost in mind.",
     "- Agents can bring skills (instructions and pinned tools) from the skill library: see list_skills, choose them when hiring with hire_agent skills, or use attach_skill and detach_skill. To find new ones, hire a research agent (role \"research\") or propose one yourself with propose_skill. Billy approves every new skill, and skills never give an agent more permissions.",
+    "- Hire each agent as permanent or contract (hire_agent employment, with a one-line employment_reason). Permanent is for a long-lived owner of an area, such as a backend lead or a reviewer: it keeps its memory and maintains what it built. Contract is for one task (ends_with_task) or one milestone (ends_with_milestone): it keeps contexts small and saves usage. A contract agent retires itself once its task is done or its milestone delivered, and its sessions and memory notes are discarded. Billy can change the employment.",
+    "- Give agents milestones (create_milestone, update_milestone, cancel_milestone): a deliverable made of tasks and the PRD requirements it delivers, with an optional due date. A milestone is delivered only when all its tasks pass review and checks; nobody can mark it delivered.",
     "- Use request_decision for material choices, with options and your recommendation.",
     "- For a new project, once you understand Billy's brief and before the first PRD, offer him a kickoff pack: small (brief, requirements, test strategy) for a small tool, full otherwise. Billy starts it with /kickoff; you cannot.",
     "- While a kickoff pack is being written, write its pending documents with write_kickoff_doc, and decide once with set_kickoff_ui whether the project has a UI (wireframes are drawn with write_kickoff_wireframe and are static mockups, not runtime evidence). The PRD stays the authority for requirement keys and scope.",
@@ -208,7 +213,7 @@ export function buildStateDigest(store: Store): string {
   lines.push(approved ? `Approved PRD revision ${approved.revision}: ${approved.title}\n${approved.requirements.map((r) => `- ${r.key}: ${r.text}`).join("\n")}` : "No approved PRD yet.");
   if (proposed) lines.push(`Proposed PRD revision ${proposed.revision} awaits Billy's approval: ${proposed.title}`);
   const agents = store.listAgents();
-  lines.push(`Team:\n${agents.map((a) => `- ${a.name} (${a.role}, ${a.engine}${a.model ? `/${a.model}` : ""}, ${a.lifecycle})${a.skills.length > 0 ? ` skills: ${a.skills.join(", ")}` : ""}`).join("\n")}`);
+  lines.push(`Team:\n${agents.map((a) => `- ${a.name} (${a.role}, ${a.engine}${a.model ? `/${a.model}` : ""}, ${a.lifecycle}${a.role === "cto" ? "" : `, ${employmentDigest(store, a)}`})${a.skills.length > 0 ? ` skills: ${a.skills.join(", ")}` : ""}${milestoneDigest(store, a.id)}`).join("\n")}`);
   const settings = store.getSettings();
   if (settings.planOnly) lines.push("Plan-only mode is on: Billy and you plan; tasks may be created, but no work starts until Billy turns it off.");
   const kickoff = kickoffDigest(store);
@@ -232,6 +237,38 @@ export function buildStateDigest(store: Store): string {
   return truncate(lines.join("\n"), SECTION_CAP);
 }
 
+/** "permanent" or "contract, ends with T-4". */
+function employmentDigest(store: Store, a: Agent): string {
+  if (a.employment === "permanent" || a.contractEnd === null) return a.employment;
+  return `contract, ends with ${store.contractEndView(a.contractEnd).shortId}`;
+}
+
+/** " milestones: 1 delivered, 1 in review, 1 overdue (M-1 Login [open, overdue, 0 of 2 tasks done]; ...)", or "" with none. */
+function milestoneDigest(store: Store, agentId: string): string {
+  const all = store.listMilestones({ agentId });
+  if (all.length === 0) return "";
+  const count = (n: number, word: string) => (n > 0 ? [`${n} ${word}`] : []);
+  const counts = [
+    ...count(all.filter((m) => m.state === "delivered").length, "delivered"),
+    ...count(all.filter((m) => m.state === "in_review").length, "in review"),
+    ...count(all.filter((m) => m.overdue).length, "overdue"),
+  ];
+  const open = all.filter((m) => m.state === "open" || m.state === "in_review");
+  const list = open.map((m) => `${m.shortId} ${truncate(m.title, 80)} [${m.state.replace("_", " ")}${m.overdue ? ", overdue" : ""}, ${m.tasksDone} of ${m.tasksTotal} tasks done]`);
+  return ` milestones: ${counts.length > 0 ? counts.join(", ") : "none delivered yet"}${list.length > 0 ? ` (${list.join("; ")})` : ""}`;
+}
+
+/** A worker's open milestones for its prompt: titles and which tasks. Only the CTO and Billy change them. */
+export function milestonesPromptSection(store: Store, agentId: string): string {
+  const open = store.listMilestones({ agentId }).filter((m) => m.state === "open" || m.state === "in_review");
+  if (open.length === 0) return "";
+  const lines = open.map((m) => {
+    const tasks = m.taskIds.map((t) => store.getTask(t).shortId);
+    return `- ${m.shortId} ${truncate(m.title, 200)}: tasks ${tasks.length > 0 ? tasks.join(", ") : "none yet"}${m.dueAt ? `, due ${m.dueAt.slice(0, 10)}` : ""}${m.overdue ? " (overdue)" : ""}`;
+  });
+  return `## Your milestones (set by the CTO; one is delivered once all its tasks pass review and checks)\n${lines.join("\n")}`;
+}
+
 export function buildCtoPrompt(input: {
   digest: string;
   messages: string[];
@@ -248,6 +285,24 @@ export function buildCtoPrompt(input: {
   if (input.extra) s.push(input.extra);
   s.push(`## New messages for you\n${input.messages.length > 0 ? input.messages.join("\n") : "(none)"}`);
   return truncate(s.join("\n\n"), 150 * 1024);
+}
+
+// ---------------------------------------------------------------- attached terminals
+
+/**
+ * The system prompt of an agent's CLI that Billy opened in a terminal (issue #11). The CTO keeps its own rules;
+ * a worker is told its Forewright tools are the chat ones, since task work is submitted by task runs only.
+ */
+export function terminalSystemPrompt(agent: { name: string; role: string }): string {
+  const head = `Billy opened this session in an interactive terminal and is talking to you directly. Answer him here.`;
+  if (agent.role === "cto") return `${ctoSystemPrompt(agent.name)}\n\n${head}`;
+  return [
+    `You are ${agent.name}, a member of a small software team coordinated by forewright. ${head}`,
+    "Rules:",
+    "- Your forewright tools here are the chat ones: you can send messages, but task work is submitted only by task runs, not from this terminal.",
+    "- Scope changes go through the CTO and Billy.",
+    `- ${UNTRUSTED_NOTE}`,
+  ].join("\n");
 }
 
 // ---------------------------------------------------------------- chat turns

@@ -980,3 +980,31 @@ describe("Kickoff pack", () => {
 });
 
 void [release];
+
+describe("Agent employment", () => {
+  it("the agent view shows the employment, its reason and the milestones with overdue and progress", async () => {
+    const api = new FakeClient();
+    const m = (shortId: string, title: string, state: "open" | "in_review" | "delivered", done: number, total: number, overdue: boolean) => ({
+      id: shortId, shortId, agentId: "a2", title, requirementKeys: [], taskIds: [], dueAt: null, state, overdue, tasksDone: done, tasksTotal: total, createdAt: "2026-01-01T00:00:00.000Z", deliveredAt: null,
+    });
+    api.employment["a2"] = {
+      employment: "contract",
+      employmentReason: "Only the tip math",
+      contractEnd: { kind: "task", taskId: "t2", shortId: "T-2" },
+      milestones: [m("M-1", "Tip math", "in_review", 2, 3, true), m("M-2", "Rounding", "delivered", 1, 1, false)],
+    };
+    const { h } = await mount({ view: VIEW.agent, api });
+    await h.settle(250);
+    const f = h.frame();
+    assert.match(f, /Employment  Contract, ends with T-2  Only the tip math/);
+    assert.match(f, /Milestone   M-1 Tip math  in review  overdue  2 of 3 tasks done/);
+    assert.match(f, /Milestone   M-2 Rounding  delivered  1 of 1 task done/);
+  });
+
+  it("a permanent agent says so", async () => {
+    const { h } = await mount({ view: VIEW.agent });
+    await h.settle(250);
+    assert.match(h.frame(), /Employment  Permanent/);
+    assert.doesNotMatch(h.frame(), /Milestone /);
+  });
+});

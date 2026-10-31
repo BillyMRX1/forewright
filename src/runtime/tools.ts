@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { ForewrightError, NotFoundError, PolicyDeniedError, ValidationError } from "../core/errors.js";
 import { type ActionContext, type ActionName, type Actor, authorize } from "../core/policy.js";
 import { redactSecrets, truncate } from "../core/safety.js";
-import { type Agent, type DecisionKind, type DecisionOption, canonicalJson } from "../core/store.js";
+import { type Agent, type ContractEnd, type DecisionKind, type DecisionOption, EMPLOYMENTS, EMPLOYMENT_REASON_MAX, type Employment, type Milestone, canonicalJson } from "../core/store.js";
 import { LIVE_ENGINES, LOCAL_ENGINES, type AgentRole, type EngineId, type PermissionProfile } from "../core/types.js";
 import { ToolError } from "./errors.js";
 import { gitTry, hasCommits, isGitRepo } from "./git.js";
@@ -297,7 +297,7 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "hire_agent",
-    description: `Hire a specialist. Roles: ${ROLES.join(", ")} (research finds and proposes skills; it is always read only, and Billy is asked whether it may look things up on the web). Engines: ${LIVE_ENGINES.join(", ")}. skills: slugs from list_skills to give it.`,
+    description: `Hire a specialist. Roles: ${ROLES.join(", ")} (research finds and proposes skills; it is always read only, and Billy is asked whether it may look things up on the web). Engines: ${LIVE_ENGINES.join(", ")}. skills: slugs from list_skills to give it. employment: permanent (a long-lived owner of an area) or contract (hired for one task or milestone; give ends_with_task or ends_with_milestone, and it retires itself once that is done or delivered). A contract hired for an existing milestone takes that milestone over.`,
     properties: {
       name: { type: "string" },
       role: { type: "string", enum: ROLES },
@@ -305,8 +305,12 @@ const TOOLS: ToolDef[] = [
       model: { type: "string" },
       permission: { type: "string", enum: ["read_only", "workspace_write"] },
       skills: { type: "array", items: { type: "string" }, description: "Library skill slugs (see list_skills)" },
+      employment: { type: "string", enum: [...EMPLOYMENTS] },
+      employment_reason: { type: "string", description: `One line (at most ${EMPLOYMENT_REASON_MAX} characters): why this employment type` },
+      ends_with_task: { type: "string", description: "Contracts only: the task short id (T-4) whose completion ends the contract" },
+      ends_with_milestone: { type: "string", description: "Contracts only: the milestone short id (M-2) whose delivery ends the contract" },
     },
-    required: ["name", "role", "engine"],
+    required: ["name", "role", "engine", "employment", "employment_reason"],
     roles: ["cto"],
     action: "hire_agent",
     mutating: true,
@@ -319,6 +323,7 @@ const TOOLS: ToolDef[] = [
       const askedPermission = oneOf<PermissionProfile>(a, "permission", ["read_only", "workspace_write"], true);
       if (role === "research" && askedPermission !== undefined && askedPermission !== "read_only") throw new ToolError("A research agent is always read only; hire it without a permission or with read_only.");
       const permission = (askedPermission ?? (role === "review" || role === "research" ? "read_only" : "workspace_write")) as PermissionProfile;
+      const employment = employmentArgs(ctx, a);
       // Every skill is checked before anyone is hired, so a refused skill leaves no half-made agent behind.
       const skillSlugs = [...new Set(strList(a, "skills", { max: 60, maxItems: 20 }).map((x) => x.trim()))];
       for (const slug of skillSlugs) {
@@ -345,11 +350,12 @@ const TOOLS: ToolDef[] = [
       if (model && adapter.capabilities.modelSelection === "discoverable" && health && health.models.length > 0 && !health.models.includes(model)) {
         throw new ToolError(`${engine} does not offer the model "${model}". Available: ${health.models.join(", ")}.`);
       }
-      let hired = rt.store.hireAgent({ name, role, engine, model: model ?? null, permission, actor: ctx.actor });
+      let hired = rt.store.hireAgent({ name, role, engine, model: model ?? null, permission, ...employment, actor: ctx.actor });
       for (const slug of skillSlugs) hired = attachSkillChecked(rt, hired, slug, ctx.actor);
       const research = role === "research" ? openWebResearchDecision(rt, hired, ctx.agent.id) : null;
       return {
         name: hired.name, role: hired.role, engine: hired.engine, model: hired.model, permission: hired.permission, skills: hired.skills,
+        employment: hired.employment, ...(hired.contractEnd ? { endsWith: rt.store.contractEndView(hired.contractEnd).shortId } : {}),
         ...(research ? { note: `Billy decides in the Inbox whether ${hired.name} may look things up on the web. Until then it works from the skill library only.` } : {}),
       };
     },
@@ -391,6 +397,75 @@ const TOOLS: ToolDef[] = [
       ctx.rt.store.retireAgent(agent.id, ctx.actor);
       return { retired: agent.name };
     },
+  },
+  // ---- milestones (a deliverable of one agent; delivered only through review and checks of its tasks)
+  {
+    name: "create_milestone",
+    description: "Give an agent a milestone: a deliverable made of tasks (short ids) and the PRD requirement keys it delivers, with an optional due date (2026-11-03). It counts as delivered only when all its tasks are done after review and checks.",
+    properties: {
+      agent: { type: "string" },
+      title: { type: "string" },
+      tasks: { type: "array", items: { type: "string" } },
+      requirements: { type: "array", items: { type: "string" } },
+      due: { type: "string" },
+    },
+    required: ["agent", "title"],
+    roles: ["cto"],
+    action: "manage_milestones",
+    mutating: true,
+    run: (ctx, a) => {
+      const agent = agentByName(ctx, str(a, "agent", { max: 60 }));
+      const due = optStr(a, "due", 60);
+      const m = ctx.rt.store.createMilestone({
+        agentId: agent.id,
+        title: str(a, "title", { max: 200 }),
+        taskIds: strList(a, "tasks", { max: 60 }),
+        requirementKeys: strList(a, "requirements", { max: 20 }),
+        ...(due ? { dueAt: due } : {}),
+        actor: ctx.actor,
+      });
+      return milestoneView(ctx, m);
+    },
+  },
+  {
+    name: "update_milestone",
+    description: "Change a milestone's title, tasks, requirement keys or due date (an empty due clears it). A delivered or cancelled milestone cannot change.",
+    properties: {
+      milestone: { type: "string", description: "Short id, like M-2" },
+      title: { type: "string" },
+      tasks: { type: "array", items: { type: "string" } },
+      requirements: { type: "array", items: { type: "string" } },
+      due: { type: "string" },
+    },
+    required: ["milestone"],
+    roles: ["cto"],
+    action: "manage_milestones",
+    mutating: true,
+    run: (ctx, a) => {
+      const title = optStr(a, "title", 200);
+      const due = optStr(a, "due", 60);
+      const m = ctx.rt.store.updateMilestone(
+        str(a, "milestone", { max: 60 }).trim(),
+        {
+          ...(title !== undefined ? { title } : {}),
+          ...(due !== undefined ? { dueAt: due.trim() === "" ? null : due } : {}),
+          ...(a["tasks"] !== undefined ? { taskIds: strList(a, "tasks", { max: 60 }) } : {}),
+          ...(a["requirements"] !== undefined ? { requirementKeys: strList(a, "requirements", { max: 20 }) } : {}),
+        },
+        ctx.actor,
+      );
+      return milestoneView(ctx, m);
+    },
+  },
+  {
+    name: "cancel_milestone",
+    description: "Cancel a milestone that is not delivered. Its tasks stay as they are.",
+    properties: { milestone: { type: "string", description: "Short id, like M-2" } },
+    required: ["milestone"],
+    roles: ["cto"],
+    action: "manage_milestones",
+    mutating: true,
+    run: (ctx, a) => milestoneView(ctx, ctx.rt.store.cancelMilestone(str(a, "milestone", { max: 60 }).trim(), ctx.actor)),
   },
   {
     name: "send_message",
@@ -755,7 +830,41 @@ const FORBIDDEN: Record<string, ActionName> = {
   change_authority: "change_authority",
   set_setting: "change_authority",
   settings: "change_authority",
+  set_employment: "change_employment",
+  change_employment: "change_employment",
 };
+
+/** hire_agent's employment arguments: a permanent hire names no end, a contract exactly one. */
+function employmentArgs(ctx: ToolCtx, a: Args): { employment: Employment; employmentReason: string; contractEnd: ContractEnd | null } {
+  const employment = oneOf(a, "employment", EMPLOYMENTS)!;
+  const employmentReason = str(a, "employment_reason", { max: EMPLOYMENT_REASON_MAX }).trim();
+  if (/[\r\n]/.test(employmentReason)) throw new ValidationError('"employment_reason" is one line.', { key: "employment_reason" });
+  const endTask = optStr(a, "ends_with_task", 60)?.trim() || undefined;
+  const endMilestone = optStr(a, "ends_with_milestone", 60)?.trim() || undefined;
+  if (employment === "permanent") {
+    if (endTask || endMilestone) throw new ToolError("A permanent agent has no end; leave out ends_with_task and ends_with_milestone, or hire it on contract.");
+    return { employment, employmentReason, contractEnd: null };
+  }
+  if ((endTask ? 1 : 0) + (endMilestone ? 1 : 0) !== 1) throw new ToolError("A contract needs exactly one end: ends_with_task (a task short id) or ends_with_milestone (a milestone short id).");
+  // Resolved now, so an unknown id is refused before anything is checked or hired.
+  const { store } = ctx.rt;
+  return { employment, employmentReason, contractEnd: endTask ? { kind: "task", taskId: store.getTask(endTask).id } : { kind: "milestone", milestoneId: store.getMilestone(endMilestone!).id } };
+}
+
+function milestoneView(ctx: ToolCtx, m: Milestone): unknown {
+  const { store } = ctx.rt;
+  return {
+    id: m.shortId,
+    agent: store.getAgent(m.agentId).name,
+    title: m.title,
+    tasks: m.taskIds.map((t) => store.getTask(t).shortId),
+    requirements: m.requirementKeys,
+    due: m.dueAt,
+    state: m.state,
+    overdue: m.overdue,
+    progress: `${m.tasksDone} of ${m.tasksTotal} tasks done`,
+  };
+}
 
 function sendMessage(ctx: ToolCtx, to: string, body: string, thread: string | undefined): unknown {
   const { rt } = ctx;
@@ -884,8 +993,10 @@ export async function callTool(rt: ProjectRuntime, record: TokenRecord, name: st
     const taskId = record.scope.taskId;
     const task = taskId ? store.getTask(taskId) : null;
     if (record.scope.kind !== "cto" && taskId) store.assertCurrentGeneration(taskId, record.generation, { tool: name, runId: record.runId });
-    if (!rt.active.has(record.runId)) throw new PolicyDeniedError("This run has ended, so its tools are no longer available.", { runId: record.runId });
-    store.assertRunLease(record.runId, { tool: name }); // a run that lost the agent's lease cannot post or change anything
+    // An attached terminal's token is bound to the terminal, which has no run row and holds no lease.
+    const terminal = rt.terminals.ownsRun(record.runId);
+    if (!terminal && !rt.active.has(record.runId)) throw new PolicyDeniedError("This run has ended, so its tools are no longer available.", { runId: record.runId });
+    if (!terminal) store.assertRunLease(record.runId, { tool: name }); // a run that lost the agent's lease cannot post or change anything
 
     const context: ActionContext = {
       ...(taskId ? { taskId } : {}),

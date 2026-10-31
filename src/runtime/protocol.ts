@@ -23,6 +23,9 @@ import type {
   Verification,
   RouteDecision,
   SkillInfo,
+  ContractEnd,
+  Employment,
+  Milestone,
 } from "../core/store-types.js";
 import type { Store } from "../core/store.js";
 import type { BudgetScopeStatus } from "../core/budgets.js";
@@ -128,7 +131,38 @@ export interface EngineUse {
   /** Set when the agent's engine is waiting for a usage limit and nothing can take over; ISO time. */
   waitUntil: string | null;
 }
-export type TeamMember = ReturnType<Store["teamView"]>[number] & { engineUse?: EngineUse };
+export type TeamMember = ReturnType<Store["teamView"]>[number] & {
+  engineUse?: EngineUse;
+  /** The terminal open for this agent, if any. */
+  terminalId: string | null;
+  /** False when the engine cannot attach or the agent is retired; `attachProblem` says why. Live runs are not part of it (attach refuses them). */
+  canAttach: boolean;
+  attachProblem: string | null;
+};
+
+/**
+ * One interactive engine CLI (Claude Code or Codex) running in the service inside a pseudo-terminal, resuming the
+ * agent's own session (issue #11). Any number of clients may view and type into it. While it is open, Forewright
+ * starts no automatic run for that agent.
+ */
+export interface TerminalInfo {
+  terminalId: string;
+  projectId: string;
+  agentId: string;
+  engine: EngineId;
+  /** The engine session it resumed, or null when the agent had none and a new one was started. */
+  sessionId: string | null;
+  cols: number;
+  rows: number;
+  startedAt: string;
+  /** Set once the CLI process has ended. */
+  exited: { code: number | null; signal: string | null } | null;
+}
+
+/** Most recent raw output a joining viewer receives as `replay`. */
+export const TERMINAL_REPLAY_BYTES = 256 * 1024;
+export const TERMINAL_COLS = { min: 20, max: 500 } as const;
+export const TERMINAL_ROWS = { min: 5, max: 200 } as const;
 
 export interface TaskDetail {
   task: Task;
@@ -231,10 +265,32 @@ export interface Methods {
   "decisions.resolve": { params: { projectId: string; decisionId: string; option: string; note?: string }; result: { decision: Decision } };
   "settings.set": { params: { projectId: string; key: string; value: unknown }; result: { settings: Settings } };
   "agents.update": {
-    /** webResearch: research agents only, Billy's yes or no to reading the vetted skill sources. */
-    params: { projectId: string; agentId: string; name?: string; engine?: Agent["engine"]; model?: string | null; permission?: Agent["permission"]; webResearch?: boolean };
+    /**
+     * webResearch: research agents only, Billy's yes or no to reading the vetted skill sources. employment,
+     * employmentReason and contractEnd: Billy changes the employment (a contract needs an end, a permanent agent has
+     * none; the task or milestone may be given by short id). The CTO stays permanent.
+     */
+    params: {
+      projectId: string;
+      agentId: string;
+      name?: string;
+      engine?: Agent["engine"];
+      model?: string | null;
+      permission?: Agent["permission"];
+      webResearch?: boolean;
+      employment?: Employment;
+      employmentReason?: string | null;
+      contractEnd?: ContractEnd | null;
+    };
     result: { agent: Agent };
   };
+  /** Billy fixes a milestone's due date (null clears it), title, tasks or requirement keys. Refused once delivered or cancelled. */
+  "milestones.update": {
+    params: { projectId: string; milestoneId: string; title?: string; dueAt?: string | null; taskIds?: string[]; requirementKeys?: string[] };
+    result: { milestone: Milestone };
+  };
+  /** Billy cancels a milestone that is not delivered. Its tasks stay as they are. */
+  "milestones.cancel": { params: { projectId: string; milestoneId: string }; result: { milestone: Milestone } };
   /** Gives an agent a library skill. Refused when the skill has a problem or needs more permission than the agent has. */
   "agents.attachSkill": { params: { projectId: string; agentId: string; slug: string }; result: { agent: Agent } };
   "agents.detachSkill": { params: { projectId: string; agentId: string; slug: string }; result: { agent: Agent } };
@@ -268,6 +324,17 @@ export interface Methods {
   "control.resumeTask": { params: { projectId: string; taskId: string }; result: { task: Task } };
   "control.cancelTask": { params: { projectId: string; taskId: string }; result: { task: Task } };
   "control.terminateTeam": { params: { projectId: string }; result: RuntimeStatus };
+
+  // attached terminals (issue #11), human only
+  /** Opens a terminal for the agent, or joins the open one (`replay` is its recent output). Refused for a live run, a retired agent, an engine that cannot attach, or a machine without a pseudo-terminal backend. */
+  "terminal.attach": { params: { projectId: string; agentId: string; cols: number; rows: number }; result: { terminal: TerminalInfo; replay: string } };
+  /** Raw keystrokes (UTF-8, as xterm sends them). */
+  "terminal.input": { params: { terminalId: string; data: string }; result: { ok: true } };
+  /** cols 20 to 500, rows 5 to 200. */
+  "terminal.resize": { params: { terminalId: string; cols: number; rows: number }; result: { ok: true } };
+  /** This client stops viewing. After the last viewer the CLI is ended and the agent's automatic runs resume. */
+  "terminal.detach": { params: { terminalId: string }; result: { ok: true } };
+  "terminal.list": { params: { projectId: string }; result: { terminals: TerminalInfo[] } };
 }
 
 export type MethodName = keyof Methods;
@@ -278,7 +345,13 @@ export type Result<M extends MethodName> = Methods[M]["result"];
 export interface Notifications {
   event: { projectId: string; event: ForewrightEvent };
   runtime: { projectId: string; status: RuntimeStatus };
+  /** Output of an attached terminal (in order), or its end. Sent only to clients that attached and did not detach. */
+  terminal: TerminalNotification;
 }
+
+export type TerminalNotification =
+  | { terminalId: string; data: string }
+  | { terminalId: string; exited: { code: number | null; signal: string | null } };
 
 export interface RpcRequest<M extends MethodName = MethodName> {
   jsonrpc: "2.0";

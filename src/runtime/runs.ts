@@ -3,7 +3,7 @@
 // the run that is still the current attempt may change state.
 import { appendFileSync } from "node:fs";
 import path from "node:path";
-import { StaleGenerationError } from "../core/errors.js";
+import { LeaseConflictError, StaleGenerationError } from "../core/errors.js";
 import { logsDir } from "../core/paths.js";
 import { redactSecrets, truncate } from "../core/safety.js";
 import type { Agent, Run, RunKind, Task } from "../core/store.js";
@@ -78,6 +78,8 @@ export function adapterFor(rt: ProjectRuntime, agent: Agent): ProviderAdapter {
  * the run could not be launched; a launched run releases its own lease when it finishes.
  */
 export function acquireLease(rt: ProjectRuntime, agent: Agent): number {
+  // Every start path comes through here: while Billy has the agent's CLI open in a terminal, nothing starts.
+  if (rt.terminals.isOpen(agent.id)) throw new LeaseConflictError(`${agent.name} has a terminal open, so no run starts until it is closed.`, { agentId: agent.id });
   return rt.store.acquireAgentLease(agent.id, rt.ownerId, LEASE_MS);
 }
 

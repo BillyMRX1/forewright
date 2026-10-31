@@ -15,7 +15,8 @@ import { browserOpener, parseGuiArgs } from "../cli/gui.js";
 import { ValidationError } from "../core/errors.js";
 import { ClientApi } from "./api.js";
 import { MAX_LINE_BYTES } from "./server.js";
-import { type Harness, settle, startHarness, waitFor } from "./test-harness.js";
+import { type Harness, hire, settle, startHarness, waitFor } from "./test-harness.js";
+import { choosePty } from "../providers/pty.js";
 import { GuiPortBusyError, WebBridge, hostnameOf } from "./web-bridge.js";
 
 // ---------------------------------------------------------------- helpers
@@ -603,6 +604,39 @@ test("autostart: with autostart on, the service starts the bridge on the configu
     const again = await h.client.request("gui.start", {});
     assert.equal(again.url, bridge.url);
   } finally {
+    await h.close();
+  }
+});
+
+test("terminals through the bridge: the methods work and terminal output reaches only the attached browser", { skip: (await choosePty()).backend ? false : "no pseudo-terminal backend here" }, async () => {
+  const h = await startHarness();
+  const { bridge, port, token } = await bridgeFor(h);
+  try {
+    await settle(h);
+    const ada = hire(h, "Ada");
+    const viewer = await WsClient.open(port);
+    await viewer.hello(token);
+    const bystander = await WsClient.open(port);
+    await bystander.hello(token);
+    const attached = await viewer.request("terminal.attach", { projectId: h.projectId, agentId: ada.id, cols: 80, rows: 24 });
+    assert.equal(attached.error, undefined, JSON.stringify(attached.error));
+    const terminalId = (attached.result as { terminal: { terminalId: string } }).terminal.terminalId;
+    const output = (c: WsClient): string =>
+      c.frames.filter((f) => f.method === "terminal" && (f.params as { terminalId: string }).terminalId === terminalId).map((f) => (f.params as { data?: string }).data ?? "").join("");
+    assert.equal((await viewer.request("terminal.input", { terminalId, data: "via the browser\r" })).error, undefined);
+    await waitFor(() => output(viewer).includes("fake-echo: via the browser"), "the echo on the attached browser");
+    assert.equal((await viewer.request("terminal.resize", { terminalId, cols: 90, rows: 25 })).error, undefined);
+    const listed = await bystander.request("terminal.list", { projectId: h.projectId });
+    assert.deepEqual((listed.result as { terminals: Array<{ terminalId: string }> }).terminals.map((t) => t.terminalId), [terminalId]);
+    // The other browser never attached: it gets no output and cannot type into the terminal.
+    assert.equal(bystander.frames.some((f) => f.method === "terminal"), false);
+    assert.equal((await bystander.request("terminal.input", { terminalId, data: "x\r" })).error?.data?.code, "not_found");
+    assert.equal((await viewer.request("terminal.detach", { terminalId })).error, undefined);
+    assert.equal(h.rt.terminals.isOpen(ada.id), false);
+    viewer.close();
+    bystander.close();
+  } finally {
+    await bridge.stop();
     await h.close();
   }
 });

@@ -9,6 +9,7 @@ import { NOT_GIT_MARKER } from "./project-runtime.js";
 import { dispatchReviews } from "./review.js";
 import { integrateNext } from "./integration.js";
 import { dispatchWork } from "./workers.js";
+import { settleContracts } from "./employment.js";
 import { blockingHold, evaluateBudgets } from "./budgets.js";
 import { runDueRoutines, runHeartbeat } from "./automation.js";
 import { liftRoutingBlocks, localWaitPending } from "./routing.js";
@@ -90,6 +91,8 @@ export class Scheduler {
       return;
     }
     store.refreshReadiness();
+    // Before anything is dispatched: a contract agent whose end is met gets no new run.
+    settleContracts(rt);
     rt.clearExpiredQuota();
     evaluateBudgets(rt);
     this.automate(true);

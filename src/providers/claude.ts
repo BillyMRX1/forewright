@@ -2,9 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
-  EngineId, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth, RunHandle, RunOutcome, RunRequest,
+  EngineId, InteractiveCommand, InteractiveRequest, McpServerSpec, NormalizedEvent, PermissionProfile, ProviderAdapter, ProviderCapabilities, ProviderHealth,
+  RunHandle, RunOutcome, RunRequest,
 } from "../core/types.js";
-import { claudeIsolation } from "./isolation.js";
+import { claudeIsolation, INTERACTIVE_TERM_ENV } from "./isolation.js";
 import { capture, resolveEngineBinary } from "./probe-util.js";
 import { childEnv } from "./process.js";
 import { truncate } from "./redact.js";
@@ -125,39 +126,61 @@ export class ClaudeAdapter implements ProviderAdapter {
     return health;
   }
 
-  start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {
+  /**
+   * What a headless run and an attached terminal share: the binary, the isolated environment and the MCP config
+   * file. An attached CLI is never less isolated than a run because both come from here.
+   */
+  private prepareLaunch(mcpServers: readonly McpServerSpec[] | undefined, extraEnv: Record<string, string>): {
+    bin: string; isolationArgs: string[]; env: Record<string, string>; secrets: string[]; mcpFile: string | null; cleanup: () => void;
+  } {
     const bin = this.resolveBin() ?? "claude";
     const iso = claudeIsolation({ loadInstructionFiles: this.opts.loadInstructionFiles ?? false });
-    const { env, secrets } = childEnv(this.baseEnv, { ...iso.env, ...(req.env ?? {}) }, { allowApiBilling: this.opts.allowApiBilling ?? false });
+    const { env, secrets } = childEnv(this.baseEnv, { ...iso.env, ...extraEnv }, { allowApiBilling: this.opts.allowApiBilling ?? false });
 
     let mcpFile: string | null = null;
     let runDir: string | null = null;
-    const mcpSecrets: string[] = [];
-    if (req.mcpServers && req.mcpServers.length > 0) {
+    if (mcpServers && mcpServers.length > 0) {
       runDir = fs.mkdtempSync(path.join(this.opts.runsDir ?? os.tmpdir(), "forewright-claude-run-"));
       fs.chmodSync(runDir, 0o700);
       mcpFile = path.join(runDir, "mcp.json");
       const servers: Record<string, unknown> = {};
-      for (const s of req.mcpServers) {
+      for (const s of mcpServers) {
         servers[s.name] = { command: s.command, args: s.args, env: s.env };
-        mcpSecrets.push(...Object.values(s.env));
+        secrets.push(...Object.values(s.env));
       }
       fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
     }
-
-    const args = buildClaudeArgs(req, iso.args, mcpFile);
-    const parser = new ClaudeStreamParser(req, makeEmitter(req, onEvent, [...secrets, ...mcpSecrets]), [...secrets, ...mcpSecrets]);
-    return runPlan(req, {
-      bin, args, stdin: req.prompt, cwd: req.cwd, env, timeoutMs: req.timeoutMs, parser,
+    const dir = runDir;
+    return {
+      bin, isolationArgs: iso.args, env, secrets, mcpFile,
       cleanup: () => {
-        if (runDir) fs.rmSync(runDir, { recursive: true, force: true });
+        if (dir) fs.rmSync(dir, { recursive: true, force: true });
       },
+    };
+  }
+
+  start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle {
+    const launch = this.prepareLaunch(req.mcpServers, req.env ?? {});
+    const args = buildClaudeArgs(req, launch.isolationArgs, launch.mcpFile);
+    const parser = new ClaudeStreamParser(req, makeEmitter(req, onEvent, launch.secrets), launch.secrets);
+    return runPlan(req, {
+      bin: launch.bin, args, stdin: req.prompt, cwd: req.cwd, env: launch.env, timeoutMs: req.timeoutMs, parser,
+      cleanup: launch.cleanup,
     });
+  }
+
+  /** `claude --resume <id>` (or plain `claude` without a session) with the same isolation, MCP config and permission flags as a run. */
+  interactive(req: InteractiveRequest): InteractiveCommand {
+    const launch = this.prepareLaunch(req.mcpServers, INTERACTIVE_TERM_ENV);
+    return { bin: launch.bin, args: buildClaudeInteractiveArgs(req, launch.isolationArgs, launch.mcpFile), env: launch.env, cleanup: launch.cleanup };
   }
 }
 
-export function buildClaudeArgs(req: RunRequest, isolationArgs: string[], mcpFile: string | null): string[] {
-  const args = ["-p", "--output-format", "stream-json", "--verbose", ...isolationArgs];
+type SessionFlags = Pick<RunRequest, "model" | "resumeSessionId" | "systemPrompt" | "permission" | "mcpServers"> & { maxTurns?: number };
+
+/** The flags after the output mode, in one order for runs and terminals. */
+function claudeSessionArgs(req: SessionFlags, isolationArgs: string[], mcpFile: string | null): string[] {
+  const args = [...isolationArgs];
   if (req.model) args.push("--model", req.model);
   if (req.resumeSessionId) args.push("--resume", req.resumeSessionId);
   if (req.maxTurns !== undefined) args.push("--max-turns", String(req.maxTurns));
@@ -165,6 +188,15 @@ export function buildClaudeArgs(req: RunRequest, isolationArgs: string[], mcpFil
   if (mcpFile) args.push("--mcp-config", mcpFile);
   args.push(...permissionArgs(req.permission, (req.mcpServers ?? []).map((m) => m.name)));
   return args;
+}
+
+export function buildClaudeArgs(req: RunRequest, isolationArgs: string[], mcpFile: string | null): string[] {
+  return ["-p", "--output-format", "stream-json", "--verbose", ...claudeSessionArgs(req, isolationArgs, mcpFile)];
+}
+
+/** No `-p`, no stream-json and no turn limit: Billy drives the session. */
+export function buildClaudeInteractiveArgs(req: InteractiveRequest, isolationArgs: string[], mcpFile: string | null): string[] {
+  return claudeSessionArgs(req, isolationArgs, mcpFile);
 }
 
 // ---------------------------------------------------------------- stream-json parser

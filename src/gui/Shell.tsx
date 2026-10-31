@@ -23,15 +23,18 @@ const Skills = lazy(() => import("./views/Skills.js").then((m) => ({ default: m.
 const Inbox = lazy(() => import("./views/Inbox.js").then((m) => ({ default: m.Inbox })));
 const Team = lazy(() => import("./views/Team.js").then((m) => ({ default: m.Team })));
 const Settings = lazy(() => import("./views/Settings.js").then((m) => ({ default: m.Settings })));
+const ProjectMap = lazy(() => import("./views/Map.js").then((m) => ({ default: m.ProjectMap })));
+const TerminalPanel = lazy(() => import("./terminal.js").then((m) => ({ default: m.TerminalPanel })));
 const Kickoff = lazy(() => import("./views/Kickoff.js").then((m) => ({ default: m.Kickoff })));
 
-export type ViewId = "home" | "cto" | "chat" | "tasks" | "team" | "skills" | "inbox" | "kickoff" | "settings";
+export type ViewId = "home" | "cto" | "chat" | "tasks" | "map" | "team" | "skills" | "inbox" | "kickoff" | "settings";
 
 export const VIEWS: ReadonlyArray<{ id: ViewId; label: string; soon: string }> = [
   { id: "home", label: "Home", soon: "An overview of the project: what needs you, what is running and what is done." },
   { id: "cto", label: "CTO", soon: "" },
   { id: "chat", label: "Chat", soon: "" },
   { id: "tasks", label: "Tasks", soon: "The task board, with each task's state, owner and evidence." },
+  { id: "map", label: "Map", soon: "Where every task is in the flow, and which agent holds it." },
   { id: "team", label: "Team", soon: "Your agents, what each one is doing, and their engines." },
   { id: "skills", label: "Skills", soon: "" },
   { id: "inbox", label: "Inbox", soon: "Decisions that wait for you, such as approvals and questions." },
@@ -44,6 +47,7 @@ export const HINTS: Record<ViewId, string[]> = {
   chat: ["Enter send", "Shift+Enter new line", "@ mention", "Esc close thread"],
   home: ["Click a row under Needs you to open it", "Esc close dialogs"],
   tasks: ["Arrow keys move between tasks", "Enter opens a task", "Esc back to the list", "Esc close dialogs"],
+  map: ["Tab moves between tasks and agents", "Enter opens the focused one", "Scroll sideways inside the map on narrow screens", "Esc close dialogs"],
   team: ["Tab moves between cards and buttons", "Space or Enter opens Memory notes", "Esc close dialogs"],
   skills: ["Tab moves between cards and buttons", "Enter opens a button", "Esc close dialogs"],
   inbox: ["Arrow keys move through the list", "Enter opens an item", "Esc goes back", "Esc close dialogs"],
@@ -214,6 +218,7 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   const [focus, setFocus] = useState<Focus | null>(null);
+  const [terminal, setTerminal] = useState<{ agentId: string; name: string } | null>(null);
   const focusNonce = useRef(0);
   const triedRestore = useRef(false);
   const toastId = useRef(0);
@@ -300,6 +305,7 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     writeStore(LAST_PROJECT, p.root);
     setProject(p);
     setRuntime(null);
+    setTerminal(null);
     setPicking(false);
     setPickNotice(null);
   };
@@ -331,6 +337,7 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
               setPicking(false);
             },
             openPicker: () => setPicking(true),
+            openTerminal: (agentId, name) => setTerminal({ agentId, name }),
           }
         : null,
     [rpc, project, conn, runtime, notify, reloadKey, focus],
@@ -369,6 +376,8 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
     body = <Home key={project.projectId} />;
   } else if (view === "tasks" && project) {
     body = <Tasks key={project.projectId} />;
+  } else if (view === "map" && project) {
+    body = <ProjectMap key={project.projectId} />;
   } else if (view === "team" && project) {
     body = <Team key={project.projectId} />;
   } else if (view === "skills" && project) {
@@ -399,6 +408,17 @@ export function Root({ rpc }: { rpc: RpcClient }): ReactNode {
       <HintBar hints={showPicker ? ["Enter open the folder", "Tab next field"] : HINTS[view]} />
       <Toasts toasts={toasts} />
       {projectValue ? <DesktopNotifier /> : null}
+      {projectValue && terminal ? (
+        <Suspense
+          fallback={
+            <div className="term-panel" role="status">
+              <p className="muted pad">Loading the terminal.</p>
+            </div>
+          }
+        >
+          <TerminalPanel key={`${projectValue.projectId}:${terminal.agentId}`} agentId={terminal.agentId} agentName={terminal.name} onClose={() => setTerminal(null)} />
+        </Suspense>
+      ) : null}
     </div>
   );
   if (!projectValue) return frame;

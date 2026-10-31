@@ -64,6 +64,47 @@ export interface Agent {
   skills: string[];
   /** Research agents only: Billy allowed it to read the vetted skill sources on the web. */
   webResearch: boolean;
+  /** Permanent: a long-lived owner of an area. Contract: hired for one task or milestone, retired when it is met. */
+  employment: Employment;
+  /** The CTO's (or Billy's) one line on why this employment type; null for agents from before employment types. */
+  employmentReason: string | null;
+  /** What ends a contract; null for a permanent agent. */
+  contractEnd: ContractEnd | null;
+}
+
+export type Employment = "permanent" | "contract";
+export const EMPLOYMENTS: readonly Employment[] = ["permanent", "contract"];
+/** The most an employment reason may hold, in characters. */
+export const EMPLOYMENT_REASON_MAX = 200;
+
+/** A contract ends when this task is done, or when this milestone is delivered. */
+export type ContractEnd = { kind: "task"; taskId: string } | { kind: "milestone"; milestoneId: string };
+/** The same, with the short id (T-4 or M-2) resolved for display. */
+export type ContractEndView = ContractEnd & { shortId: string };
+
+/**
+ * Computed from the milestone's tasks, never set by an agent: in_review while any task is in review (that covers
+ * integration, which runs while the task is in review), delivered once every task that is not cancelled is done.
+ */
+export type MilestoneState = "open" | "in_review" | "delivered" | "cancelled";
+
+/** A deliverable of one agent: tasks that make it up and the PRD requirements it delivers. */
+export interface Milestone {
+  id: string;
+  shortId: string;
+  agentId: string;
+  title: string;
+  requirementKeys: string[];
+  taskIds: string[];
+  dueAt: string | null;
+  state: MilestoneState;
+  /** dueAt has passed and the milestone is not delivered or cancelled (computed on read). */
+  overdue: boolean;
+  /** Tasks that are done, of the tasks that are not cancelled. */
+  tasksDone: number;
+  tasksTotal: number;
+  createdAt: string;
+  deliveredAt: string | null;
 }
 
 /** The permission a skill needs from the agent that uses it. Tools always need workspace_write. */
