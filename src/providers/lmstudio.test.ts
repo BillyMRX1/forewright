@@ -178,3 +178,46 @@ test("LM Studio native discovery ignores proxy settings and refuses HTTP redirec
     assert.equal(unexpected, 0, "neither the proxy nor redirect destination received a request");
   } finally { server.close(); trap.close(); }
 });
+
+test("live tool capability verification requires structured arguments and tool-result consumption", async () => {
+  const { verifyLmstudioTools } = await import("./lmstudio.js");
+  let calls = 0;
+  await verifyLmstudioTools("fallback-model", async (body) => {
+    calls++;
+    const messages = body["messages"] as Array<Record<string, unknown>>;
+    if (calls === 1) {
+      const value = /forewright-[a-f0-9-]+/.exec(messages[0]!["content"] as string)![0];
+      return { model: "fallback-model", choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "echo-1", type: "function", function: { name: "forewright_echo", arguments: JSON.stringify({ value }) } }] } }] };
+    }
+    const value = JSON.parse(messages.find((m) => m["role"] === "tool")!["content"] as string).value;
+    return { model: "fallback-model", choices: [{ message: { content: value } }] };
+  });
+  assert.equal(calls, 2);
+  await assert.rejects(verifyLmstudioTools("bad", async () => ({ choices: [{ message: { content: "I can use tools" } }] })), /structured tool call/);
+  await assert.rejects(verifyLmstudioTools("bad", async () => ({ model: "different" })), /different model/);
+});
+
+test("a loaded model with negative capability metadata becomes ready only after a live tool round trip", macOnly, async () => {
+  const id = "fallback-proven";
+  let posts = 0;
+  const fetcher = (async (url: string, options?: RequestInit) => {
+    assert.ok(url.startsWith("http://127.0.0.1:1234/"));
+    if (!options?.body) return Response.json({ models: [{ ...model, key: id, capabilities: { trained_for_tool_use: false }, loaded_instances: [{ id, config: { context_length: 32768 } }] }] });
+    posts++;
+    const body = JSON.parse(options.body as string);
+    if (body.tool_choice === "required") {
+      const value = /forewright-[a-f0-9-]+/.exec(body.messages[0].content)![0];
+      return Response.json({ model: id, choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "test", type: "function", function: { name: "forewright_echo", arguments: JSON.stringify({ value }) } }] } }] });
+    }
+    return Response.json({ model: id, choices: [{ message: { content: JSON.parse(body.messages.find((m: { role: string }) => m.role === "tool").content).value } }] });
+  }) as typeof fetch;
+  const { adapter, home } = setup("", fetcher);
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ lmstudio: { model: id } }));
+  const health = await adapter.probe();
+  assert.deepEqual(health.models, [id]);
+  assert.equal(health.local?.state, "ready");
+  assert.equal(posts, 2);
+  const result = await adapter.start(baseRequest({ permission: "workspace_write" }), () => {}).done;
+  assert.equal(result.state, "succeeded"); assert.equal(result.execution?.model, id);
+  assert.equal(posts, 2, "a recent proof is reused for five minutes, not replaced with a hard-coded capability override");
+});

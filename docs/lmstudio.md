@@ -4,6 +4,18 @@
 
 Forewright's `lmstudio` engine runs **OpenCode as the coding harness** with **LM Studio as the local inference provider**. It is a worker option, distinct from generic `opencode` and from `hearthwork`. Forewright still creates the worktree, records the run and model, commits changes, runs checks, requests independent review, and applies the existing integration and merge approvals. Agent completion is not task acceptance.
 
+## Onboarding and Settings
+
+Run `/setup`. On **Your tools**, LM Studio is visible even if its server or coding harness is unavailable. Press **l** (or select an unavailable LM Studio row) to configure it. Edit the loopback endpoint and press Enter to discover models; an optional absolute OpenCode path is available. Move to a loaded model and select it with Space. If LM Studio does not advertise tool support, saving runs an inert tool-call/result round trip first; only a successful check enables it. Select **Save local-only worker** to save an explicit model, local-only execution and one worker slot, then complete the wizard to allow the worker for this project. LM Studio cannot become the CTO and is never silently selected by recommended defaults.
+
+If the installed OpenCode is v2 or missing, move out of the endpoint/path fields, press **i**, then **i** again to confirm installation of a private compatible **OpenCode 1.19.5**. Forewright downloads only that coding harness into `<Forewright home>/provider-tools/lmstudio`; your global CLI, credentials and LM Studio server are preserved. Installation runs asynchronously with status in the form. It never downloads a model, starts LM Studio or changes its server settings. Load the desired model in LM Studio yourself and check again.
+
+In the browser/desktop app, open **Settings → LM Studio local worker setup → Set up LM Studio**. The form provides endpoint checking, model selection, an optional binary path, execution policy, worker concurrency and timeout. The install button requires a separate confirmation. After saving, tick **LM Studio (Local OpenCode)** under **Worker engines**, along with your chosen independent cloud reviewer. These server settings are shared across projects; project permissions remain separate. Changes are rejected while an LM Studio worker is active.
+
+`forewright config lmstudio` displays the saved local settings and points back to setup. An explicit `lmstudio.binary` path takes precedence; otherwise Forewright uses its private installed harness when present, then PATH. This permits an existing OpenCode v2 to coexist with the supported local worker harness.
+
+For self-development in a separate checkout, start Forewright from `/Users/billymrx/project/forewright-dogfood`. That checkout has its own Git directory and no copied project marker, so it can have independent tasks and worktrees. Do not copy `.forewright/project.json` from the source checkout. A separate `FOREWRIGHT_HOME` is optional for isolating dogfood preferences.
+
 ## Prepare the Mac
 
 Requires macOS, Node 24+, Git, OpenCode **1.19.5** (the version exercised here), and an existing LM Studio server with the native `/api/v1/models` and OpenAI-compatible `/v1/chat/completions` endpoints. OpenCode v2 has a different config schema and shared-service behavior; this adapter targets v1, not v2. Install the harness with `npm install -g opencode-ai@1.19.5`. No inference runtime or model download is needed.
@@ -16,7 +28,7 @@ opencode --version
 curl --max-time 5 http://127.0.0.1:1234/api/v1/models
 ```
 
-Select an exact `loaded_instances[].id` from an LLM whose `capabilities.trained_for_tool_use` is `true`. Its loaded `config.context_length` must be reported. Installed but unloaded models appear in discovery but cannot execute. Forewright does not start/reconfigure the server, load models, or substitute another model. Load the model yourself in LM Studio. If an instance uses a custom identifier, use that identifier, not its downloaded model key. Different requested IDs are never aliased to whichever model happens to be resident.
+Select an exact `loaded_instances[].id` from a loaded LLM. Advertised tool support is accepted; otherwise Forewright tests an actual structured tool call and tool-result consumption before allowing execution. Successful fallback-tool proofs are cached for five minutes per endpoint/model/context, then rechecked when selected. Its loaded `config.context_length` must be reported. Installed but unloaded models appear in discovery but cannot execute. Forewright does not start/reconfigure the server, load models, or substitute another model. Load the model yourself in LM Studio. If an instance uses a custom identifier, use that identifier, not its downloaded model key. Different requested IDs are never aliased to whichever model happens to be resident.
 
 The real demonstration on 2026-11-02 used the already-installed **`qwen/qwen3.8-27b`**, MLX 8-bit, loaded at **32,768 tokens**, parallelism 1. Model IDs on another machine may differ. The direct coding test confirmed actual tool use, beyond the server's advertised capability.
 
@@ -84,3 +96,5 @@ FOREWRIGHT_HOME="<DEMO_ROOT>/home" node /absolute/path/to/forewright/dist/cli/ma
 For independent request evidence, inspect LM Studio's server logs (normally `~/.lmstudio/server-logs/YYYY-MM/YYYY-MM-DD*.log`) or use `lms log stream`. Correlate the task timestamps, model ID, chat completion requests and tool messages with Forewright's persisted run log. Token usage/cost reported by OpenCode is recorded; no cloud dollar savings are invented.
 
 Configuration references: [LM Studio server](https://lmstudio.ai/docs/developer/core/server), [native model metadata](https://lmstudio.ai/docs/developer/rest/list), [OpenCode v1 providers / LM Studio](https://opencode.ai/docs/providers/#lm-studio), and the differing [OpenCode v2 provider schema](https://opencode.ai/v2/docs/providers) / [model selection](https://opencode.ai/v2/docs/models). Config and flags were checked against installed OpenCode 1.19.5 and its tagged source rather than applying v2 examples to v1.
+
+DeepSeek note: `deepseek-v4-flash-0731` can report `trained_for_tool_use: false` while returning valid tool calls. The adapter verifies behavior rather than treating that metadata as a definitive veto. Selecting or saving such a model performs small local inference requests for readiness checking; it does not change LM Studio server or model settings.

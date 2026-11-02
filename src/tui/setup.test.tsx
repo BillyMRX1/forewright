@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { FakeClient } from "./fake-client.js";
+import { LmstudioSetup } from "./lmstudio-setup.js";
 import { SetupWizard } from "./setup.js";
 import { renderAt, type Harness } from "./test-harness.js";
 import { VIEW, closeAll, ctrl, down, enter, esc, hints, lines, mount, release, up } from "./test-support.js";
@@ -185,7 +186,7 @@ describe("setup wizard: pages", () => {
     assert.match(f, /\[!\] OpenCode\s+v1\.0\.0\s+NOT signed in/);
     assert.match(f, /fix: OpenCode is not logged in/);
     assert.match(f, /never switches you to pay-per-token billing/);
-    assert.match(hints(h), /space tick\s+r check again\s+enter next\s+esc back/);
+    assert.match(hints(h), /space tick \/ l local\s+r check again\s+enter next\s+esc back/);
   });
 
   it("an unknown login that is not Copilot says so and keeps the tool tickable", async () => {
@@ -793,4 +794,51 @@ describe("setup in the app", () => {
     assert.match(h.frame(), /r x a d \? \/ j k \[ \]|r x a d/);
     assert.equal(setCalls(api).length, 0);
   });
+});
+
+it("onboarding lists LM Studio even when unavailable and opens its setup with l", async () => {
+  const api = fakeWith([...mixedTools(), provider("lmstudio", false, { mcp: false, problem: "OpenCode v2 needs a compatible harness" })]);
+  const { h } = await wizard({ api });
+  await enter(h); await h.settle(150);
+  assert.match(h.frame(), /LM Studio/);
+  h.send("l"); await h.settle(150);
+  assert.match(h.frame(), /LM Studio setup/);
+  assert.ok(api.callsTo("lmstudio.inspect").length > 0);
+  await esc(h); await h.settle(100);
+  assert.match(h.frame(), /Your tools/);
+});
+
+it("onboarding saves an explicit discovered local model before enabling LM Studio for project workers", async () => {
+  const local = provider("lmstudio", true, { mcp: false, version: "1.19.5", method: "local model", models: ["qwen-local"] });
+  local.health.local = { running: true, harness: "opencode", model: null, selectedModel: null, context: null, slots: 1, active: 0, queued: null, state: "unavailable", runtime: "LM Studio", models: [{ id: "qwen-local", loaded: true, toolCall: true, context: 32768 }] };
+  const api = fakeWith([...mixedTools(), local]);
+  const { h } = await wizard({ api });
+  await enter(h); h.send("l"); await h.settle(150);
+  await enter(h); await h.settle(100); // inspect endpoint, focus the model list
+  h.send(" "); await h.settle(80); // explicitly select qwen-local
+  await down(h); await enter(h); await h.settle(300); // save local configuration
+  const saved = api.callsTo("lmstudio.save")[0]?.params as { settings: Record<string, unknown> };
+  assert.equal(saved.settings["model"], "qwen-local");
+  assert.equal(saved.settings["executionMode"], "local-only");
+  assert.equal(saved.settings["maxConcurrentWorkers"], 1);
+  assert.match(h.frame(), /Your tools/);
+  for (let i = 0; i < 6 && events.finished === 0; i++) { await enter(h); await h.settle(80); }
+  assert.equal(events.finished, 1);
+  assert.ok((written(api)["workers.engines"] as string[]).includes("lmstudio"));
+  assert.notEqual(written(api)["ctoEngine"], "lmstudio");
+});
+
+
+it("private harness installation requires confirmation in the terminal setup form", async () => {
+  const api = fakeWith(mixedTools());
+  const h = renderAt(<LmstudioSetup api={api} width={100} height={24} onDone={() => {}} onCancel={() => {}} />, 100, 24);
+  open.push(h); await h.settle(150);
+  h.send("i"); await h.settle(80);
+  assert.equal(api.callsTo("lmstudio.install").length, 0);
+  assert.match(h.frame(), /confirm installation/);
+  h.send("n"); await h.settle(80);
+  assert.equal(api.callsTo("lmstudio.install").length, 0);
+  h.send("i"); await h.settle(80); h.send("i"); await h.settle(80);
+  assert.equal(api.callsTo("lmstudio.install").length, 1);
+  assert.deepEqual(api.callsTo("lmstudio.install")[0]?.params, { confirm: true });
 });
