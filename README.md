@@ -4,6 +4,10 @@
 
 Agents are the coding command line tools you already use (Claude Code, Codex, Antigravity `agy`, OpenCode and GitHub Copilot CLI), run through their supported non-interactive interfaces. Role, engine, model and permissions are separate settings, so a Claude CTO can direct Codex, OpenCode or Copilot workers.
 
+## LM Studio local coding workers
+
+On macOS, allow the **LM Studio (Local OpenCode)** worker to implement bounded tasks with an explicitly selected loaded local model. A cloud CTO can assign it normal tasks; Forewright owns worktrees, checks, independent review and approval gates. Local-only mode strips cloud credentials, isolates OpenCode configuration and restricts the worker network to the LM Studio loopback port. Generic OpenCode and Hearthwork keep their existing behavior. See [configuration, UI steps, isolation limits and the real calculator demonstration](docs/lmstudio.md).
+
 ## Requirements
 
 - macOS, Linux (including a headless server, see "Running on a Linux server") and native Windows are supported. Linux support is new: the logic is covered by tests with the platform injected, and has not yet been run end to end on a real server.

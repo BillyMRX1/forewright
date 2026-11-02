@@ -6,6 +6,8 @@ export function localStatusWords(l: LocalModelStatus): string {
   const agent = l.harness ? `agent ${l.harness}` : "no coding agent installed";
   if (!l.running) return `no model running, ${agent}`;
   return [
+    l.provider ? `${l.backend ?? "unknown"} backend ${l.provider}${l.endpoint ? ` at ${l.endpoint}` : ""}` : null,
+    l.selectedModel ? `selected ${l.selectedModel}` : null,
     l.model ? `model ${l.model}` : "model unknown",
     l.context !== null ? `context ${l.context.toLocaleString("en-US")}` : null,
     l.slots !== null ? `${l.active ?? 0} of ${l.slots} slots busy${l.queued ? `, ${l.queued} waiting` : ""}` : null,

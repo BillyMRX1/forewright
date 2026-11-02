@@ -24,7 +24,7 @@ const SYSTEM = { kind: "system" } as const;
 const HUMAN = { kind: "human" } as const;
 
 const ENGINE_LABEL: Record<EngineId, string> = {
-  claude: "Claude Code", codex: "Codex", antigravity: "Antigravity", opencode: "OpenCode", copilot: "Copilot", hearthwork: "Hearthwork", fake: "the test double",
+  claude: "Claude Code", codex: "Codex", antigravity: "Antigravity", opencode: "OpenCode", copilot: "Copilot", hearthwork: "Hearthwork", lmstudio: "LM Studio (Local OpenCode)", fake: "the test double",
 };
 
 /** A client that views terminals: a socket connection (the web bridge relays one per browser). */

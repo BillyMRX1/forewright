@@ -34,11 +34,11 @@ export type RunState = (typeof RUN_STATES)[number];
 
 // ---------------------------------------------------------------- agents
 
-export type EngineId = "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "hearthwork" | "fake";
+export type EngineId = "claude" | "codex" | "antigravity" | "opencode" | "copilot" | "hearthwork" | "lmstudio" | "fake";
 /** Real engines an agent can be hired on (the fake adapter is for tests only). */
-export const LIVE_ENGINES = ["claude", "codex", "antigravity", "opencode", "copilot", "hearthwork"] as const satisfies readonly EngineId[];
+export const LIVE_ENGINES = ["claude", "codex", "antigravity", "opencode", "copilot", "hearthwork", "lmstudio"] as const satisfies readonly EngineId[];
 /** Engines that run on a model served by Billy's own hardware: no subscription, never a default, allowed per project only by name. */
-export const LOCAL_ENGINES: readonly EngineId[] = ["hearthwork"];
+export const LOCAL_ENGINES: readonly EngineId[] = ["hearthwork", "lmstudio"];
 /** research: a read-only agent that finds skills on vetted sources and proposes them; it never writes code. */
 export type AgentRole = "cto" | "frontend" | "backend" | "mobile" | "testing" | "review" | "docs" | "integration" | "generalist" | "research";
 export type AgentLifecycle = "idle" | "working" | "waiting" | "paused" | "retired";
@@ -89,6 +89,11 @@ export interface ProviderHealth {
 
 /** A local model server's state as its probe saw it (Hearthwork: `hearthwork status --json`). */
 export interface LocalModelStatus {
+  provider?: string;
+  backend?: "local" | "cloud";
+  endpoint?: string;
+  selectedModel?: string | null;
+  models?: Array<{ id: string; loaded: boolean; toolCall: boolean; context: number | null }>;
   /** The coding agent the engine drives (Hearthwork: codex or opencode), or null when none is installed. */
   harness: string | null;
   /** A model host answered the probe. */
@@ -111,6 +116,9 @@ export interface LocalModelStatus {
  * (`harness`) is kept apart from the inference model behind it, so two CLIs on one model can be told apart.
  */
 export interface RunExecution {
+  provider?: string;
+  backend?: "local" | "cloud";
+  endpoint?: string;
   harness: string | null;
   model: string | null;
   /** Where the model ran: "local", or the name of the computer that shares it. */
@@ -253,6 +261,8 @@ export interface ProviderAdapter {
   /** Oldest engine CLI version that has every flag the adapter passes (checked by doctor and probes). */
   readonly minVersion?: string;
   probe(): Promise<ProviderHealth>;
+  /** Live free worker slots when this backend has shared local capacity. */
+  workerCapacity?(): number;
   start(req: RunRequest, onEvent: (e: NormalizedEvent) => void): RunHandle;
   /** The command line of the engine's interactive CLI. Engines without it cannot be attached to. */
   interactive?(req: InteractiveRequest): InteractiveCommand;

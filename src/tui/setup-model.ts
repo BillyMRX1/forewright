@@ -17,7 +17,7 @@ export const ENGINE_LABEL: Record<EngineId, string> = {
   claude: "Claude Code",
   codex: "Codex",
   copilot: "Copilot",
-  hearthwork: "Hearthwork",
+  hearthwork: "Hearthwork", lmstudio: "LM Studio (Local OpenCode)",
   antigravity: "Antigravity",
   opencode: "OpenCode",
   fake: "Test double",

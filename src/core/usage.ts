@@ -234,7 +234,7 @@ export function summarizeUsage(rows: UsageRow[], opts: { now: Date; days: number
       const used = byEngine.find((g) => g.key === "copilot")?.premiumRequests ?? 0;
       return { engine, reported: true, premiumRequestsUsed: used, note: `${used} premium request${used === 1 ? "" : "s"} used by Forewright runs; the amount left is ${NOT_REPORTED}` };
     }
-    if (engine === "hearthwork") return { engine, reported: false, note: "runs on your own local model: no subscription and nothing billed" };
+    if ((engine === "hearthwork" || engine === "lmstudio")) return { engine, reported: false, note: "runs on your own local model: no subscription and nothing billed" };
     return { engine, reported: false, note: NOT_REPORTED };
   });
 
