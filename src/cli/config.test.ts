@@ -93,3 +93,14 @@ test("config values reach a spawned engine child, the environment wins, and the 
   assert.ok(!everything.includes("topsecretpw"), "the proxy password must not appear in events or the outcome");
   assert.ok(everything.includes("connect failed via"), "the run output itself is still reported");
 });
+
+test("config lmstudio shows saved local settings and directs users to onboarding without writing", () => {
+  const home = tempDir();
+  const result = run(["lmstudio"], home);
+  assert.equal(result.code, 0);
+  assert.match(result.out, /http:\/\/127\.0\.0\.1:1234/);
+  assert.match(result.out, /Model: not selected/);
+  assert.match(result.out, /local-only/);
+  assert.match(result.out, /\/setup/);
+  assert.equal(fs.existsSync(path.join(home, "config.json")), false);
+});

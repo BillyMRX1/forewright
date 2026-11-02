@@ -4,6 +4,18 @@
 
 Forewright's `lmstudio` engine runs **OpenCode as the coding harness** with **LM Studio as the local inference provider**. It is a worker option, distinct from generic `opencode` and from `hearthwork`. Forewright still creates the worktree, records the run and model, commits changes, runs checks, requests independent review, and applies the existing integration and merge approvals. Agent completion is not task acceptance.
 
+## Onboarding and Settings
+
+Run `/setup`. On **Your tools**, LM Studio is visible even if its server or coding harness is unavailable. Press **l** (or select an unavailable LM Studio row) to configure it. Edit the loopback endpoint and press Enter to discover models; an optional absolute OpenCode path is available. Move to a loaded tool-capable model and select it with Space. Select **Save local-only worker** to save an explicit model, local-only execution and one worker slot, then complete the wizard to allow the worker for this project. LM Studio cannot become the CTO and is never silently selected by recommended defaults.
+
+If the installed OpenCode is v2 or missing, move out of the endpoint/path fields, press **i**, then **i** again to confirm installation of a private compatible **OpenCode 1.19.5**. Forewright downloads only that coding harness into `<Forewright home>/provider-tools/lmstudio`; your global CLI, credentials and LM Studio server are preserved. Installation runs asynchronously with status in the form. It never downloads a model, starts LM Studio or changes its server settings. Load the desired model in LM Studio yourself and check again.
+
+In the browser/desktop app, open **Settings → LM Studio local worker setup → Set up LM Studio**. The form provides endpoint checking, model selection, an optional binary path, execution policy, worker concurrency and timeout. The install button requires a separate confirmation. After saving, tick **LM Studio (Local OpenCode)** under **Worker engines**, along with your chosen independent cloud reviewer. These server settings are shared across projects; project permissions remain separate. Changes are rejected while an LM Studio worker is active.
+
+`forewright config lmstudio` displays the saved local settings and points back to setup. An explicit `lmstudio.binary` path takes precedence; otherwise Forewright uses its private installed harness when present, then PATH. This permits an existing OpenCode v2 to coexist with the supported local worker harness.
+
+For self-development in a separate checkout, start Forewright from `/Users/billymrx/project/forewright-dogfood`. That checkout has its own Git directory and no copied project marker, so it can have independent tasks and worktrees. Do not copy `.forewright/project.json` from the source checkout. A separate `FOREWRIGHT_HOME` is optional for isolating dogfood preferences.
+
 ## Prepare the Mac
 
 Requires macOS, Node 24+, Git, OpenCode **1.19.5** (the version exercised here), and an existing LM Studio server with the native `/api/v1/models` and OpenAI-compatible `/v1/chat/completions` endpoints. OpenCode v2 has a different config schema and shared-service behavior; this adapter targets v1, not v2. Install the harness with `npm install -g opencode-ai@1.19.5`. No inference runtime or model download is needed.

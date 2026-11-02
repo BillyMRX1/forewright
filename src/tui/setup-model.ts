@@ -11,7 +11,7 @@ import { engineRoleProblem } from "../runtime/engine-roles.js";
  * Static on purpose: Claude Code and Codex are the engines this product is built and tested against
  * most, Copilot and Antigravity come next, OpenCode last. Engines that are not ticked are skipped.
  */
-export const RECOMMENDED_ORDER: readonly EngineId[] = ["claude", "codex", "copilot", "antigravity", "opencode"];
+export const RECOMMENDED_ORDER: readonly EngineId[] = ["claude", "codex", "copilot", "antigravity", "opencode", "lmstudio"];
 
 export const ENGINE_LABEL: Record<EngineId, string> = {
   claude: "Claude Code",
@@ -27,7 +27,7 @@ export function engineLabel(engine: EngineId): string {
   return ENGINE_LABEL[engine];
 }
 
-export type ToolState = "ready" | "unknown_login" | "signed_out" | "missing";
+export type ToolState = "ready" | "unknown_login" | "signed_out" | "missing" | "setup_needed";
 
 export interface ToolRow {
   engine: EngineId;
@@ -48,6 +48,7 @@ export interface ToolRow {
 }
 
 function signInWords(p: ProviderStatus, state: ToolState): string {
+  if (p.health.engine === "lmstudio") return state === "ready" ? "local model ready" : "local worker setup needed";
   if (state === "missing") return "not installed";
   if (state === "signed_out") return "NOT signed in";
   const h = p.health;
@@ -64,8 +65,8 @@ function signInWords(p: ProviderStatus, state: ToolState): string {
 
 /** One row per real engine (test doubles are left out), in the recommended order. */
 export function toolRows(providers: ProviderStatus[]): ToolRow[] {
-  // Local model engines (Hearthwork) are never offered here: setup picks defaults, and those are opted into in Settings.
-  const real = providers.filter((p) => !p.health.isTestDouble && p.health.engine !== "fake" && !LOCAL_ENGINES.includes(p.health.engine));
+  // LM Studio is visible for explicit configuration; Hearthwork retains its Settings-only opt-in.
+  const real = providers.filter((p) => !p.health.isTestDouble && p.health.engine !== "fake" && (!LOCAL_ENGINES.includes(p.health.engine) || p.health.engine === "lmstudio"));
   const rank = (e: EngineId) => {
     const i = RECOMMENDED_ORDER.indexOf(e);
     return i < 0 ? RECOMMENDED_ORDER.length : i;
@@ -74,7 +75,8 @@ export function toolRows(providers: ProviderStatus[]): ToolRow[] {
     .sort((a, b) => rank(a.health.engine) - rank(b.health.engine))
     .map((p) => {
       const h = p.health;
-      const state: ToolState = h.binaryPath === null ? "missing" : h.authenticated === false ? "signed_out" : h.authenticated === "unknown" ? "unknown_login" : "ready";
+      const localReady = h.authenticated === true && h.local?.models?.some((m) => m.id === h.local?.selectedModel && m.loaded && m.toolCall);
+      const state: ToolState = h.engine === "lmstudio" && !localReady ? "setup_needed" : h.binaryPath === null ? "missing" : h.authenticated === false ? "signed_out" : h.authenticated === "unknown" ? "unknown_login" : "ready";
       const leadProblem = engineRoleProblem({ engine: h.engine, capabilities: p.capabilities }, "cto");
       return {
         engine: h.engine,
@@ -178,7 +180,7 @@ export function normalizeChoices(rows: ToolRow[], c: SetupChoices): SetupChoices
 
 /** What "Use recommended defaults" means, for these tools. */
 export function recommendedChoices(rows: ToolRow[]): SetupChoices {
-  const ticked = rows.filter((r) => r.usable).map((r) => r.engine);
+  const ticked = rows.filter((r) => r.usable && !LOCAL_ENGINES.includes(r.engine)).map((r) => r.engine);
   const first = ctoCandidates(rows, ticked)[0] ?? null;
   return normalizeChoices(rows, {
     ticked,
@@ -204,6 +206,7 @@ export function choicesFromSettings(rows: ToolRow[], current: { settings: Settin
   const backups = s.fallback.workers.length > 0 || s.fallback.cto.length > 0;
   return normalizeChoices(rows, {
     ...base,
+    ticked: [...base.ticked, ...s.workers.engines.filter((e) => LOCAL_ENGINES.includes(e))],
     cto: ctoChosen ? (current.ctoEngine as EngineId) : base.cto,
     ctoModel: ctoChosen ? current.ctoModel : base.ctoModel,
     workers: s.workers.engines.length > 0 ? s.workers.engines : base.workers,

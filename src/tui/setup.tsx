@@ -2,9 +2,10 @@
 // usage limit, and how much agents may do alone. Plain pages with no boxes inside boxes: a bold
 // title, dim explanations, one accent for the selected row, and a hint bar at the bottom.
 //
-// The wizard has no text boxes, so no key here can be mistaken for typing. It owns the keyboard
-// while it is open (the app hands it over, see app.tsx) and writes only through settings.set.
+// The main pages own the keyboard. The optional local-worker form owns text entry
+// while it is open; project choices and shared server configuration use their respective RPC methods.
 
+import { LmstudioSetup } from "./lmstudio-setup.js";
 import { useEffect, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import type { EngineId } from "../core/types.js";
@@ -91,6 +92,7 @@ export function SetupWizard(props: SetupWizardProps) {
   const { api, width, height } = props;
   const [projectId, setProjectId] = useState<string | null>(props.projectId);
   const [created, setCreated] = useState(props.create === undefined);
+  const [localSetup, setLocalSetup] = useState(false);
   const [step, setStep] = useState<Step>(1);
   const [cursor, setCursor] = useState(0);
   const [health, setHealth] = useState<Health>({ status: "checking" });
@@ -148,7 +150,7 @@ export function SetupWizard(props: SetupWizardProps) {
           }
         } else {
           const wasUsable = new Set(before.filter((r) => r.usable).map((r) => r.engine));
-          const fresh = next.filter((r) => r.usable && !wasUsable.has(r.engine)).map((r) => r.engine);
+          const fresh = next.filter((r) => r.usable && r.engine !== "lmstudio" && !wasUsable.has(r.engine)).map((r) => r.engine);
           current = normalizeChoices(next, { ...prev, ticked: [...prev.ticked, ...fresh] });
         }
         if (id !== checkId.current || !mounted.current) return null;
@@ -313,6 +315,7 @@ export function SetupWizard(props: SetupWizardProps) {
   };
 
   useInput((input, key) => {
+    if (localSetup) return;
     if (key.ctrl && input === "c") {
       if (props.standalone) props.onCancel();
       return;
@@ -337,11 +340,13 @@ export function SetupWizard(props: SetupWizardProps) {
         return props.onCancel();
       }
       case 2: {
+        if (pressed === "l") return setLocalSetup(true);
         if (pressed === "r") return void check(true);
         if (health.status !== "ready" || choices === null) return;
         if (pressed === "space") {
           const row = rows[cursor];
           if (!row) return;
+          if (row.engine === "lmstudio" && !row.usable) return setLocalSetup(true);
           if (!row.usable) return setNotice(row.state === "missing" ? `${row.label} is not installed on this machine.` : `Sign in to ${row.label} first, then press r.`);
           update((c) => {
             const on = c.ticked.includes(row.engine);
@@ -409,6 +414,13 @@ export function SetupWizard(props: SetupWizardProps) {
     }
   });
 
+  if (localSetup) return <LmstudioSetup api={api} width={width} height={height} onCancel={() => setLocalSetup(false)} onDone={() => {
+    setLocalSetup(false);
+    void check(true).then((next) => {
+      if (next?.some((r) => r.engine === "lmstudio" && r.usable)) update((c) => ({ ...c, ticked: [...c.ticked, "lmstudio"], workers: [...c.workers, "lmstudio"] }));
+    });
+  }} />;
+
   // ---- drawing
   const margin = width >= 80 ? 4 : width >= 50 ? 2 : 1;
   const inner = Math.max(8, width - margin - 1);
@@ -447,7 +459,7 @@ export function SetupWizard(props: SetupWizardProps) {
       wrap("3. You describe what to build. The CTO writes a plan for you to approve.", {}, 2);
       blank();
       if (props.create && !created) wrap("This adds a small .forewright folder (hidden from git). Your code is not touched.", { dim: true });
-      else wrap("Setup changes only this project's settings. You can run it again with /setup.", { dim: true });
+      else wrap("Project choices save at the end. LM Studio server setup is shared and saved separately. Run setup again with /setup.", { dim: true });
       blank();
       step1Options().forEach((label, i) => choice(i, "", label, ""));
       hints = [`${arrows()} move`, "enter choose", `esc ${props.create && !created ? "quit" : "leave"}`];
@@ -456,7 +468,7 @@ export function SetupWizard(props: SetupWizardProps) {
     case 2: {
       if (health.status === "checking") text(`${spinner} Checking your tools${s.ellipsis}`, { color: palette.accent });
       else if (health.status === "error") wrap(`Could not check your tools: ${health.message}. Press r to try again.`, { color: palette.error });
-      else text(`Checked in ${health.seconds.toFixed(1)}s. Space ticks the tools Forewright may use.`, { dim: true });
+      else text(`Checked in ${health.seconds.toFixed(1)}s. Space ticks tools; l sets up LM Studio.`, { dim: true });
       blank();
       const nameW = Math.max(...rows.map((r) => r.label.length), 6) + 2;
       const verW = 10;
@@ -494,7 +506,7 @@ export function SetupWizard(props: SetupWizardProps) {
         wrap("Ticked tools can be the CTO, do the work, or be a backup.", { dim: true });
         wrap("Forewright never switches you to pay-per-token billing: API keys are removed from agents.", { dim: true });
       }
-      hints = [`${arrows()} move`, "space tick", "r check again", "enter next", "esc back"];
+      hints = [`${arrows()} move`, "space tick / l local", "r check again", "enter next", "esc back"];
       break;
     }
     case 3: {

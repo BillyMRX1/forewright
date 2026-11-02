@@ -1,3 +1,5 @@
+import type { LmstudioSettings } from "../providers/lmstudio.js";
+import type { HarnessInstallStatus } from "../providers/lmstudio-setup.js";
 // Client protocol between the TUI (or any client) and the Forewright service.
 // Transport: newline-delimited JSON-RPC 2.0 over the unix socket at paths.socketPath().
 // The first request on a connection must be `hello`. Agent tool bridges use
@@ -240,6 +242,10 @@ export interface Methods {
   /** Billy moves the task branch back to a checkpoint commit (or its base). Refused while a run is live, for a finished task, or with uncommitted changes. */
   "tasks.undoTo": { params: { projectId: string; taskId: string; sha: string }; result: UndoResult };
   "runs.log": { params: { projectId: string; runId: string; tailLines?: number }; result: { lines: string[]; path: string } };
+  "lmstudio.inspect": { params: { settings?: Partial<LmstudioSettings> }; result: { settings: LmstudioSettings; health: ProviderHealth } };
+  "lmstudio.save": { params: { settings: Partial<LmstudioSettings> }; result: { settings: LmstudioSettings; health: ProviderHealth } };
+  "lmstudio.install": { params: { confirm: boolean }; result: HarnessInstallStatus };
+  "lmstudio.installStatus": { params: Record<string, never>; result: HarnessInstallStatus };
   "providers.health": { params: { refresh?: boolean }; result: { providers: ProviderStatus[] } };
 
   // human actions

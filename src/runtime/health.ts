@@ -12,6 +12,9 @@ export class ProviderHealthCache {
     return this.cache.get(engine) ?? null;
   }
 
+  /** Store a fresh validated probe, without probing unrelated providers. */
+  remember(health: ProviderHealth): void { this.cache.set(health.engine, health); }
+
   all(): ProviderHealth[] {
     return [...this.cache.values()];
   }

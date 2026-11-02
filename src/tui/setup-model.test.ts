@@ -167,3 +167,17 @@ describe("what the choices write", () => {
     for (const bad of ["authority.autoLocalEdits", "authority.autoChecks", "authority.allowApiBilling"]) assert.ok(!keys.includes(bad));
   });
 });
+
+it("LM Studio is visible for explicit onboarding, never a default or CTO choice, and needs a selected loaded model", () => {
+  const local = status("lmstudio", true, { mcp: false, models: ["qwen-local"] });
+  local.health.local = { harness: "opencode", running: true, model: "qwen-local", selectedModel: "qwen-local", models: [{ id: "qwen-local", loaded: true, toolCall: true, context: 32768 }], context: 32768, slots: 1, active: 0, queued: null, state: "ready", runtime: "LM Studio" };
+  const found = toolRows([status("claude", true), local]);
+  assert.equal(found.find((r) => r.engine === "lmstudio")?.usable, true);
+  assert.deepEqual(recommendedChoices(found).ticked, ["claude"]);
+  const chosen = normalizeChoices(found, { ...recommendedChoices(found), ticked: ["claude", "lmstudio"], workers: ["lmstudio", "claude"] });
+  assert.ok(chosen.workers.includes("lmstudio"));
+  assert.deepEqual(ctoCandidates(found, chosen.ticked).map((r) => r.engine), ["claude"]);
+  local.health.local.selectedModel = null;
+  assert.equal(toolRows([local])[0]?.state, "setup_needed");
+  assert.equal(toolRows([local])[0]?.usable, false);
+});

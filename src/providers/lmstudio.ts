@@ -18,6 +18,7 @@ export function assertLmstudioHarnessVersion(version: string): void {
 }
 
 export interface LmstudioSettings {
+  binary?: string | null;
   endpoint: string;
   model: string | null;
   executionMode: "local-only" | "local-first";
@@ -38,7 +39,10 @@ export function lmstudioEndpoint(value: string): string {
 }
 
 export function readLmstudioSettings(home: string): LmstudioSettings {
-  const raw = readConfigFile(home)["lmstudio"] ?? {};
+  return parseLmstudioSettings(readConfigFile(home)["lmstudio"] ?? {});
+}
+
+export function parseLmstudioSettings(raw: unknown): LmstudioSettings {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new ProviderError("lmstudio configuration must be an object");
   const r = raw as Record<string, unknown>;
   const number = (key: string, fallback: number): number => {
@@ -46,11 +50,13 @@ export function readLmstudioSettings(home: string): LmstudioSettings {
     if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 1) throw new ProviderError(`lmstudio.${key} must be a positive integer`);
     return n;
   };
-  if (r["model"] !== undefined && (typeof r["model"] !== "string" || !r["model"].trim())) throw new ProviderError("lmstudio.model must be an explicit model ID");
+  if (r["model"] !== undefined && r["model"] !== null && (typeof r["model"] !== "string" || !r["model"].trim())) throw new ProviderError("lmstudio.model must be an explicit model ID");
+  if (r["binary"] !== undefined && r["binary"] !== null && (typeof r["binary"] !== "string" || !path.isAbsolute(r["binary"]))) throw new ProviderError("lmstudio.binary must be an absolute executable path");
   const executionMode = r["executionMode"] ?? "local-only";
   if (executionMode !== "local-only" && executionMode !== "local-first") throw new ProviderError("lmstudio.executionMode must be local-only or local-first");
   if (r["endpoint"] !== undefined && typeof r["endpoint"] !== "string") throw new ProviderError("lmstudio.endpoint must be a URL");
   return {
+    ...(r["binary"] ? { binary: r["binary"] as string } : {}),
     endpoint: lmstudioEndpoint((r["endpoint"] as string | undefined) ?? "http://127.0.0.1:1234"),
     model: (r["model"] as string | undefined) ?? null, executionMode,
     maxConcurrentWorkers: number("maxConcurrentWorkers", 1), timeoutMs: number("timeoutMs", 600_000), requestTimeoutMs: number("requestTimeoutMs", 10_000),
@@ -126,6 +132,7 @@ function localModelRequest(url: string, signal: AbortSignal): Promise<unknown> {
 export interface LmstudioAdapterOptions {
   forewrightHome: string;
   binary?: string;
+  settings?: LmstudioSettings;
   baseEnv?: NodeJS.ProcessEnv;
   /** Test seams; production always uses the OS sandbox on macOS. */
   fetch?: typeof fetch;
@@ -145,8 +152,13 @@ export class LmstudioAdapter implements ProviderAdapter {
   };
   private active = 0;
   constructor(private readonly opts: LmstudioAdapterOptions) {}
-  private bin(): string | null { return this.opts.binary ?? resolveEngineBinary("opencode", this.opts.baseEnv ?? process.env); }
-  workerCapacity(): number { return Math.max(0, readLmstudioSettings(this.opts.forewrightHome).maxConcurrentWorkers - this.active); }
+  private settings(): LmstudioSettings { return this.opts.settings ?? readLmstudioSettings(this.opts.forewrightHome); }
+  private bin(): string | null {
+    const s = this.settings();
+    const managed = path.join(this.opts.forewrightHome, "provider-tools", "lmstudio", "node_modules", ".bin", process.platform === "win32" ? "opencode.cmd" : "opencode");
+    return this.opts.binary ?? s.binary ?? (fs.existsSync(managed) ? managed : resolveEngineBinary("opencode", this.opts.baseEnv ?? process.env));
+  }
+  workerCapacity(): number { return Math.max(0, this.settings().maxConcurrentWorkers - this.active); }
   private async models(settings: LmstudioSettings, signal?: AbortSignal): Promise<LmstudioModel[]> {
     const discoverySignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(settings.requestTimeoutMs)]) : AbortSignal.timeout(settings.requestTimeoutMs);
     // node:http with agent:false never honors HTTP(S)_PROXY/NODE_USE_ENV_PROXY and never follows redirects.
@@ -158,7 +170,7 @@ export class LmstudioAdapter implements ProviderAdapter {
   async probe(): Promise<ProviderHealth> {
     const h: ProviderHealth = { engine: this.engine, binaryPath: this.bin(), version: null, authenticated: false, authMethod: "local model", models: [], modelsSource: "none", problems: [], checkedAt: new Date().toISOString(), isTestDouble: false, isolation: "n/a" };
     try {
-      const s = readLmstudioSettings(this.opts.forewrightHome);
+      const s = this.settings();
       h.local = { harness: h.binaryPath ? "opencode" : null, provider: "lmstudio", backend: "local", endpoint: s.endpoint, selectedModel: s.model,
         running: false, model: null, context: null, slots: s.maxConcurrentWorkers, active: this.active, queued: null, state: "offline", runtime: "LM Studio" };
       const models = await this.models(s);
@@ -192,7 +204,7 @@ export class LmstudioAdapter implements ProviderAdapter {
       const started = Date.now();
       let timer: NodeJS.Timeout | undefined;
       try {
-        const s = readLmstudioSettings(this.opts.forewrightHome);
+        const s = this.settings();
         const timeout = Math.min(req.timeoutMs, s.timeoutMs);
         timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
         if ((this.opts.platform ?? process.platform) !== "darwin") throw new ProviderError("LM Studio workers require macOS sandbox-exec; no unrestricted fallback is permitted");

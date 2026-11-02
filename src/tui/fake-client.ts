@@ -341,6 +341,18 @@ export class FakeClient implements ClientApi {
           return this.runtime();
         case "state.inbox":
           return { open: this.openDecisions, recent: [d.staleDecision] };
+        case "lmstudio.inspect":
+        case "lmstudio.save": {
+          const settings = { endpoint: "http://127.0.0.1:1234", model: null, executionMode: "local-only", maxConcurrentWorkers: 1, timeoutMs: 600000, requestTimeoutMs: 10000, ...(p["settings"] as object ?? {}) };
+          const local = d.providers.find((x) => x.health.engine === "lmstudio");
+          if (method === "lmstudio.save" && local?.health.local) {
+            local.health.local.selectedModel = settings.model as string | null;
+            local.health.local.model = settings.model as string | null;
+          }
+          return { settings, health: local?.health ?? { engine: "lmstudio", models: [], problems: ["LM Studio unavailable"] } };
+        }
+        case "lmstudio.install": return { state: "installing" };
+        case "lmstudio.installStatus": return { state: "ready" };
         case "providers.health":
           return { providers: d.providers };
         case "state.overview": {

@@ -2,6 +2,7 @@
 // (they come from src/tui/settings-model.ts, so the two cannot drift). Each control saves as soon as you change
 // it; when the service refuses a value its own plain text appears next to the control and the old value stays.
 
+import { LmstudioSetupCard } from "../lmstudio-setup.js";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { FallbackEntry, Limits } from "../../core/store-types.js";
@@ -410,6 +411,7 @@ export interface SettingsViewProps {
   errors: Record<string, string | undefined>;
   actions: SettingsActions;
   /** Sections that load their own data (the routines), shown last in the same scrolling column. */
+  localSetup?: ReactNode;
   children?: ReactNode;
 }
 
@@ -434,7 +436,7 @@ function ChecksBox({ value, onSave, error }: { value: string[]; onSave: (v: stri
   );
 }
 
-export function SettingsView({ data, errors, actions, children }: SettingsViewProps) {
+export function SettingsView({ data, errors, actions, children, localSetup }: SettingsViewProps) {
   const { settings, providers } = data;
   const [pendingCommit, setPendingCommit] = useState(false);
   const section = (group: Group | "Notifications" | "Chat", children: ReactNode, intro?: ReactNode) => (
@@ -526,6 +528,7 @@ export function SettingsView({ data, errors, actions, children }: SettingsViewPr
           <EngineCard key={p.health.engine} p={p} />
         ))}
       </ul>
+      {localSetup}
       <h3>CTO</h3>
       {items("Engines")}
       <Row settingKey="workers.engines" label="Worker engines" help="Engines the CTO may hire agents on. None ticked means any usable engine." error={errors["workers.engines"]}>
@@ -794,7 +797,7 @@ export function Settings() {
           {problem}
         </p>
       ) : null}
-      <SettingsView data={live.data} errors={errors} actions={actions}>
+      <SettingsView data={live.data} errors={errors} actions={actions} localSetup={<LmstudioSetupCard />}>
         <section className="card card-wide set-group" aria-label="Routines">
           <h2>Routines</h2>
           <p className="muted">{`Each routine sends its brief to the CTO on its schedule. ${SCHEDULE_HELP} One missed while the service was down runs once at start.`}</p>

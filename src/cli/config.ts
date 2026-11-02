@@ -1,3 +1,4 @@
+import { readLmstudioSettings } from "../providers/lmstudio.js";
 // `forewright config`: the user-level proxy and certificate settings, for machines where the proxy lives only
 // in the system settings and not in environment variables, and the GUI settings. Stored in <data folder>/config.json.
 import {
@@ -13,6 +14,7 @@ export const CONFIG_HELP = `forewright config: proxy and certificate settings fo
 
 Usage:
   forewright config                         show the current settings (logins are hidden)
+  forewright config lmstudio               show local worker settings; configure in /setup or GUI Settings
   forewright config proxy <url>             use this proxy, e.g. http://proxy.example.com:8080
   forewright config proxy --no-proxy <list> hosts that skip the proxy, e.g. localhost,.corp.example.com
   forewright config proxy --clear           remove the proxy settings
@@ -66,6 +68,19 @@ export function runConfig(args: string[], io: { out: (s: string) => void; err: (
   const file = networkConfigPath(home);
   if (what === undefined || what === "show") return (io.out(describeConfig(readNetworkConfig(home), file) + describeGui(readGuiConfig(home)) + `${describePhone(readPhoneConfig(home))}\n`), 0);
   if (what === "--help" || what === "-h" || what === "help") return (io.out(CONFIG_HELP), 0);
+  if (what === "lmstudio") {
+    if (rest.length !== 0) return usage("Configure LM Studio in /setup (Your tools, l) or GUI Settings. forewright config lmstudio shows the saved configuration.");
+    const s = readLmstudioSettings(home);
+    io.out(`LM Studio endpoint: ${s.endpoint}
+Model: ${s.model ?? "not selected"}
+Execution: ${s.executionMode}
+Local workers: ${s.maxConcurrentWorkers}
+Worker timeout: ${s.timeoutMs} ms
+OpenCode: ${s.binary ?? "automatic (private compatible harness preferred)"}
+Configure in /setup (Your tools, l) or GUI Settings.
+`);
+    return 0;
+  }
   if (what === "proxy") {
     if (rest.length === 1 && rest[0] === "--clear") {
       io.out(`Proxy settings cleared.\n${describeConfig(clearProxy(home), file)}`);

@@ -1,3 +1,4 @@
+import { inspectLmstudio, saveLmstudio, installLmstudioHarness, harnessInstallStatus } from "../providers/lmstudio-setup.js";
 // Client-facing JSON-RPC methods (the contract is protocol.ts). Read models
 // come straight from the Store; every action goes through the same domain
 // rules the agents use, with the human as the actor.
@@ -74,6 +75,9 @@ export class ClientApi {
     if (!h) throw new RpcError(-32601, "method_not_found", `The service does not know the method "${method}".`, { method });
     try {
       return await h(params, conn);
+    } catch (e) {
+      if (method.startsWith("lmstudio.") && e instanceof Error) throw new ValidationError(e.message);
+      throw e;
     } finally {
       for (const rt of this.d.runtimes.values()) rt.publish();
     }
@@ -104,6 +108,15 @@ export class ClientApi {
         return { health, capabilities: adapter!.capabilities, quotaUntil };
       }),
     );
+  }
+
+  private lmstudioPatch(p: P): Record<string, unknown> {
+    const value = p["settings"] ?? {};
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ValidationError("LM Studio settings must be an object");
+    return value as Record<string, unknown>;
+  }
+  private assertLocalIdle(): void {
+    if ([...this.d.runtimes.values()].some((rt) => [...rt.active.values()].some((a) => a.run.engine === "lmstudio"))) throw new ValidationError("Wait for active LM Studio workers to finish before changing their setup");
   }
 
   private build(): Record<string, Handler> {
@@ -263,6 +276,20 @@ export class ClientApi {
         const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter((l) => l !== "").slice(-tail) : [];
         return { lines, path: file };
       },
+      "lmstudio.inspect": (p) => inspectLmstudio(d.opts.forewrightHome, this.lmstudioPatch(p)),
+      "lmstudio.save": async (p) => {
+        this.assertLocalIdle();
+        const result = await saveLmstudio(d.opts.forewrightHome, this.lmstudioPatch(p), () => this.assertLocalIdle());
+        d.health.remember(result.health);
+        for (const rt of d.runtimes.values()) rt.scheduler.wake("health");
+        return result;
+      },
+      "lmstudio.install": (p) => {
+        if (p["confirm"] !== true) throw new ValidationError("Confirm installation of Forewright's private OpenCode 1.19.5 harness");
+        this.assertLocalIdle();
+        return installLmstudioHarness(d.opts.forewrightHome);
+      },
+      "lmstudio.installStatus": () => harnessInstallStatus(d.opts.forewrightHome),
       "providers.health": async (p) => ({ providers: await this.providerStatuses(null, p["refresh"] === true) }),
 
       "cto.send": async (p) => {
