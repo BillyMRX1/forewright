@@ -267,3 +267,7 @@ pnpm test       # builds, then runs node --test over dist/**/*.test.js
 ```
 
 Tests use temporary directories and a fake provider. They never touch your real data directory, `~/.claude`, `~/.codex` or any vault.
+
+## CTO repository access
+
+The CTO can use `get_git_snapshot` for local branch/status, recent commits and change statistics, and `read_github` for this project's issues, issue discussion, PRs, reviews and checks. GitHub reads use the daemon's existing `gh` login and are restricted to the project's `origin` on github.com. Run `gh auth login` in your terminal if needed. These tools expose fixed read operations rather than a shell; Git/GitHub writes and existing approval gates are unchanged. Retrieved text is bounded, redacted and marked as untrusted data.
