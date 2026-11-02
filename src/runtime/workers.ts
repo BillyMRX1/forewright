@@ -93,6 +93,7 @@ export function dispatchWork(rt: ProjectRuntime): void {
       continue;
     }
     if (res.wait) continue;
+    if ((rt.deps.adapters.get(res.engine)?.workerCapacity?.() ?? 1) <= 0) continue;
     if (!localEditsApproved(rt, t, agent)) continue;
     try {
       startWork(rt, t, agent, res);

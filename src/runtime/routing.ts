@@ -7,6 +7,7 @@
 // pass the health, role and API billing checks, and a local engine that is offline or busy never silently becomes a
 // cloud run: the task waits a bounded time, then only the backup order Billy wrote may take it, else it is blocked.
 // Every choice is stored with its reason (route_decision, event route.chosen). Numbers come from recorded rows only.
+import { readLmstudioSettings } from "../providers/lmstudio.js";
 import { readTaskOutcomes, type TaskOutcome } from "../core/outcomes.js";
 import type { Agent, FallbackEntry, RouteReason, Run, Task } from "../core/store-types.js";
 import { LOCAL_ENGINES, type AgentRole, type EngineId, type LocalModelStatus } from "../core/types.js";
@@ -356,8 +357,10 @@ export function workCandidates(rt: ProjectRuntime, task: Task, agent: Agent, h: 
   return allowedEngines(rt, agent).map((engine) => {
     const local = isLocal(engine);
     const health = rt.deps.health.cached(engine);
-    const model = engine === agent.engine ? agent.model : null;
-    const servedModel = local ? (health?.local?.model ?? null) : model;
+    const pinned = pinFor(rt, task, agent)?.entry;
+    const model = pinned?.engine === engine ? pinned.model ?? null : engine === agent.engine ? agent.model : null;
+    const selected = engine === "lmstudio" ? health?.local?.models?.find((m) => m.id === (model ?? health.local?.selectedModel)) : undefined;
+    const servedModel = engine === "lmstudio" ? selected?.id ?? model : local ? (health?.local?.model ?? null) : model;
     const notes: string[] = [];
     let excluded: string | null = engineUnavailable(rt, engine, role) ?? billingProblem(rt, engine);
     let quotaUntil: string | null | undefined;
@@ -371,7 +374,7 @@ export function workCandidates(rt: ProjectRuntime, task: Task, agent: Agent, h: 
     if (excluded === null && local && agent.permission !== "workspace_write") excluded = `${engine} needs the workspace_write permission`;
     let localNotReady: string | null = null;
     if (local) {
-      const l = health?.local;
+      const l = engine === "lmstudio" && health?.local ? { ...health.local, model: selected?.id ?? null, context: selected?.context ?? null, state: selected?.loaded && selected.toolCall ? "ready" : "unavailable" } : health?.local;
       if (excluded === null) {
         localNotReady = localReadiness(l);
         const need = estimatedPromptTokens(task);
@@ -440,12 +443,22 @@ const recordOf = (engine: EngineId, model: string | null, served: string | null,
  * With routing on, the answer carries a RouteRecord to store once the run exists, or says to wait, or to block.
  */
 export function routeWork(rt: ProjectRuntime, task: Task, agent: Agent): WorkRoute {
+  // A direct LM Studio assignment (or pin) is local-only unless the human explicitly enables local-first.
+  const pin = pinFor(rt, task, agent);
+  if ((pin?.entry.engine ?? agent.engine) === "lmstudio" && readLmstudioSettings(rt.deps.forewrightHome).executionMode === "local-only") {
+    const state = taskRouteState(rt, task.id);
+    if (state.failedRuns.length >= rt.store.getSettings().routing.localRetries) return { wait: false, block: `${ROUTING_BLOCK_PREFIX}: LM Studio local-only retry limit reached; human action is required. No cloud fallback.` };
+    const model = pin ? pin.entry.model ?? null : agent.model;
+    const summary = "Explicit LM Studio local-only assignment; cloud routing and fallback disabled";
+    return { wait: false, engine: "lmstudio", model, viaFallback: false, reason: summary,
+      ...(routingOn(rt) ? { route: recordOf("lmstudio", model, model ?? rt.deps.health.cached("lmstudio")?.local?.selectedModel ?? null, { summary, how: "pinned", taskType: agent.role, candidates: [] }, false) } : {}) };
+  }
   if (!routingOn(rt)) return resolveFor(rt, agent, "work");
   const choice = decideWork(rt, task, agent);
   const state = taskRouteState(rt, task.id);
   if (choice.kind !== "wait-local" && state.waitSince !== null) putState(rt, task.id, { ...state, waitSince: null });
   if (choice.kind === "run") {
-    const served = isLocal(choice.engine) ? (rt.deps.health.cached(choice.engine)?.local?.model ?? null) : null;
+    const served = choice.engine === "lmstudio" ? (choice.model ?? rt.deps.health.cached(choice.engine)?.local?.selectedModel ?? null) : isLocal(choice.engine) ? (rt.deps.health.cached(choice.engine)?.local?.model ?? null) : null;
     return { wait: false, engine: choice.engine, model: choice.model, viaFallback: false, reason: choice.reason.summary, route: recordOf(choice.engine, choice.model, served, choice.reason, choice.explored) };
   }
   if (choice.kind === "wait-quota") {
@@ -534,14 +547,15 @@ function lastWorkRun(rt: ProjectRuntime, taskId: string): Run | undefined {
  * ran on a local engine, it is counted once per run; at routing.localRetries the task is escalated once.
  */
 export function noteWorkFailure(rt: ProjectRuntime, taskId: string, why: string, diffStat: () => string): void {
-  if (!routingOn(rt)) return;
   const run = lastWorkRun(rt, taskId);
+  const localOnly = run?.engine === "lmstudio" && readLmstudioSettings(rt.deps.forewrightHome).executionMode === "local-only";
+  if (!routingOn(rt) && !localOnly) return;
   if (!run || !isLocal(run.engine)) return;
   const state = taskRouteState(rt, taskId);
   if (state.escalatedAt !== null || state.failedRuns.some((f) => f.runId === run.id)) return;
   const failedRuns = [...state.failedRuns, { runId: run.id, why: truncate(why, 300) }];
   const limit = rt.store.getSettings().routing.localRetries;
-  if (failedRuns.length < limit) return putState(rt, taskId, { ...state, failedRuns });
+  if (localOnly || failedRuns.length < limit) return putState(rt, taskId, { ...state, failedRuns });
   putState(rt, taskId, { ...state, failedRuns, escalatedAt: rt.clock.now().toISOString() });
   escalate(rt, taskId, run, failedRuns, diffStat);
 }

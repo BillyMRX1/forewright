@@ -163,10 +163,10 @@ const DISPLAY_NAME: Record<EngineId, string> = {
   antigravity: "Antigravity",
   opencode: "OpenCode",
   copilot: "Copilot",
-  hearthwork: "Hearthwork",
+  hearthwork: "Hearthwork", lmstudio: "LM Studio (Local OpenCode)",
   fake: "Test double",
 };
-const BINARY: Record<EngineId, string> = { claude: "claude", codex: "codex", antigravity: "agy", opencode: "opencode", copilot: "copilot", hearthwork: "hearthwork", fake: "fake" };
+const BINARY: Record<EngineId, string> = { claude: "claude", codex: "codex", antigravity: "agy", opencode: "opencode", copilot: "copilot", hearthwork: "hearthwork", lmstudio: "opencode", fake: "fake" };
 
 /**
  * What to do on a Linux machine with no display (a server over SSH) when an engine is not signed in. Only what
@@ -198,6 +198,7 @@ export function engineStatus(h: ProviderHealth): CheckStatus {
 }
 
 export function loginWords(h: ProviderHealth): string {
+  if (h.engine === "lmstudio") return h.local?.running ? "local backend" : "local backend unavailable";
   if (h.binaryPath === null) return "not checked";
   if (h.authenticated === false) return "not signed in";
   if (h.authenticated === "unknown") return "checked on first run";

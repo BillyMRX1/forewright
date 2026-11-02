@@ -40,6 +40,7 @@ export class ProviderHealthCache {
 export function unusableReason(health: ProviderHealth | null, engine: EngineId): string | null {
   if (health === null) return `The ${engine} provider is not installed or could not be probed.`;
   if (health.binaryPath === null && !health.isTestDouble) return `${engine} was not found on this machine. ${health.problems.join(" ")}`.trim();
+  if (health.engine === "lmstudio" && health.authenticated === false) return `LM Studio local backend unavailable. ${health.problems.join(" ")}`.trim();
   if (health.authenticated === false) return `${engine} is not signed in. ${health.problems.join(" ")}`.trim();
   return null;
 }
