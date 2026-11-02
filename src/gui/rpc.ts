@@ -250,7 +250,7 @@ export class RpcClient {
       const timer = this.schedule(() => {
         this.pending.delete(id);
         reject(new RpcError("timeout", `The Forewright service did not answer ${method} in time.`, `${this.timeoutMs} ms elapsed`));
-      }, this.timeoutMs);
+      }, method.startsWith("lmstudio.") ? Math.max(60000, this.timeoutMs) : this.timeoutMs);
       this.pending.set(id, { method, resolve: resolve as (v: unknown) => void, reject, timer });
       socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });

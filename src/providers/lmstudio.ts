@@ -1,5 +1,6 @@
 // LM Studio owns inference; OpenCode owns only the coding loop. Forewright owns the lifecycle.
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -69,7 +70,7 @@ interface Model {
   capabilities?: { trained_for_tool_use?: boolean };
   loaded_instances?: Array<{ id: string; config?: { context_length?: number } }>;
 }
-export interface LmstudioModel { id: string; key: string; loaded: boolean; toolCall: boolean; context: number | null }
+export interface LmstudioModel { toolCallVerified?: boolean; id: string; key: string; loaded: boolean; toolCall: boolean; context: number | null }
 export function parseLmstudioModels(value: unknown): LmstudioModel[] {
   if (!value || typeof value !== "object" || !Array.isArray((value as { models?: unknown }).models)) throw new ProviderError("LM Studio returned an invalid /api/v1/models response");
   return ((value as { models: Model[] }).models).filter((m) => m.type === "llm" && typeof m.key === "string").flatMap<LmstudioModel>((m) => {
@@ -115,9 +116,29 @@ export function lmstudioConfig(model: LmstudioModel, endpoint: string): Record<s
   };
 }
 
-function localModelRequest(url: string, signal: AbortSignal): Promise<unknown> {
+const verifiedToolCalls = new Map<string, number>();
+
+/** A real inert tool round trip; a metadata flag alone is not a veto on fallback tool support. */
+export async function verifyLmstudioTools(model: string, request: (body: Record<string, unknown>) => Promise<unknown>): Promise<void> {
+  const nonce = `forewright-${randomUUID()}`;
+  const tools = [{ type: "function", function: { name: "forewright_echo", description: "Return the supplied value", parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } } }];
+  const messages: Record<string, unknown>[] = [{ role: "user", content: `Call forewright_echo with value exactly ${nonce}.` }];
+  const first = await request({ model, messages, tools, tool_choice: "required", temperature: 0, max_tokens: 512 }) as { model?: string; choices?: Array<{ message?: Record<string, unknown> }> };
+  if (first.model && first.model !== model) throw new Error("server returned a different model");
+  const message = first.choices?.[0]?.message;
+  const calls = message?.["tool_calls"] as Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> | undefined;
+  if (!message || !Array.isArray(calls) || calls.length !== 1) throw new Error("no single structured tool call returned");
+  const call = calls[0]!;
+  if (!call.id || call.function?.name !== "forewright_echo" || JSON.parse(call.function.arguments ?? "null")?.value !== nonce) throw new Error("tool name or arguments did not match the test");
+  messages.push(message, { role: "tool", tool_call_id: call.id, content: JSON.stringify({ value: nonce }) }, { role: "user", content: "Return the value from the tool result exactly." });
+  const second = await request({ model, messages, tools, tool_choice: "none", temperature: 0, max_tokens: 512 }) as { model?: string; choices?: Array<{ message?: { content?: string } }> };
+  if (second.model && second.model !== model) throw new Error("server returned a different model");
+  if (!second.choices?.[0]?.message?.content?.includes(nonce)) throw new Error("model did not consume the tool result");
+}
+
+function localModelRequest(url: string, signal: AbortSignal, body?: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest(url, { method: "GET", agent: false, signal }, (res) => {
+    const req = httpRequest(url, { method: body ? "POST" : "GET", agent: false, signal, ...(body ? { headers: { "Content-Type": "application/json" } } : {}) }, (res) => {
       if (res.statusCode !== 200) { res.resume(); reject(new ProviderError(`LM Studio discovery failed: HTTP ${res.statusCode}`)); return; }
       let body = "";
       res.setEncoding("utf8");
@@ -125,7 +146,7 @@ function localModelRequest(url: string, signal: AbortSignal): Promise<unknown> {
       res.on("error", reject);
       res.on("end", () => { try { resolve(JSON.parse(body)); } catch { reject(new ProviderError("LM Studio returned invalid JSON")); } });
     });
-    req.on("error", reject); req.end();
+    req.on("error", reject); req.end(body);
   });
 }
 
@@ -159,13 +180,28 @@ export class LmstudioAdapter implements ProviderAdapter {
     return this.opts.binary ?? s.binary ?? (fs.existsSync(managed) ? managed : resolveEngineBinary("opencode", this.opts.baseEnv ?? process.env));
   }
   workerCapacity(): number { return Math.max(0, this.settings().maxConcurrentWorkers - this.active); }
-  private async models(settings: LmstudioSettings, signal?: AbortSignal): Promise<LmstudioModel[]> {
-    const discoverySignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(settings.requestTimeoutMs)]) : AbortSignal.timeout(settings.requestTimeoutMs);
-    // node:http with agent:false never honors HTTP(S)_PROXY/NODE_USE_ENV_PROXY and never follows redirects.
-    if (!this.opts.fetch) return parseLmstudioModels(await localModelRequest(`${settings.endpoint}/api/v1/models`, discoverySignal));
-    const response = await this.opts.fetch(`${settings.endpoint}/api/v1/models`, { redirect: "error", signal: discoverySignal });
-    if (!response.ok) throw new ProviderError(`LM Studio discovery failed: HTTP ${response.status}`);
-    return parseLmstudioModels(await response.json());
+  private async jsonRequest(settings: LmstudioSettings, route: string, signal: AbortSignal, body?: string): Promise<unknown> {
+    if (!this.opts.fetch) return localModelRequest(`${settings.endpoint}${route}`, signal, body);
+    const response = await this.opts.fetch(`${settings.endpoint}${route}`, { redirect: "error", signal, ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body } : {}) });
+    if (!response.ok) throw new ProviderError(`LM Studio request failed: HTTP ${response.status}`);
+    return response.json();
+  }
+  private async models(settings: LmstudioSettings, signal?: AbortSignal, wanted = settings.model): Promise<LmstudioModel[]> {
+    const bounded = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(settings.requestTimeoutMs)]) : AbortSignal.timeout(settings.requestTimeoutMs);
+    const models = parseLmstudioModels(await this.jsonRequest(settings, "/api/v1/models", bounded()));
+    const selected = models.find((m) => m.id === wanted && m.loaded && !m.toolCall);
+    if (selected) {
+      const key = JSON.stringify([settings.endpoint, selected.id, selected.key, selected.context]);
+      if ((verifiedToolCalls.get(key) ?? 0) < Date.now()) {
+        try {
+          await verifyLmstudioTools(selected.id, (body) => this.jsonRequest(settings, "/v1/chat/completions", bounded(), JSON.stringify(body)));
+          verifiedToolCalls.set(key, Date.now() + 5 * 60_000);
+        } catch (e) { throw new ProviderError(`LM Studio model ${selected.id} did not pass the tool-calling check: ${(e as Error).message}`); }
+      }
+      selected.toolCall = true;
+      selected.toolCallVerified = true;
+    }
+    return models;
   }
   async probe(): Promise<ProviderHealth> {
     const h: ProviderHealth = { engine: this.engine, binaryPath: this.bin(), version: null, authenticated: false, authMethod: "local model", models: [], modelsSource: "none", problems: [], checkedAt: new Date().toISOString(), isTestDouble: false, isolation: "n/a" };
@@ -214,7 +250,7 @@ export class LmstudioAdapter implements ProviderAdapter {
         const version = await capture(bin, ["--version"], { PATH: (this.opts.baseEnv ?? process.env)["PATH"] ?? "/usr/bin:/bin" }, Math.min(timeout, 5000));
         assertLmstudioHarnessVersion(version.stdout);
         if (controller.signal.aborted) throw new ProviderError("LM Studio preflight interrupted");
-        const model = selectLmstudioModel(await this.models(s, controller.signal), req.model ?? s.model);
+        const model = selectLmstudioModel(await this.models(s, controller.signal, req.model ?? s.model), req.model ?? s.model);
         if (Math.ceil((req.prompt.length + (req.systemPrompt?.length ?? 0)) / 4) + 8000 >= model.context!) throw new ProviderError(`LM Studio model ${model.id} context (${model.context}) is too small for this task`);
         if (controller.signal.aborted) throw new ProviderError("LM Studio preflight interrupted");
         const waitMs = Date.now() - started;

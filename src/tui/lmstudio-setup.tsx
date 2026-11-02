@@ -14,7 +14,7 @@ export function LmstudioSetup({ api, width, height, onDone, onCancel }: { api: C
   const [installing, setInstalling] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [message, setMessage] = useState("");
-  const models = info?.health.local?.models?.filter((m) => m.loaded && m.toolCall) ?? [];
+  const models = info?.health.local?.models?.filter((m) => m.loaded) ?? [];
   const inspect = async (initial = false) => {
     setBusy(true);
     try {
@@ -64,7 +64,7 @@ export function LmstudioSetup({ api, width, height, onDone, onCancel }: { api: C
   });
   const lines = ["LM Studio local worker setup", "Endpoint (type to edit, Enter to check)", `${cursor === 0 ? ">" : " "} ${endpoint}`,
     "OpenCode path (blank: automatic; Enter to check)", `${cursor === 1 ? ">" : " "} ${binary || "automatic"}`,
-    ...models.map((m, i) => `${cursor === i + 2 ? ">" : " "} [${model === m.id ? "x" : " "}] ${m.id} (${m.context ?? "?"} tokens)`),
+    ...models.map((m, i) => `${cursor === i + 2 ? ">" : " "} [${model === m.id ? "x" : " "}] ${m.id} (${m.context ?? "?"} tokens)${m.toolCall ? "" : " - tool test on save"}`),
     `${cursor === models.length + 2 ? ">" : " "} Save local-only worker (1 concurrent worker)`,
     "Shared server setup; project worker permission is chosen in the wizard.",
     confirm ? "Install private OpenCode 1.19.5? Press i to confirm; any other key cancels." : "up/down move | r check | i install private OpenCode 1.19.5 | Esc back",

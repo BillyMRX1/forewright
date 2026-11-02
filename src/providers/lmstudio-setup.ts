@@ -9,7 +9,7 @@ import { ProviderError } from "./errors.js";
 
 export async function inspectLmstudio(home: string, patch: Record<string, unknown> = {}) {
   const settings = parseLmstudioSettings({ ...readLmstudioSettings(home), ...patch });
-  const health = await new LmstudioAdapter({ forewrightHome: home, settings: { ...settings, requestTimeoutMs: Math.min(3000, settings.requestTimeoutMs) } }).probe();
+  const health = await new LmstudioAdapter({ forewrightHome: home, settings: { ...settings, requestTimeoutMs: Math.min(30000, settings.requestTimeoutMs) } }).probe();
   return { settings, health };
 }
 export async function saveLmstudio(home: string, patch: Record<string, unknown>, beforeWrite?: () => void) {

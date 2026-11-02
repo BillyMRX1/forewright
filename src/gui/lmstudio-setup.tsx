@@ -53,8 +53,8 @@ export function LmstudioSetupCard({ initiallyOpen = false }: { initiallyOpen?: b
         <button className="btn" onClick={() => void inspect()}>Check endpoint and models</button>
         {data ? <p>Harness: {data.health.version ?? "not found"}. Backend: local LM Studio. {data.health.problems.join("; ")}</p> : null}
         <label>Local model <select aria-label="LM Studio model" value={model} onChange={(e) => setModel(e.target.value)}>
-          <option value="">Select a loaded tool-capable model</option>
-          {(data?.health.local?.models ?? []).map((m) => <option key={m.id} value={m.id} disabled={!m.loaded || !m.toolCall}>{m.id} - {m.loaded ? `${m.context ?? "unknown"} context tokens` : "not loaded"}{m.toolCall ? "" : ", no tool support"}</option>)}
+          <option value="">Select a loaded model; tool support is checked on save</option>
+          {(data?.health.local?.models ?? []).map((m) => <option key={m.id} value={m.id} disabled={!m.loaded}>{m.id} - {m.loaded ? `${m.context ?? "unknown"} context tokens` : "not loaded"}{m.toolCall ? "" : ", tool test on save"}</option>)}
         </select></label>
         <label>Execution mode <select aria-label="LM Studio execution mode" value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}><option value="local-only">Local only - no cloud fallback</option><option value="local-first">Local first - allow existing authorized routing</option></select></label>
         <label>Concurrent local workers <input aria-label="Concurrent local workers" type="number" min="1" value={slots} onChange={(e) => setSlots(e.target.value)} /></label>

@@ -225,7 +225,7 @@ export class ForewrightClient implements ClientApi {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new ClientError("timeout", `The Forewright service did not answer ${method} in time.`, `${this.opts.requestTimeoutMs} ms elapsed`));
-      }, this.opts.requestTimeoutMs);
+      }, method.startsWith("lmstudio.") ? Math.max(60000, this.opts.requestTimeoutMs) : this.opts.requestTimeoutMs);
       this.pending.set(id, { method, resolve: resolve as (v: unknown) => void, reject, timer });
       socket.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     });
